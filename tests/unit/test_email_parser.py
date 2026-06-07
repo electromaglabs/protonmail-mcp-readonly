@@ -33,6 +33,12 @@ class TestParseEmailPlainText:
         assert result["body_html"] == ""
 
 
+    def test_headers_are_json_serializable(self, sample_raw_email):
+        import json
+        result = parse_email(sample_raw_email)
+        json.dumps(result["headers"])  # kraschar om Header-objekt finns kvar
+
+
 class TestParseEmailHtml:
     """parse_email() med HTML-only mail."""
 
@@ -87,6 +93,13 @@ class TestDecodeHeaderValue:
         encoded = "=?utf-8?B?SMOkbHNuaW5nYXI=?="
         result = decode_header_value(encoded)
         assert result == "H\u00e4lsningar"
+
+    def test_header_object_is_serializable(self):
+        import email.header
+        h = email.header.Header("Hej v\u00e4rlden")
+        result = decode_header_value(h)
+        assert isinstance(result, str)
+        assert "Hej" in result
 
 
 class TestExtractAddresses:

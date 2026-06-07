@@ -6,9 +6,10 @@ from email.message import Message
 from typing import Any
 
 
-def decode_header_value(value: str | None) -> str:
+def decode_header_value(value) -> str:
     if not value:
         return ""
+    value = str(value)
     parts = email.header.decode_header(value)
     decoded = []
     for part, charset in parts:
@@ -148,7 +149,7 @@ def parse_email(
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": get_attachments(msg),
-        "headers": dict(msg.items()),
+        "headers": {k: decode_header_value(v) for k, v in msg.items()},
     }
 
 
