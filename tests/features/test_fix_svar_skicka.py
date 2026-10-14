@@ -76,3 +76,42 @@ def header_missing(captured, name):
 @then(parsers.parse('ska Message-ID sluta med "{suffix}"'))
 def message_id_suffix(captured, suffix):
     assert str(captured.parsed["Message-ID"]).endswith(suffix)
+
+
+@when(parsers.parse('jag skickar ett mail till "{to}" med ett ämne på {length:d} tecken'))
+def send_long_subject(client, captured, outcome, to, length):
+    outcome["subject"] = ("Långt ämne " * (length // 11 + 1))[:length]
+    _send(client, outcome, to=to, subject=outcome["subject"])
+
+
+@when(parsers.parse('jag skickar ett mail till "{to}" med ämnet "{subject}"'))
+def send_with_subject(client, captured, outcome, to, subject):
+    _send(client, outcome, to=to, subject=subject.replace("\\n", "\n"))
+
+
+@then("ska mejlet ha skickats")
+def was_sent(captured, outcome):
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["result"] is True
+    assert len(captured.sent) == 1
+
+
+@then("ska ämnet vara oförändrat efter överföringen")
+def subject_round_trips(captured, outcome):
+    assert str(captured.parsed["Subject"]) == outcome["subject"]
+
+
+@then("ska ingen headerrad vara längre än 998 tecken")
+def header_lines_short(captured):
+    head = captured.raw.split(b"\r\n\r\n", 1)[0]
+    assert max(len(line) for line in head.split(b"\r\n")) <= 998
+
+
+@then(parsers.parse('ska sändningen avvisas med ett fel som nämner "{text}"'))
+def rejected_with(outcome, text):
+    assert text in str(outcome.get("error"))
+
+
+@then("inget mejl ska ha skickats")
+def nothing_sent(captured):
+    assert captured.sent == []

@@ -32,3 +32,22 @@ Feature: Skicka e-post med korrekta headers
     Given en SMTP-klient för kontot "anna@proton.me"
     When jag skickar ett mail till "bob@example.com"
     Then ska Message-ID sluta med "@proton.me>"
+
+  Scenario: Ett ämne längre än 998 tecken kan skickas och viks på flera rader
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail till "bob@example.com" med ett ämne på 1002 tecken
+    Then ska mejlet ha skickats
+    And ska ämnet vara oförändrat efter överföringen
+    And ska ingen headerrad vara längre än 998 tecken
+
+  Scenario: Ett orimligt långt ämne avvisas
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail till "bob@example.com" med ett ämne på 10001 tecken
+    Then ska sändningen avvisas med ett fel som nämner "för lång"
+    And inget mejl ska ha skickats
+
+  Scenario: Ämne med radbrytning avvisas fortfarande
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail till "bob@example.com" med ämnet "Hej\nBcc: evil@example.com"
+    Then ska sändningen avvisas med ett fel som nämner "radbrytningar"
+    And inget mejl ska ha skickats

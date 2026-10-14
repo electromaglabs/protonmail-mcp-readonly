@@ -2,6 +2,7 @@ import email.policy
 import logging
 import re
 import ssl
+from email.header import Header
 from email.headerregistry import Address
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# Ren sanitetsgräns mot uppenbart felaktiga ämnen (t.ex. en hel text inklistrad
+# som ämne). 998 är en gräns per rad, inte per header: generatorn viker långa
+# headers på flera rader, så den gränsen gäller inte här.
+_MAX_SUBJECT_LENGTH = 10_000
 
 
 def _validate_email_addr(addr: str) -> str:
@@ -44,12 +50,28 @@ def _to_address(addr: str) -> Address:
     return Address(display_name=name, addr_spec=f"{local}@{domain}")
 
 
+def _set_unstructured(msg: EmailMessage, name: str, value: str) -> None:
+    """Sätt en fritextheader (t.ex. Subject) så att den överlever ombrytning.
+
+    email.policy-foldern tappar eller dubblar mellanslag när den viker långa
+    icke-ASCII-värden (CPython 3.10–3.12). Header kodar i stället hela värdet
+    som angränsande encoded-words, vars mellanrum mottagaren ignorerar, och
+    radlängden hålls under 78 så att policyn inte viker om dem.
+    """
+    if value.isascii():
+        msg[name] = value
+    else:
+        msg.set_raw(name, Header(value, "utf-8", header_name=name).encode(linesep="\r\n"))
+
+
 def _validate_subject(subject: str) -> str:
-    """Kastar ValueError om ämnesraden innehåller CRLF eller är för lång."""
+    """Kastar ValueError om ämnesraden innehåller CRLF eller är orimligt lång."""
     if '\r' in subject or '\n' in subject:
         raise ValueError("Ämnesraden får inte innehålla radbrytningar")
-    if len(subject) > 998:
-        raise ValueError("Ämnesraden är för lång (max 998 tecken)")
+    if len(subject) > _MAX_SUBJECT_LENGTH:
+        raise ValueError(
+            f"Ämnesraden är för lång (max {_MAX_SUBJECT_LENGTH} tecken)"
+        )
     return subject
 
 
@@ -88,7 +110,7 @@ def _build_message(
     # To är valfri enligt RFC 5322, men får inte vara tom om den finns
     if to_list:
         msg["To"] = [_to_address(a) for a in to_list]
-    msg["Subject"] = subject
+    _set_unstructured(msg, "Subject", subject)
     msg["Date"] = formatdate(localtime=True)
     # Utan domain använder make_msgid() maskinens värdnamn (getfqdn), vilket
     # läcker det lokala nätets namn till mottagarna

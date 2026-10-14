@@ -135,3 +135,54 @@ async def test_sent_message_id_uses_settings_username_domain(monkeypatch):
         await make_client("me@pm.me").send_email(to="a@x.se", subject="s", body="b")
     assert str(cap.parsed["Message-ID"]).endswith("@pm.me>")
     assert b"hemlig-dator" not in cap.raw
+
+
+# -------------------------------------------------------------------
+# B7: längdgränsen för ämnet är bara en sanitetsgräns
+# -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("length", [999, 1002, 2000])
+async def test_subject_longer_than_998_is_sent_folded(length):
+    subject = ("ä" * length)[:length]
+    with capture_smtp() as cap:
+        assert await make_client().send_email(to="a@x.se", subject=subject, body="b")
+    assert str(cap.parsed["Subject"]) == subject
+    head = cap.raw.split(b"\r\n\r\n", 1)[0]
+    assert max(len(line) for line in head.split(b"\r\n")) <= 998
+
+
+async def test_absurd_subject_is_rejected():
+    with capture_smtp() as cap:
+        with pytest.raises(ValueError, match="för lång"):
+            await make_client().send_email(to="a@x.se", subject="A" * 10_001, body="b")
+    assert cap.sent == []
+
+
+_WORDS = "möte på fredag åtgärd styrelse kvitto beställning ärende Göteborg".split()
+
+
+_FOLDING_VICTIMS = [
+    # tappar ett mellanslag med email.policy-foldern i CPython 3.10/3.11
+    "ärende ärende på möte åtgärd skickad åtgärd åtgärd ärende återkoppling kvitto bes",
+    # får ett dubbelt mellanslag med email.policy-foldern i CPython 3.12
+    "Göteborg återkoppling kvitto ärende fredag möte kvitto fredag åtgärd",
+]
+
+
+@pytest.mark.parametrize(
+    "subject",
+    _FOLDING_VICTIMS
+    + [
+        " ".join(_WORDS[i % len(_WORDS)] for i in range(n))[:n].strip()
+        for n in (81, 109, 150, 400, 990, 5000)
+    ],
+    ids=lambda s: f"{len(s)}-tecken",
+)
+async def test_long_non_ascii_subject_keeps_its_spaces(subject):
+    """Ombrytningen i email.policy tappar eller dubblar mellanslag i långa
+    icke-ASCII-ämnen (CPython 3.10–3.12, men inte 3.14). Ämnet ska komma fram
+    exakt som det skickades."""
+    with capture_smtp() as cap:
+        await make_client().send_email(to="a@x.se", subject=subject, body="b")
+    assert str(cap.parsed["Subject"]) == subject

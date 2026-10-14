@@ -410,14 +410,14 @@ async def test_send_email_rejects_invalid_email(settings: Settings, mock_smtp):
 
 
 async def test_validate_subject_too_long(settings: Settings, mock_smtp):
-    """>998 tecken i subject ska ge ValueError."""
+    """Ett orimligt långt ämne (över sanitetsgränsen) ska ge ValueError."""
     smtp_cls, smtp_instance = mock_smtp
     client = SMTPClient(settings)
 
     with pytest.raises(ValueError, match="för lång"):
         await client.send_email(
             to="alice@example.com",
-            subject="A" * 999,
+            subject="A" * 10_001,
             body="Test",
         )
 
