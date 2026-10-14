@@ -79,11 +79,11 @@ class TestListEmails:
 
 
 class TestGetEmail:
-    async def test_returns_none_when_raw_is_none(self, mock_ctx):
+    async def test_raises_when_raw_is_none(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = None
-        result = await get_email(mock_ctx, uid="123", mailbox="INBOX")
+        with pytest.raises(ValueError, match="Inget meddelande med UID 123 i INBOX"):
+            await get_email(mock_ctx, uid="123", mailbox="INBOX")
         mock_ctx.request_context.lifespan_context.imap.get_message.assert_called_once_with("INBOX", "123")
-        assert result is None
 
     async def test_returns_parsed_dict_when_mail_exists(self, mock_ctx, sample_raw_email):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
@@ -234,10 +234,10 @@ class TestGetEmailHeaders:
             "message-id": "<abc@example.com>",
         }
 
-    async def test_get_email_headers_returns_none_when_not_found(self, mock_ctx):
+    async def test_get_email_headers_raises_when_not_found(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.get_message_headers.return_value = None
-        result = await get_email_headers(mock_ctx, uid="999")
-        assert result is None
+        with pytest.raises(ValueError, match="Inget meddelande med UID 999 i INBOX"):
+            await get_email_headers(mock_ctx, uid="999")
 
 
 # --- folders.py ---

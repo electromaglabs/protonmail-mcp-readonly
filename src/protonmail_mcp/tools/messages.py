@@ -8,12 +8,20 @@ from ..email_parser import parse_email
 from . import _get_app
 
 
+def _not_found(uid: str, mailbox: str) -> ValueError:
+    # UID gäller per mapp — ett UID från en annan mapp är det vanligaste skälet
+    return ValueError(
+        f"Inget meddelande med UID {uid} i {mailbox}. "
+        "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
+    )
+
+
 @mcp.tool()
 async def get_email_headers(
     ctx: Context,
     uid: str,
     mailbox: str = "INBOX",
-) -> dict | None:
+) -> dict:
     """Hämta headers för ett e-post utan att ladda body (snabb operation).
 
     Args:
@@ -21,10 +29,14 @@ async def get_email_headers(
         mailbox: Mappnamn (standard: INBOX)
 
     Returns:
-        Dict med from, to, cc, subject, date, message_id, reply_to — eller None om ej hittat
+        Dict med from, to, cc, subject, date, message_id, reply_to.
+        Kastar fel om det inte finns något meddelande med UID:t i mappen.
     """
     app = _get_app(ctx)
-    return await app.imap.get_message_headers(mailbox, uid)
+    headers = await app.imap.get_message_headers(mailbox, uid)
+    if headers is None:
+        raise _not_found(uid, mailbox)
+    return headers
 
 
 @mcp.tool()
@@ -55,7 +67,7 @@ async def get_email(
     mailbox: str = "INBOX",
     body_format: Literal["text", "full", "stripped"] = "text",
     max_length: Annotated[int, Field(ge=0)] | None = 500,
-) -> dict | None:
+) -> dict:
     """Hämta fullständigt innehåll för ett e-post via UID.
 
     Args:
@@ -69,5 +81,5 @@ async def get_email(
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)
     if raw is None:
-        return None
+        raise _not_found(uid, mailbox)
     return parse_email(raw, body_format=body_format, max_length=max_length)
