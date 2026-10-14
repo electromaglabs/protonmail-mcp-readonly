@@ -80,6 +80,11 @@ def _decode(b: bytes | bytearray | str) -> str:
     return b
 
 
+def _response_text(resp) -> str:
+    """Serverns förklaring i ett IMAP-svar, t.ex. "no such mailbox"."""
+    return " ".join(_decode(line) for line in resp.lines).strip()
+
+
 def _parse_seqnums(resp) -> list[str]:
     if resp.result != "OK" or not resp.lines:
         return []
@@ -320,14 +325,16 @@ class IMAPClient:
 
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
+        """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas."""
+        safe_uid = _validate_uid(uid)
+        _quote_mailbox(mailbox)
+        quoted_target = _quote_mailbox(target)
+        _check_move(mailbox, target)
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
-        safe_uid = _validate_uid(uid)
-        copy_resp = await self._client.uid("copy", safe_uid, _quote_mailbox(target))
-        if copy_resp.result != "OK":
-            return False
-        await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
-        await self._client.expunge()
+        await self._require_uid(mailbox, safe_uid)
+        resp = await self._client.uid("move", safe_uid, quoted_target)
+        _require_ok(resp, f"Flytten av UID {safe_uid} från {mailbox} till {target}")
         return True
 
     @_serialized
@@ -338,6 +345,23 @@ class IMAPClient:
         await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         await self._client.expunge()
         return True
+
+    async def _require_uid(self, mailbox: str, uid: str) -> None:
+        """Kontrollerar att UID:t finns i den valda mappen.
+
+        Bridge svarar OK på UID STORE/MOVE/EXPUNGE även för UID:n som inte
+        finns, så utan kontrollen skulle verktygen rapportera lyckat för ingenting.
+        """
+        resp = await self._client.uid("fetch", uid, "(UID)")
+        _require_ok(resp, f"Kontrollen av UID {uid} i {mailbox}")
+        for line in resp.lines:
+            m = _UID_RE.search(_decode(line))
+            if m and int(m.group(1)) == int(uid):
+                return
+        raise ValueError(
+            f"Inget meddelande med UID {uid} i {mailbox}. "
+            "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
+        )
 
     @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
@@ -427,3 +451,45 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
             })
         i += 1
     return messages
+
+
+def _require_ok(resp, what: str) -> None:
+    if resp.result != "OK":
+        raise ValueError(f"{what} misslyckades ({resp.result}): {_response_text(resp)}")
+
+
+def _mailbox_key(name: str) -> str:
+    return name.casefold()
+
+
+def _is_label_view(name: str) -> bool:
+    """Etiketter (Labels/…) och Starred: ett mejl där ligger också i någon mapp."""
+    key = _mailbox_key(name)
+    return key == "starred" or key.startswith("labels/")
+
+
+# Mappar där Bridge raderar permanent när ett mejl som redan finns där läggs dit igen
+_READD_DELETES = ("trash", "drafts")
+
+
+def _check_move(source: str, target: str) -> None:
+    """Avvisar flyttar som Bridge nekar eller som kan radera mejlet permanent."""
+    src, dst = _mailbox_key(source), _mailbox_key(target)
+    if src == dst:
+        raise ValueError(
+            f"Källa och mål är samma mapp ({source}). Bridge tar då först bort mejlet ur "
+            "mappen och lägger sedan tillbaka det — i Trash och Drafts raderas det permanent."
+        )
+    if "all mail" in (src, dst):
+        raise ValueError(
+            "Bridge tillåter inte flytt till eller från All Mail. Ange mappen där mejlet "
+            "ligger (t.ex. INBOX, Archive eller Folders/…) som källa."
+        )
+    if {src, dst} == {"inbox", "sent"}:
+        raise ValueError("Bridge tillåter inte flytt mellan INBOX och Sent.")
+    if dst in _READD_DELETES and _is_label_view(source):
+        raise ValueError(
+            f"Flytt till {target} från {source} avvisas: mejlet kan redan ligga i {target}, "
+            "och då raderar Bridge det permanent. Ange mappen där mejlet ligger "
+            "(t.ex. INBOX, Archive eller Folders/…) som källa."
+        )

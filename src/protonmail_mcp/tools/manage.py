@@ -32,12 +32,29 @@ async def mark_email_unread(ctx: Context, uid: str, mailbox: str = "INBOX") -> b
 async def move_email(
     ctx: Context, uid: str, target_mailbox: str, mailbox: str = "INBOX"
 ) -> bool:
-    """Flytta ett e-post till en annan mapp.
+    """Flytta ett e-post till en annan mapp. Bara det angivna mejlet påverkas.
+
+    Verktyget är till för mappar: INBOX, Archive, Spam, Trash och Folders/….
+    Mejlet flyttas dit och försvinner ur källmappen.
+
+    Proton skiljer på mappar och etiketter. Är målet en etikett (Labels/…)
+    eller Starred läggs etiketten till och mejlet ligger kvar i källmappen;
+    är källan en etikett tas den etiketten bort. Etiketter får egna verktyg.
+
+    Avvisas med fel (inget ändras):
+    - källa och mål är samma mapp (i Trash/Drafts skulle Bridge radera mejlet),
+    - flytt till eller från All Mail, och mellan INBOX och Sent (Bridge nekar),
+    - flytt till Trash eller Drafts från en etikett eller Starred, eftersom
+      mejlet redan kan ligga där och då raderas permanent,
+    - UID:t finns inte i källmappen (UID:n gäller per mapp).
 
     Args:
-        uid: E-postets UID
+        uid: E-postets UID i källmappen
         target_mailbox: Målmapp att flytta till
         mailbox: Källmapp (standard: INBOX)
+
+    Returns:
+        True när flytten är klar. Misslyckas den kastas ett fel med Bridges förklaring.
     """
     app = _get_app(ctx)
     return await app.imap.move_message(mailbox, uid, target_mailbox)
