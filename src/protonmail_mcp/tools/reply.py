@@ -5,10 +5,11 @@ import re
 from collections.abc import Sequence
 from email.headerregistry import Address
 from email.message import EmailMessage, Message
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 
 from mcp.server.fastmcp import Context
 
+from ..email_parser import parse_addresses
 from ..server import mcp
 from . import _get_app
 from ._types import OptionalStr
@@ -25,7 +26,9 @@ _PREFIX_RE = re.compile(
 _WS_RE = re.compile(r"\s*")
 
 _MSGID_RE = re.compile(r"<[^<>\s]+>")
-_ANGLE_ADDR_RE = re.compile(r"<([^<>\s@]+@[^<>\s@]+)>")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Ett msg-id längre än så här skulle ge headerrader över 998 tecken
+_MAX_MSGID_CHARS = 500
 # [^<>]* i stället för [^>]*: annars blir sökningen kvadratisk på "<body<body…"
 _BODY_OPEN_RE = re.compile(r"<body\b[^<>]*>", re.IGNORECASE)
 _CID_REF_RE = re.compile(r"cid:([^\s\"'<>()]+)", re.IGNORECASE)
@@ -49,8 +52,16 @@ _MAX_REFERENCES = 50
 # MIME-headers som parsas för varje del (typ, disposition, kodning) är normalt
 # under ett par hundra tecken; summan av alla headers i alla delar begränsas
 # också, eftersom varje del har egna headers som avsändaren styr.
-_MAX_MIME_HEADER_CHARS = 10_000
+_MAX_MIME_HEADER_CHARS = 2_000
 _MAX_TOTAL_HEADER_CHARS = 1_000_000
+# Parsningen är ungefär kvadratisk i headerlängden (ett Content-Type på
+# 10 000 tecken med kommentarer: 0,16 s, och varje del läses flera gånger),
+# och bifogade delars headers bryts dessutom om av generatorn vid sändning.
+# Därför en budget för summan av längd² över MIME-headers i alla delar och
+# alla headers i underdelar. Vanliga mejl ligger flera tiopotenser under.
+_MAX_HEADER_COST = 50_000_000
+# Djupare nästling ger RecursionError i email-paketet (cirka 990 nivåer)
+_MAX_MIME_DEPTH = 50
 # Varje del parsas (Content-Type) med email.policy: 20 000 små delar tog
 # flera sekunder. Vanliga mejl har högst några tiotal delar.
 _MAX_MIME_PARTS = 1_000
@@ -68,37 +79,48 @@ def _parse_original(raw: bytes) -> EmailMessage:
     # Storlekskontrollen görs på en compat32-parsning, som är billig: redan
     # parsningen med email.policy.default läser varje dels Content-Type med
     # den superlinjära headerparsern (60 delar à 45 000 tecken: 0,7–1,2 s).
-    _check_header_sizes(email.message_from_bytes(raw, policy=email.policy.compat32))
-    return email.message_from_bytes(raw, policy=email.policy.default)
+    try:
+        _check_header_sizes(email.message_from_bytes(raw, policy=email.policy.compat32))
+        return email.message_from_bytes(raw, policy=email.policy.default)
+    except RecursionError:  # parsern är rekursiv för nästlade multipart
+        raise ValueError("Originalet är orimligt djupt nästlat") from None
 
 
 def _check_header_sizes(msg: Message) -> None:
     """Avvisa orimligt stora headers innan något av dem parsas (linjär tid)."""
     total = 0
+    cost = 0
     parts = 0
-    stack = [msg]
+    stack = [(msg, 0)]
     while stack:
-        part = stack.pop()
+        part, depth = stack.pop()
         parts += 1
         if parts > _MAX_MIME_PARTS:
             raise ValueError(
                 f"Originalet har orimligt många MIME-delar (över {_MAX_MIME_PARTS})"
             )
+        if depth > _MAX_MIME_DEPTH:
+            raise ValueError(
+                f"Originalet är orimligt djupt nästlat (över {_MAX_MIME_DEPTH} nivåer)"
+            )
         for name, value in part.raw_items():
             size = len(str(value))
             total += size
-            if name.lower() in _MIME_HEADERS and size > _MAX_MIME_HEADER_CHARS:
+            is_mime = name.lower() in _MIME_HEADERS
+            if is_mime and size > _MAX_MIME_HEADER_CHARS:
                 raise ValueError(
                     f"Originalet har en orimligt stor {name}-header ({size} tecken)"
                 )
-        if total > _MAX_TOTAL_HEADER_CHARS:
+            if is_mime or depth > 0:
+                cost += size * size
+        if total > _MAX_TOTAL_HEADER_CHARS or cost > _MAX_HEADER_COST:
             raise ValueError(
                 f"Originalets headers är orimligt stora ({total} tecken totalt)"
             )
         # get_payload() i stället för iter_parts(): det senare parsar Content-Type
         payload = part.get_payload() if part.is_multipart() else None
         if isinstance(payload, list):
-            stack.extend(payload)
+            stack.extend((sub, depth + 1) for sub in payload)
 
 
 def _decode_8bit(value: str) -> str:
@@ -141,8 +163,13 @@ def _header_text(msg: EmailMessage, name: str) -> str:
         value = msg.policy.header_fetch_parse(name, values[0])
     except Exception:  # trasiga headers ska inte stoppa ett svar
         value = values[0]
-    # Kodade ord kan innehålla radbrytningar — slå ihop till en rad
-    return " ".join(str(value).split())
+    return _clean_text(str(value))
+
+
+def _clean_text(text: str) -> str:
+    """En rad utan kontrolltecken: kodade ord kan innehålla radbrytningar,
+    NUL och liknande, som inte får följa med in i svarets headers."""
+    return " ".join(_CONTROL_RE.sub("", text).split())
 
 
 def _msg_ids(msg: EmailMessage, name: str) -> list[str]:
@@ -154,8 +181,11 @@ def _msg_ids(msg: EmailMessage, name: str) -> list[str]:
     ids: list[str] = []
     for value in _raw_values(msg, name, limit=None):
         # Ett msg-id är ASCII; ett id med 8-bitarstecken kan inte skickas
-        # vidare i en header och hoppas över
-        ids.extend(i for i in _MSGID_RE.findall(value) if i.isascii())
+        # vidare i en header och hoppas över, liksom orimligt långa id:n
+        ids.extend(
+            i for i in _MSGID_RE.findall(value)
+            if i.isascii() and len(i) <= _MAX_MSGID_CHARS
+        )
     return ids
 
 
@@ -193,19 +223,18 @@ def _addresses(msg: EmailMessage, name: str) -> list[tuple[str, str]]:
     Läses ur den råa headern så att namn och adress hålls isär: ett avkodat
     namn som "Svensson, Åsa" får aldrig skickas vidare som adresssträng, där
     kommat skulle göra det till två (ogiltiga) adresser.
+
+    Tolkas med email_parser.parse_addresses, samma tolkning som get_email
+    visar: listan delas upp före RFC 2047-avkodningen, citat och kommentarer
+    respekteras (en "<adress>" i en kommentar blir ingen mottagare), och den
+    är linjär till skillnad från adressparsern i email.policy.
     """
     pairs: list[tuple[str, str]] = []
     for raw in _raw_values(msg, name):
-        try:
-            header = msg.policy.header_fetch_parse(name, raw)
-            found = [(a.display_name, a.addr_spec) for a in header.addresses]
-        except Exception:
-            # Trasig header (t.ex. ett kodat namn med radbrytning): ta bara
-            # adresserna inom <>, utan namn, och annars en enkel tolkning
-            found = [("", addr) for addr in _ANGLE_ADDR_RE.findall(raw)]
-            found = found or getaddresses([raw])
         pairs.extend(
-            (" ".join(display.split()), addr) for display, addr in found if "@" in addr
+            (_clean_text(display), addr)
+            for display, addr in parse_addresses(raw)
+            if "@" in addr
         )
     return pairs
 
@@ -239,11 +268,17 @@ def _reply_recipients(
         # Svar på ett eget skickat mejl: fortsätt till samma mottagare
         to_pairs = original_to
     else:
-        to_pairs = _addresses(msg, "Reply-To") or senders
+        # Pekar Reply-To bara på det egna kontot gäller From i stället
+        reply_to = [(d, a) for d, a in _addresses(msg, "Reply-To") if a.lower() != own]
+        to_pairs = reply_to or senders
         if reply_all:
             to_pairs = to_pairs + original_to
     cc_pairs = original_cc if reply_all else []
-    cc_pairs = cc_pairs + [("", addr) for addr in extra_cc]
+    for value in extra_cc:
+        display, addr = parseaddr(value)
+        # Går den inte att tolka skickas strängen vidare som den är, så att
+        # SMTP-klientens validering ger ett tydligt fel
+        cc_pairs = cc_pairs + [(display, addr) if "@" in addr else ("", value)]
 
     seen = {own} if own else set()
 
@@ -493,7 +528,12 @@ async def forward_email(
 
     header_lines = ["---------- Forwarded message ----------"]
     for name in ("From", "Date", "Subject", "To", "Cc"):
-        value = _header_text(msg, name)
+        if name in ("Date", "Subject"):
+            value = _header_text(msg, name)
+        else:
+            # Adressheaders via _addresses: adressparsern i email.policy är
+            # kvadratisk på t.ex. många kommentarer
+            value = ", ".join(_format_address(d, a) if d else a for d, a in _addresses(msg, name))
         if value:
             header_lines.append(f"{name}: {value}")
 

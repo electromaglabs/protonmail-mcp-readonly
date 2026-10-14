@@ -119,3 +119,78 @@ async def test_normal_number_of_attachments_still_forwarded():
     with capture_smtp() as cap:
         await forward_email(_ctx(raw), uid="1", to="b@x.se")
     assert len(list(cap.parsed.iter_attachments())) == 200
+
+
+# --- Granskning 2: parsning/ombrytning av headers i MIME-delar ----------
+
+
+def _mixed(parts: str) -> bytes:
+    return (
+        f"From: a@x.se\r\nTo: {KONTO}\r\nSubject: s\r\n"
+        'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+        f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
+    ).encode()
+
+
+async def _timed(tool, raw, cap):
+    """Tid för verktyget inklusive serialiseringen, som aiosmtplib gör vid
+    sändning (attrappen gör den inte själv)."""
+    import time
+
+    from protonmail_mcp.tools.reply import forward_email
+
+    start = time.perf_counter()
+    try:
+        if tool == "reply":
+            await reply_to_email(_ctx(raw), uid="1", body="ok")
+        else:
+            await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        cap.raw
+    except ValueError as exc:
+        assert "orimligt" in str(exc)
+    return time.perf_counter() - start
+
+
+async def test_long_non_mime_header_in_attachment_is_not_refolded_slowly():
+    """Bifogade delar bryts om av generatorn med den superlinjära parsern."""
+    part = f"--B\r\nContent-Type: application/octet-stream\r\nX-Junk: {'a ' * 200_000}\r\n\r\nx\r\n"
+    with capture_smtp() as cap:
+        assert await _timed("forward", _mixed(part), cap) < 1.0
+
+
+@pytest.mark.parametrize("tool", ["reply", "forward"])
+async def test_content_type_with_comments_in_many_parts_is_cheap(tool):
+    ctype = "application/octet-stream; x=y " + "(a)" * 3_300
+    parts = "".join(f"--B\r\nContent-Type: {ctype}\r\n\r\nx\r\n" for _ in range(95))
+    with capture_smtp() as cap:
+        assert await _timed(tool, _mixed(parts), cap) < 1.0
+
+
+@pytest.mark.parametrize("tool", ["reply", "forward"])
+async def test_address_header_with_many_comments_is_cheap(tool):
+    raw = (
+        f"From: a@x.se {'(a)' * 16_600}\r\nTo: {KONTO}\r\nSubject: s\r\n"
+        "Content-Type: text/plain\r\n\r\nhej\r\n"
+    ).encode()
+    with capture_smtp() as cap:
+        assert await _timed(tool, raw, cap) < 1.0
+
+
+@pytest.mark.parametrize("tool", ["reply", "forward"])
+async def test_deep_nesting_gives_clear_error_not_recursion_error(tool):
+    depth = 990
+    raw = f"From: a@x.se\r\nTo: {KONTO}\r\nSubject: s\r\n"
+    raw += 'Content-Type: multipart/mixed; boundary="b0"\r\n\r\n'
+    for i in range(1, depth):
+        raw += f'--b{i-1}\r\nContent-Type: multipart/mixed; boundary="b{i}"\r\n\r\n'
+    raw += f"--b{depth-1}\r\nContent-Type: text/plain\r\n\r\nhej\r\n--b{depth-1}--\r\n"
+    for i in range(depth - 2, -1, -1):
+        raw += f"--b{i}--\r\n"
+    from protonmail_mcp.tools.reply import forward_email
+
+    with capture_smtp():
+        with pytest.raises(ValueError, match="nästlat"):
+            if tool == "reply":
+                await reply_to_email(_ctx(raw.encode()), uid="1", body="ok")
+            else:
+                await forward_email(_ctx(raw.encode()), uid="1", to="b@x.se")

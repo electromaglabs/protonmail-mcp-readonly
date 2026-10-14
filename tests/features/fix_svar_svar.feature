@@ -145,3 +145,28 @@ Feature: Svara på e-post
     And ska svaret ha kopia till "chef@example.se"
     And SMTP-mottagarna ska vara "anna@example.se, chef@example.se, arkiv@example.se"
     And ska svaret sakna headern "Bcc"
+
+  Scenario: Svara alla skickar inte till en adress som bara står i en kommentar
+    Given mitt konto är "me@proton.me"
+    And ett mejl med UID "33" med följande headers:
+      """
+      From: anna@example.se
+      To: me@proton.me, "=?utf-8?q?Bo=0A?=" <bo@example.se> (<dold@evil.example>)
+      Subject: Hemligt
+      Message-ID: <h@example.se>
+      """
+    When jag svarar alla på mejlet med UID "33" med texten "Ok"
+    Then SMTP-mottagarna ska vara "anna@example.se, bo@example.se"
+
+  Scenario: Reply-To som bara pekar på mitt eget konto ignoreras
+    Given mitt konto är "me@proton.me"
+    And ett mejl med UID "34" med följande headers:
+      """
+      From: anna@example.se
+      Reply-To: me@proton.me
+      To: me@proton.me
+      Subject: Fråga
+      Message-ID: <f@example.se>
+      """
+    When jag svarar på mejlet med UID "34" med texten "Svar"
+    Then ska svaret gå till "anna@example.se"

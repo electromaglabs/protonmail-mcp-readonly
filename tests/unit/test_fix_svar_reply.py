@@ -246,8 +246,7 @@ async def test_reply_all_with_reply_to_uses_reply_to_instead_of_from():
         ('"Doe, John" <j@x.com>', [("Doe, John", "j@x.com")]),
         ("a@x.se, b@y.se", [("", "a@x.se"), ("", "b@y.se")]),
         ("=?utf-8?q?boss=40company=2Ecom?= <attacker@evil.com>", [("boss@company.com", "attacker@evil.com")]),
-        # email.policy tolkar inte kommentaren som namn; adressen är det viktiga
-        ("a@x.se (Anna Andersson)", [("", "a@x.se")]),
+        ("a@x.se (Anna Andersson)", [("Anna Andersson", "a@x.se")]),
     ],
 )
 async def test_reply_reads_addresses_from_raw_header(from_header, expected):
@@ -269,11 +268,22 @@ async def test_reply_from_raw_utf8_header_keeps_name():
 
 
 async def test_encoded_linebreak_in_display_name_is_flattened():
-    raw = _raw(f"From: =?utf-8?q?Anna=0D=0ABcc=3A_evil@e.com?= <a@x.se>\nTo: {KONTO}\nSubject: s")
+    raw = _raw(f"From: =?utf-8?q?Anna=0D=0ABcc=3A_evil=40e.com?= <a@x.se>\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
         await reply_to_email(_ctx(raw), uid="1", body="ok")
     assert cap.recipients == ["a@x.se"]
+    assert _to(cap) == [("Anna Bcc: evil@e.com", "a@x.se")]
     assert cap.parsed["Bcc"] is None
+
+
+async def test_malformed_encoded_word_with_at_sign_sends_nothing():
+    """Ett okodat @ i ett kodat namn är ogiltigt; get_email visar ingen
+    adress, och svaret ska då inte heller gissa fram någon."""
+    raw = _raw(f"From: =?utf-8?q?Anna=0D=0ABcc=3A_evil@e.com?= <a@x.se>\nTo: {KONTO}\nSubject: s")
+    with capture_smtp() as cap:
+        with pytest.raises(ValueError, match="mottagare"):
+            await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert cap.sent == []
 
 
 async def test_reply_to_own_sent_message_goes_to_original_recipients():
@@ -551,3 +561,54 @@ def test_html_to_text(markup, expected):
     from protonmail_mcp.tools.reply import _html_to_text
 
     assert _html_to_text(markup) == expected
+
+
+# -------------------------------------------------------------------
+# Granskning 2: mottagare, kontrolltecken och msg-id-längd
+# -------------------------------------------------------------------
+
+
+async def test_reply_all_does_not_send_to_address_hidden_in_comment():
+    raw = _raw(
+        f'From: a@x.se\nTo: {KONTO}, "=?utf-8?q?B=0A?=" <b@x.se> (<hidden@evil.com>)\nSubject: s'
+    )
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+    assert "hidden@evil.com" not in cap.recipients
+    assert cap.recipients == ["a@x.se", "b@x.se"]
+
+
+async def test_reply_to_pointing_only_at_own_account_falls_back_to_from():
+    raw = _raw(f"From: a@x.se\nReply-To: {KONTO}\nTo: {KONTO}\nSubject: s")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert cap.recipients == ["a@x.se"]
+
+
+async def test_extra_cc_with_display_name_is_deduplicated():
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok", cc=["A <A@x.se>", "Cia <c@x.se>"])
+    assert cap.recipients == ["a@x.se", "c@x.se"]
+    assert _cc(cap) == [("Cia", "c@x.se")]
+
+
+async def test_control_characters_are_removed_from_subject_and_names():
+    raw = _raw(
+        f"From: =?utf-8?q?An=00na?= <a@x.se>\nTo: {KONTO}\nSubject: =?utf-8?q?m=C3=B6=00te=07?=\nMessage-ID: <m@x>"
+    )
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert b"\x00" not in cap.raw and b"\x07" not in cap.raw
+    assert str(cap.parsed["Subject"]) == "Re: möte"
+    assert _to(cap) == [("Anna", "a@x.se")]
+
+
+async def test_overlong_message_ids_are_skipped():
+    long_id = "<" + "a" * 200_000 + "@x>"
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: {long_id}\nReferences: <r@x> {long_id}")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    head = cap.raw.split(b"\r\n\r\n", 1)[0]
+    assert max(len(line) for line in head.split(b"\r\n")) <= 998
+    assert cap.parsed["In-Reply-To"] is None
