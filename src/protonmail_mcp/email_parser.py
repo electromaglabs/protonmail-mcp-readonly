@@ -175,53 +175,108 @@ def _safe_decode(payload: bytes, charset: str | None) -> str:
     return _decode_bytes(payload, charset)
 
 
-def get_body(msg: Message) -> dict[str, str]:
-    plain = ""
-    html = ""
+_MAX_MIME_DEPTH = 100
 
-    if msg.is_multipart():
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition") or "")
-            if "attachment" in disposition:
-                continue
-            charset = part.get_content_charset() or "utf-8"
-            if content_type == "text/plain" and not plain:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    plain = _safe_decode(payload, charset)
-            elif content_type == "text/html" and not html:
-                payload = part.get_payload(decode=True)
-                if payload:
-                    html = _safe_decode(payload, charset)
+
+def _filename(part: Message) -> str:
+    try:
+        return decode_header_value(part.get_filename())
+    except Exception:
+        return ""
+
+
+def _disposition(part: Message) -> str | None:
+    try:
+        return part.get_content_disposition()  # gemener: "attachment"/"inline"
+    except Exception:
+        return None
+
+
+def _attachment(part: Message, filename: str) -> dict[str, Any]:
+    if part.is_multipart():
+        # message/rfc822: get_payload(decode=True) är None för multipart
+        try:
+            size = sum(len(p.as_bytes()) for p in part.get_payload() if isinstance(p, Message))
+        except Exception:
+            size = 0
     else:
-        charset = msg.get_content_charset() or "utf-8"
-        payload = msg.get_payload(decode=True)
-        if payload:
-            content_type = msg.get_content_type()
-            if content_type == "text/html":
-                html = _safe_decode(payload, charset)
-            else:
-                plain = _safe_decode(payload, charset)
+        size = len(part.get_payload(decode=True) or b"")
+    return {"filename": filename, "content_type": part.get_content_type(), "size": size}
 
-    return {"plain": plain, "html": html}
+
+def _text_of(part: Message) -> str:
+    payload = part.get_payload(decode=True)
+    if not payload:
+        return ""
+    try:
+        charset = part.get_content_charset()
+    except Exception:
+        charset = None
+    return _safe_decode(payload, charset)
+
+
+def _collect(part: Message, out: dict[str, list], depth: int = 0) -> None:
+    """Samla brödtext och bilagor för ett meddelande.
+
+    Går inte ner i message/* (vidarebefordrade mejl är bilagor, inte en del
+    av ytterbrevet). I multipart/alternative tas en variant per typ; i övriga
+    multipart (mixed, related, signed …) slås alla inline-textdelar ihop.
+    """
+    if depth > _MAX_MIME_DEPTH:
+        return
+    ctype = part.get_content_type()
+    maintype = part.get_content_maintype()
+
+    if maintype == "message" and part.is_multipart():
+        out["attachments"].append(_attachment(part, _filename(part)))
+        return
+
+    if part.is_multipart():
+        children = [c for c in part.get_payload() if isinstance(c, Message)]
+        if part.get_content_subtype() != "alternative":
+            for child in children:
+                _collect(child, out, depth + 1)
+            return
+        for child in children:
+            sub: dict[str, list] = {"plain": [], "html": [], "attachments": []}
+            _collect(child, sub, depth + 1)
+            for kind in ("plain", "html"):
+                if not out[kind] and any(sub[kind]):
+                    out[kind].extend(sub[kind])
+            out["attachments"].extend(sub["attachments"])
+        return
+
+    disposition = _disposition(part)
+    filename = _filename(part)
+    is_text_body = (
+        ctype in ("text/plain", "text/html") or maintype == "multipart"  # trasig multipart utan boundary
+    ) and disposition != "attachment" and (not filename or disposition == "inline")
+    if is_text_body:
+        if text := _text_of(part):
+            out["html" if ctype == "text/html" else "plain"].append(text)
+    elif disposition == "attachment" or filename:
+        out["attachments"].append(_attachment(part, filename))
+    elif disposition == "inline" or part.get("Content-ID"):
+        pass  # inbäddad resurs utan filnamn, t.ex. cid-logga i multipart/related
+    elif maintype == "text" and ctype != "text/calendar":
+        pass  # annan textvariant i alternative, t.ex. text/x-amp-html
+    else:
+        out["attachments"].append(_attachment(part, filename))
+
+
+def _parts(msg: Message) -> dict[str, list]:
+    out: dict[str, list] = {"plain": [], "html": [], "attachments": []}
+    _collect(msg, out)
+    return out
+
+
+def get_body(msg: Message) -> dict[str, str]:
+    parts = _parts(msg)
+    return {"plain": "\n".join(parts["plain"]), "html": "\n".join(parts["html"])}
 
 
 def get_attachments(msg: Message) -> list[dict[str, Any]]:
-    attachments = []
-    if msg.is_multipart():
-        for part in msg.walk():
-            disposition = str(part.get("Content-Disposition") or "")
-            if "attachment" in disposition:
-                filename = decode_header_value(part.get_filename())
-                attachments.append(
-                    {
-                        "filename": filename,
-                        "content_type": part.get_content_type(),
-                        "size": len(part.get_payload(decode=True) or b""),
-                    }
-                )
-    return attachments
+    return _parts(msg)["attachments"]
 
 
 def _strip_html(html: str) -> str:
@@ -267,10 +322,10 @@ def parse_email(
     max_length: int | None = 500,
 ) -> dict[str, Any]:
     msg = email.message_from_bytes(raw)
-    body = get_body(msg)
+    parts = _parts(msg)
 
-    body_plain = body["plain"]
-    body_html = body["html"]
+    body_plain = "\n".join(parts["plain"])
+    body_html = "\n".join(parts["html"])
 
     if body_format == "full":
         # Returnera råa body utan trunkering
@@ -303,7 +358,7 @@ def parse_email(
         "date": decode_header_value(_raw_header(msg, "Date")),
         "body_plain": body_plain,
         "body_html": body_html,
-        "attachments": get_attachments(msg),
+        "attachments": parts["attachments"],
         "headers": {k: decode_header_value(v) for k, v in msg.raw_items()},
     }
 
