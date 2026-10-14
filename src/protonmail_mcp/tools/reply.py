@@ -1,8 +1,49 @@
+import email
+import email.policy
+import re
+from email.message import EmailMessage
+
 from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from ..email_parser import parse_email
 from . import _get_app
+
+# Svars- och vidarebefordringsprefix på olika språk: Re, SV/Svar-förkortningen
+# (sv, da, no), AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"),
+# med valfri räknare som "Re[2]:" eller "RE (3):"
+_PREFIX_RE = re.compile(
+    r"^\s*(?:re|sv|aw|vs|antw|fwd?|vb)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def _parse_original(raw: bytes) -> EmailMessage:
+    """Parsa originalet med den moderna policyn.
+
+    Headers läses då skiftlägesokänsligt och avkodas korrekt, även råa
+    UTF-8-headers (RFC 6532) och RFC 2047-kodade namn.
+    """
+    return email.message_from_bytes(raw, policy=email.policy.default)
+
+
+def _header_text(msg: EmailMessage, name: str) -> str:
+    """Avkodat headervärde på en enda rad (tomt om det saknas eller är trasigt)."""
+    try:
+        value = msg.get(name)
+    except Exception:  # trasiga headers ska inte stoppa ett svar
+        return ""
+    # Kodade ord kan innehålla radbrytningar — slå ihop till en rad
+    return " ".join(str(value or "").split())
+
+
+def _base_subject(subject: str) -> str:
+    """Ta bort alla inledande svars-/vidarebefordringsprefix."""
+    while True:
+        stripped = _PREFIX_RE.sub("", subject, count=1)
+        if stripped == subject:
+            return subject
+        subject = stripped
 
 
 @mcp.tool()
@@ -27,13 +68,10 @@ async def reply_to_email(
         return False
 
     original = parse_email(raw, body_format="full")
+    msg = _parse_original(raw)
 
-    # Sätt Re:-prefix om det inte redan finns
-    orig_subject = original["subject"]
-    if orig_subject.lower().startswith("re:"):
-        subject = orig_subject
-    else:
-        subject = f"Re: {orig_subject}"
+    # Ett enda "Re: " oavsett hur många och vilka språks prefix som finns
+    subject = f"Re: {_base_subject(_header_text(msg, 'Subject'))}"
 
     # Reply-to: svara till avsändaren
     reply_to_addr = original["from"]
@@ -81,8 +119,9 @@ async def forward_email(
         return False
 
     original = parse_email(raw, body_format="full")
+    msg = _parse_original(raw)
 
-    subject = f"Fwd: {original['subject']}"
+    subject = f"Fwd: {_base_subject(_header_text(msg, 'Subject'))}"
 
     # Bygg vidarebefordrad body med citat
     orig_body = original.get("body_plain", "")
