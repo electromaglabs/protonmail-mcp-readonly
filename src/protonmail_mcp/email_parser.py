@@ -255,6 +255,12 @@ def parse_email(
         body_plain = _strip_quotes_and_signature(body_plain)
         body_plain = _truncate(body_plain, max_length)
 
+    if body_format != "full":
+        # HTML är ofta 100+ KB (nyhetsbrev) — samma gräns som body_plain, så att
+        # förvalda parametrar inte spräcker klientens kontext. Hela HTML:en
+        # finns i "full" eller med max_length=None.
+        body_html = _truncate(body_html, max_length)
+
     return {
         "message_id": msg.get("Message-ID", ""),
         "subject": decode_header_value(msg.get("Subject")),
