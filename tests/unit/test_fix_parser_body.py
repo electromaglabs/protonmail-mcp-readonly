@@ -196,3 +196,24 @@ class TestArgumentValidation:
     def test_zero_max_length_is_allowed(self):
         result = parse_email(_alternative("hej", "<p>hej</p>"), max_length=0)
         assert result["body_plain"].startswith("\n[...")
+
+
+class TestSignatureDelimiter:
+    """PE14: bara "-- " (RFC 3676) inleder signaturen i stripped-läget."""
+
+    def _stripped(self, text: str, ctype: str = "text/plain") -> str:
+        raw = (
+            f"From: a@b.se\r\nSubject: s\r\nContent-Type: {ctype}; charset=utf-8\r\n\r\n{text}"
+        ).encode()
+        return parse_email(raw, body_format="stripped", max_length=None)["body_plain"]
+
+    def test_double_dash_alone_is_not_a_signature(self):
+        assert "punkt 1" in self._stripped("Agenda\r\n--\r\npunkt 1\r\n")
+
+    def test_dash_dash_space_is_a_signature(self):
+        result = self._stripped("Hej\r\n-- \r\nAnna\r\n")
+        assert "Hej" in result and "Anna" not in result
+
+    def test_html_signature_is_removed(self):
+        result = self._stripped("<p>Hej</p>-- <br>Anna", ctype="text/html")
+        assert "Hej" in result and "Anna" not in result

@@ -341,8 +341,9 @@ def _strip_quotes_and_signature(text: str) -> str:
     lines = text.splitlines()
     result = []
     for line in lines:
-        # Signaturblock: allt efter "-- " eller "--" på egen rad
-        if line.rstrip() == "-- " or line.rstrip() == "--":
+        # Signaturavgränsaren är exakt "-- " (RFC 3676 §4.3); ett ensamt "--"
+        # är ofta en avskiljare mitt i texten och får inte kapa resten
+        if line == "-- ":
             break
         # Hoppa över citerade rader
         if line.startswith(">"):

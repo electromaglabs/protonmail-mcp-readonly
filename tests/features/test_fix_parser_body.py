@@ -236,3 +236,15 @@ def try_max_length(mock_ctx, raw, n):
 def rejected(result, word):
     assert isinstance(result, ValueError)
     assert word in str(result)
+
+
+@given(
+    parsers.parse('ett textmejl med raderna "{first}", "{second}" och "{third}"'),
+    target_fixture="raw",
+)
+def text_lines(mock_ctx, first, second, third):
+    raw = (
+        "From: a@b.se\r\nSubject: s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+        f"{first}\r\n{second}\r\n{third}\r\n"
+    ).encode()
+    return _serve(mock_ctx, raw)

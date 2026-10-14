@@ -74,3 +74,14 @@ Feature: Brödtext och bilagor i hämtade mejl
     Given ett multipart/alternative-mejl med 2000 tecken HTML
     When jag försöker hämta mejlet med max_length -5
     Then ska anropet avvisas med ett fel som nämner "max_length"
+
+  Scenario: En avskiljarrad "--" kapar inte resten av texten i stripped-läget
+    Given ett textmejl med raderna "Agenda", "--" och "punkt 1"
+    When jag hämtar mejlet med get_email och body_format "stripped"
+    Then body_plain ska innehålla "punkt 1"
+
+  Scenario: Signaturen efter "-- " tas bort i stripped-läget
+    Given ett textmejl med raderna "Hej", "-- " och "Anna Andersson"
+    When jag hämtar mejlet med get_email och body_format "stripped"
+    Then body_plain ska innehålla "Hej"
+    And body_plain ska inte innehålla "Anna Andersson"
