@@ -12,11 +12,11 @@ OK = SimpleNamespace(result="OK", lines=[])
 
 
 def _mock_imap(state: str = "SELECTED") -> AsyncMock:
-    """En aioimaplib.IMAP4-attrapp: asynkrona kommandon, synkrona get_state/transport."""
+    """En aioimaplib.IMAP4-attrapp: asynkrona kommandon, synkront protokoll (tillstånd, transport)."""
     m = AsyncMock()
     m.select.return_value = OK
-    m.get_state = MagicMock(return_value=state)
     m.protocol = MagicMock()
+    m.protocol.state = state
     return m
 
 
@@ -303,3 +303,28 @@ class TestNoSilentFailures:
         client._client.fetch.return_value = SimpleNamespace(result="NO", lines=[b"fetch failed"])
         with pytest.raises(ValueError, match="misslyckades"):
             await client.search_messages("INBOX")
+
+
+# ---------------------------------------------------------------------------
+# Tillståndskontrollen återansluter bara i kända ej inloggade tillstånd
+# ---------------------------------------------------------------------------
+class TestStateCheck:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", ["STARTED", "CONNECTED", "NONAUTH", "LOGOUT"])
+    async def test_not_logged_in_states_reconnect(self, client, state):
+        old = client._client
+        old.protocol.state = state
+        new = _mock_imap(state="AUTH")
+        new.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            await client._ensure_connected()
+        assert client._client is new
+
+    @pytest.mark.asyncio
+    async def test_unknown_state_does_not_open_a_new_connection(self, settings):
+        """En attrapp utan modellerat tillstånd får inte leda till en riktig anslutning mot Bridge."""
+        imap = IMAPClient(settings)
+        imap._client = AsyncMock()
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4") as ctor:
+            await imap._ensure_connected()
+        ctor.assert_not_called()

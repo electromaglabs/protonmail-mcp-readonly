@@ -18,12 +18,12 @@ from protonmail_mcp.imap_client import (
 
 
 def _imap_mock() -> AsyncMock:
-    """aioimaplib.IMAP4-attrapp: inloggad, SELECT/LOGIN svarar OK, get_state och transport är synkrona."""
+    """aioimaplib.IMAP4-attrapp: inloggad, SELECT/LOGIN svarar OK, protokollet (tillstånd, transport) är synkront."""
     m = AsyncMock()
     m.select.return_value = SimpleNamespace(result="OK", lines=[])
     m.login.return_value = SimpleNamespace(result="OK", lines=[])
-    m.get_state = MagicMock(return_value="SELECTED")
     m.protocol = MagicMock()
+    m.protocol.state = "SELECTED"
     return m
 
 

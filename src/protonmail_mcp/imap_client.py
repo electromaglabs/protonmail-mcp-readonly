@@ -161,6 +161,10 @@ def _serialized(method):
     return wrapper
 
 
+# aioimaplib:s tillstånd före inloggning och efter utloggning (övriga: AUTH, SELECTED)
+_NOT_LOGGED_IN_STATES = (aioimaplib.STARTED, aioimaplib.CONNECTED, aioimaplib.NONAUTH, aioimaplib.LOGOUT)
+
+
 class IMAPAuthenticationError(Exception):
     """Bridge nekade inloggningen (fel användarnamn/Bridge-lösenord, eller kontot inte laddat)."""
 
@@ -283,8 +287,10 @@ class IMAPClient:
             ) from None
 
     async def _ensure_connected(self) -> None:
-        if self._client is not None and self._client.get_state() not in ("AUTH", "SELECTED"):
-            logger.warning("IMAP-klienten är inte inloggad (%s) — återansluter", self._client.get_state())
+        # NOOP är tillåtet i NONAUTH, så NOOP ensam visar inte att klienten är inloggad
+        state = getattr(self._client.protocol, "state", None) if self._client is not None else None
+        if state in _NOT_LOGGED_IN_STATES:
+            logger.warning("IMAP-klienten är inte inloggad (%s) — återansluter", state)
             self._discard_connection()
         if self._client is None:
             await self.connect()
