@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import Context
 from pydantic import Field
@@ -53,8 +53,8 @@ async def get_email(
     ctx: Context,
     uid: str,
     mailbox: str = "INBOX",
-    body_format: str = "text",
-    max_length: int | None = 500,
+    body_format: Literal["text", "full", "stripped"] = "text",
+    max_length: Annotated[int, Field(ge=0)] | None = 500,
 ) -> dict | None:
     """Hämta fullständigt innehåll för ett e-post via UID.
 
