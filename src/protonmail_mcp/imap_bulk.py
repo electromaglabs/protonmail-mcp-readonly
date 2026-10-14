@@ -8,8 +8,17 @@ enskilt mejl (finns inte, Bridge nekar) hamnar i "failed".
 from typing import Any
 
 from .imap_client import (
-    _READD_DELETES, _UID_RE, IMAPClient, _check_move, _decode, _mailbox_key,
-    _quote_mailbox, _require_ok, _response_text, _serialized, _validate_uid,
+    _READD_DELETES,
+    _UID_RE,
+    IMAPClient,
+    _check_move,
+    _decode,
+    _mailbox_key,
+    _quote_mailbox,
+    _require_ok,
+    _response_text,
+    _serialized,
+    _validate_uid,
 )
 
 MAX_UIDS = 100

@@ -14,13 +14,29 @@ from email.parser import BytesHeaderParser
 from typing import Any
 
 from .imap_bulk import (
-    BulkResult, existing_uids, fail_all, missing_error, result, store_flags, uid_set,
+    BulkResult,
+    existing_uids,
+    fail_all,
+    missing_error,
+    result,
+    store_flags,
+    uid_set,
     validate_uids,
 )
 from .imap_client import (
-    _FETCH_CHUNK_SIZE, _FETCH_START_RE, _LITERAL_END_RE, _UID_RE,
-    IMAPClient, _check_user_folder, _decode, _imap_quoted, _mailbox_key,
-    _parse_list_entry, _quote_mailbox, _require_ok, _response_text, _serialized,
+    _FETCH_CHUNK_SIZE,
+    _FETCH_START_RE,
+    _LITERAL_END_RE,
+    _UID_RE,
+    IMAPClient,
+    _check_user_folder,
+    _decode,
+    _imap_quoted,
+    _mailbox_key,
+    _quote_mailbox,
+    _require_ok,
+    _response_text,
+    _serialized,
 )
 
 LABEL_PREFIX = "Labels/"
@@ -74,13 +90,9 @@ def label_mailbox(label: str) -> str:
 
 async def _require_label(imap: IMAPClient, label: str) -> None:
     """Kontrollerar med LIST att etiketten finns; annars ValueError med hänvisning till create_folder."""
-    resp = await imap._client.list('""', _quote_mailbox(label))
-    _require_ok(resp, f"Kontrollen av etiketten {label}")
-    for line in resp.lines:
-        entry = _parse_list_entry(_decode(line))
-        # "*" och "%" i namnet är jokertecken i LIST: bara exakt samma namn räknas
-        if entry and entry[1] == label:
-            return
+    # "*" och "%" i namnet är jokertecken i LIST: bara exakt samma namn räknas
+    if any(name == label for _, name in await imap._list(_quote_mailbox(label))):
+        return
     raise ValueError(
         f"Etiketten {label} finns inte. Skapa den först med create_folder(\"{label}\"); "
         "list_mailboxes visar vilka etiketter som finns."
