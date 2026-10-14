@@ -237,3 +237,43 @@ async def test_full_acceptance_returns_true():
         assert await make_client().send_email(
             to=["ok@x.se", "ok2@x.se"], subject="s", body="b"
         ) is True
+
+
+# -------------------------------------------------------------------
+# Adressvalideringen får inte vara kvadratisk: vid svar kommer adresserna
+# ur originalets headers, som avsändaren styr
+# -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "addr",
+    ["a@" + "a." * 25_000, "a@" + "." * 50_000 + "x", "a@" + "a" * 50_000],
+    ids=["många-punkter-slut-på-punkt", "bara-punkter", "ingen-punkt"],
+)
+def test_email_validation_is_linear(addr):
+    import time
+
+    from protonmail_mcp.smtp_client import _validate_email_addr
+
+    start = time.perf_counter()
+    with pytest.raises(ValueError):
+        _validate_email_addr(addr)
+    assert time.perf_counter() - start < 0.2
+
+
+@pytest.mark.parametrize(
+    "addr",
+    ["a@x.se", "Åsa <a.b+c@sub.example.co.uk>", "user@exämple.se", '"Doe, John" <j@x.com>'],
+)
+def test_email_validation_accepts_normal_addresses(addr):
+    from protonmail_mcp.smtp_client import _validate_email_addr
+
+    assert _validate_email_addr(addr) == addr
+
+
+@pytest.mark.parametrize("addr", ["a@x", "a@x..se", "a@.x.se", "a@x.se.", "@x.se", "a b@x.se"])
+def test_email_validation_rejects_malformed(addr):
+    from protonmail_mcp.smtp_client import _validate_email_addr
+
+    with pytest.raises(ValueError):
+        _validate_email_addr(addr)

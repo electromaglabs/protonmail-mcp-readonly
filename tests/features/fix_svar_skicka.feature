@@ -64,3 +64,9 @@ Feature: Skicka e-post med korrekta headers
     Given en SMTP-klient för kontot "me@proton.me"
     When jag skickar ett mail till "ok@example.se" och "ok2@example.se"
     Then ska mejlet ha skickats
+
+  Scenario: En adress med tomt domänled avvisas
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail till "anna@example..se"
+    Then ska sändningen avvisas med ett fel som nämner "Ogiltig e-postadress"
+    And inget mejl ska ha skickats

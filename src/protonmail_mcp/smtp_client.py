@@ -15,7 +15,11 @@ from .config import Settings
 logger = logging.getLogger(__name__)
 
 
-_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+# Domänen som punktseparerade etiketter utan tomma led. Etiketterna kan inte
+# innehålla punkt, så mönstret är entydigt och linjärt — den tidigare formen
+# [^@\s]+\.[^@\s]+ backtrackade kvadratiskt (13 s för en adress på 50 000
+# tecken), och vid svar kommer adresserna ur originalets headers.
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$')
 
 # Ren sanitetsgräns mot uppenbart felaktiga ämnen (t.ex. en hel text inklistrad
 # som ämne). 998 är en gräns per rad, inte per header: generatorn viker långa
