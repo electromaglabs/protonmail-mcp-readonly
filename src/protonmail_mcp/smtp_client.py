@@ -1,3 +1,4 @@
+import copy
 import email.policy
 import logging
 import re
@@ -171,6 +172,42 @@ def _build_message(
     return msg
 
 
+# Adressheaders i ett färdigt meddelande (utkast) parsas med email.policy,
+# vars parser är superlinjär; normala headers är långt under en kilobyte.
+_MAX_ADDRESS_HEADER_CHARS = 50_000
+
+
+def _header_addr_specs(msg: Message, name: str) -> list[str]:
+    """Alla adresser (addr-spec) i en adressheader, även ogiltiga.
+
+    Parsas strukturellt med email.policy: RFC 2047-ord avkodas bara i
+    display-namnet, så ett kodat kommatecken eller "<…>" i ett namn blir
+    ingen mottagare. En post som inte går att tolka kommer med som den är
+    (t.ex. "<>"), så att valideringen avvisar den i stället för att den
+    tyst försvinner ur mottagarlistan.
+    """
+    specs: list[str] = []
+    for key, value in msg.raw_items():
+        if key.lower() != name.lower():
+            continue
+        text = str(value)
+        if len(text) > _MAX_ADDRESS_HEADER_CHARS:
+            raise ValueError(f"{name}-headern är orimligt stor ({len(text)} tecken)")
+        if not text.isascii():
+            # Råa UTF-8-headers (RFC 6532) kommer som surrogat-escapes
+            data = text.encode("utf-8", "surrogateescape")
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = data.decode("latin-1")
+        try:
+            header = email.policy.SMTP.header_fetch_parse(key, text)
+            specs.extend(address.addr_spec for address in header.addresses)
+        except Exception as exc:  # parsern kan krascha på trasiga adresser (t.ex. IndexError i 3.10)
+            raise ValueError(f"Ogiltig e-postadress i {name}: {text!r}") from exc
+    return specs
+
+
 class SMTPClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -242,6 +279,65 @@ class SMTPClient:
         )
 
         # Bridge v3 port 1026: direkt SSL med self-signed cert
+        async with aiosmtplib.SMTP(
+            hostname=self._settings.smtp_host,
+            port=self._settings.smtp_port,
+            use_tls=True,
+            tls_context=self._ssl_ctx,
+        ) as client:
+            await client.login(self._settings.username, self._settings.password)
+            errors, _ = await client.send_message(msg, recipients=all_recipients)
+
+        if errors:
+            # Logga bara antal — adresserna får inte hamna i loggen (Bcc)
+            logger.warning(
+                "E-post skickad men %d av %d mottagare vägrades",
+                len(errors),
+                len(all_recipients),
+            )
+            raise SMTPPartialDeliveryError(
+                refused={
+                    addr: (resp.code, resp.message) for addr, resp in errors.items()
+                },
+                delivered=[a for a in all_recipients if a not in errors],
+            )
+
+        logger.info("E-post skickad")
+        return True
+
+    async def send_prepared_message(self, msg: Message) -> bool:
+        """Skicka ett färdigt meddelande, t.ex. ett utkast ur Drafts.
+
+        Mottagarna läses ur To, Cc och Bcc och valideras som i send_email.
+        Bcc-headern tas bort ur det som skickas (de hemliga mottagarna får
+        mejlet via RCPT TO), men meddelandet som skickas in ändras inte.
+        Samma TLS, inloggning och felhantering som send_email, inklusive
+        SMTPPartialDeliveryError när bara några mottagare vägras.
+        """
+        recipients: list[str] = []
+        seen: set[str] = set()
+        for name in ("To", "Cc", "Bcc"):
+            for addr in _header_addr_specs(msg, name):
+                _validate_email_addr(addr)
+                rcpt = _to_address(addr).addr_spec
+                if rcpt.lower() not in seen:
+                    seen.add(rcpt.lower())
+                    recipients.append(rcpt)
+        if not recipients:
+            raise ValueError("Meddelandet saknar mottagare (To, Cc och Bcc är tomma)")
+
+        outgoing = copy.deepcopy(msg)
+        del outgoing["Bcc"]
+        return await self._deliver(outgoing, recipients)
+
+    async def _deliver(self, msg: Message, all_recipients: list[str]) -> bool:
+        """Skicka över SMTP med Bridge-inloggning; som slutet av send_email."""
+        logger.info(
+            "Skickar e-post (%d mottagare) via SMTP %s:%d",
+            len(all_recipients),
+            self._settings.smtp_host,
+            self._settings.smtp_port,
+        )
         async with aiosmtplib.SMTP(
             hostname=self._settings.smtp_host,
             port=self._settings.smtp_port,

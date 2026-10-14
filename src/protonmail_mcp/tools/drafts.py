@@ -4,6 +4,9 @@ Utkasten läggs i Drafts med IMAP APPEND. Bridge gör dem till riktiga utkast i
 Proton, där de kan läsas, ändras och skickas. Befintliga utkast listas med
 list_emails(mailbox="Drafts") och läses med get_email(uid, mailbox="Drafts").
 """
+import email
+import email.policy
+import logging
 from collections.abc import Sequence
 from email.message import EmailMessage, Message
 from typing import Any, Literal
@@ -22,6 +25,8 @@ from ..smtp_client import (
 from . import _get_app
 from ._types import OptionalStr
 from .reply import build_forward, build_reply
+
+logger = logging.getLogger(__name__)
 
 DRAFTS = imap_drafts.DRAFTS
 
@@ -277,3 +282,67 @@ async def update_draft(
     )
     new_uid = await imap_drafts.replace_draft(app.imap, uid, msg.as_bytes(), msg["Message-ID"])
     return {**_draft_result(new_uid, msg), "replaced_uid": uid}
+
+
+@mcp.tool()
+async def send_draft(
+    ctx: Context,
+    uid: str,
+    mailbox: Literal["Drafts"],
+) -> dict:
+    """Skicka ett utkast ur Drafts exakt som det ligger där, och ta sedan bort det.
+
+    Använd först när utkastet är granskat och godkänt. Utkastet hämtas ur
+    Drafts (med eventuella ändringar som gjorts i Proton) och skickas över
+    SMTP till alla adresser i To, Cc och Bcc. Bcc-headern tas bort ur det
+    som skickas, så de hemliga mottagarna syns inte för de andra. Efter
+    skicket raderas utkastet permanent ur Drafts; Bridge lägger det skickade
+    mejlet i Sent. Hitta utkast med list_emails(mailbox="Drafts").
+
+    Misslyckas skicket ligger utkastet kvar orört. Vägrar servern bara några
+    mottagare har mejlet ändå gått till de övriga: felet anger vilka, och
+    utkastet ligger kvar — skicka då inte om det till alla.
+
+    Args:
+        uid: Utkastets UID i Drafts (från create_draft eller list_emails)
+        mailbox: Alltid "Drafts" — anges för att bekräfta att UID:t kommer därifrån
+
+    Returns:
+        {"sent": True, "message_id", "draft_deleted"}. Gick utkastet inte att
+        ta bort efter skicket är draft_deleted False och "warning" förklarar —
+        mejlet HAR då skickats och ska inte skickas igen.
+
+    Raises:
+        ValueError: utkastet finns inte i Drafts, saknar mottagare eller har
+            en ogiltig adress (inget skickas).
+        SMTPPartialDeliveryError: servern vägrade några av mottagarna.
+    """
+    if mailbox != DRAFTS:
+        raise ValueError(f"Bara utkast i {DRAFTS} kan skickas, inte i {mailbox!r}")
+    app = _get_app(ctx)
+    raw = await app.imap.get_message(DRAFTS, uid)
+    if raw is None:
+        raise ValueError(
+            f"Inget utkast med UID {uid} i {DRAFTS}. "
+            'Hitta utkasten med list_emails(mailbox="Drafts").'
+        )
+    msg = email.message_from_bytes(raw, policy=email.policy.SMTP)
+    # Fel här (även delvis leverans) går vidare och utkastet lämnas kvar
+    await app.smtp.send_prepared_message(msg)
+
+    result: dict[str, Any] = {
+        "sent": True,
+        "message_id": msg["Message-ID"],
+        "draft_deleted": True,
+    }
+    try:
+        await app.imap.delete_message(DRAFTS, uid, permanent=True)
+    except Exception as exc:  # mejlet är redan skickat — det får inte se ut som ett fel
+        logger.warning("Utkastet UID %s skickades men kunde inte tas bort: %s", uid, exc)
+        result["draft_deleted"] = False
+        result["warning"] = (
+            f"Mejlet skickades, men utkastet (UID {uid}) kunde inte tas bort ur "
+            f"{DRAFTS}: {exc}. Skicka inte igen — ta bort utkastet med "
+            f'delete_email(uid="{uid}", mailbox="Drafts", permanent=True).'
+        )
+    return result

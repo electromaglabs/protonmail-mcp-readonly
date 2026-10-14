@@ -15,6 +15,7 @@ from protonmail_mcp.tools.drafts import (
     create_draft,
     create_forward_draft,
     create_reply_draft,
+    send_draft,
     update_draft,
 )
 from protonmail_mcp.tools.reply import reply_to_email
@@ -25,6 +26,7 @@ scenarios(
     "feat_utkast_skapa.feature",
     "feat_utkast_svar.feature",
     "feat_utkast_uppdatera.feature",
+    "feat_utkast_skicka.feature",
 )
 
 
@@ -122,6 +124,39 @@ def existing_draft(bridge, to, subject, body):
     return {"uid": bridge.add("Drafts", msg.as_bytes(), ("\\Draft", "\\Seen"))}
 
 
+@given(
+    parsers.parse(
+        'ett utkast skapat till "{to}" med kopia till "{cc}" och hemlig kopia till "{bcc}"'
+    ),
+    target_fixture="draft",
+)
+def created_draft(ctx, bridge, to, cc, bcc):
+    result = asyncio.run(
+        create_draft(ctx, to=to, subject="Godkänt", body="Granskad text", cc=cc, bcc=bcc)
+    )
+    return {"uid": result["uid"], "message_id": result["message_id"]}
+
+
+@given("ett utkast i Drafts utan mottagare", target_fixture="draft")
+def draft_without_recipients(bridge):
+    raw = (
+        b"From: me@proton.me\r\nSubject: Halvfardigt\r\n"
+        b"Message-ID: <tom@proton.me>\r\n\r\nText\r\n"
+    )
+    return {"uid": bridge.add("Drafts", raw, ("\\Draft", "\\Seen"))}
+
+
+@given("att SMTP-servern vägrar alla mottagare")
+def smtp_refuses_all(captured):
+    for addr in ("asa@example.se", "cc@example.se", "hemlig@example.se"):
+        captured.refused[addr] = (550, "no such user")
+
+
+@given(parsers.parse('att SMTP-servern vägrar "{addr}"'))
+def smtp_refuses(captured, addr):
+    captured.refused[addr] = (550, "no such user")
+
+
 # --- When --------------------------------------------------------------------
 
 
@@ -193,6 +228,16 @@ def update_existing_draft(ctx, outcome, draft, to, subject, body):
 )
 def update_draft_uid(ctx, outcome, uid, to, subject, body):
     _run(outcome, update_draft(ctx, uid=uid, mailbox="Drafts", to=to, subject=subject, body=body))
+
+
+@when("jag skickar utkastet")
+def send_the_draft(ctx, outcome, draft):
+    _run(outcome, send_draft(ctx, uid=draft["uid"], mailbox="Drafts"))
+
+
+@when(parsers.parse('jag skickar utkastet med UID "{uid}"'))
+def send_draft_uid(ctx, outcome, uid):
+    _run(outcome, send_draft(ctx, uid=uid, mailbox="Drafts"))
 
 
 # --- Then --------------------------------------------------------------------
@@ -296,3 +341,44 @@ def no_store_or_expunge(bridge):
 @then("inget APPEND ska ha skickats")
 def no_append(bridge):
     assert "APPEND" not in bridge.names()
+
+
+@then(parsers.parse('SMTP-mottagarna ska vara "{recipients}"'))
+def smtp_recipients(captured, recipients):
+    assert captured.recipients == [r.strip() for r in recipients.split(",")]
+
+
+@then(parsers.parse('det skickade mejlet ska sakna headern "{name}"'))
+def sent_lacks_header(captured, name):
+    assert captured.parsed[name] is None
+    assert f"{name}:".encode() not in captured.raw
+
+
+@then("det skickade mejlet ska ha utkastets ämne, text och Message-ID")
+def sent_matches_draft(captured, draft):
+    sent = captured.parsed
+    assert sent["Subject"] == "Godkänt"
+    assert "Granskad text" in sent.get_body(("plain",)).get_content()
+    assert sent["Message-ID"] == draft["message_id"]
+    assert sent["From"] == "me@proton.me"
+
+
+@then("svaret ska ange att mejlet skickades och att utkastet togs bort")
+def result_sent_and_deleted(outcome):
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["result"]["sent"] is True
+    assert outcome["result"]["draft_deleted"] is True
+
+
+@then("svaret ska ange att mejlet skickades men att utkastet ligger kvar")
+def result_sent_not_deleted(outcome):
+    assert "error" not in outcome, outcome.get("error")
+    result = outcome["result"]
+    assert result["sent"] is True
+    assert result["draft_deleted"] is False
+    assert "Skicka inte igen" in result["warning"]
+
+
+@then("ska anropet misslyckas")
+def call_failed_plain(outcome):
+    assert "error" in outcome, f"inget fel: {outcome.get('result')!r}"

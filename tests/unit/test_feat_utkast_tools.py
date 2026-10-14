@@ -220,3 +220,37 @@ class TestUpdateDraft:
         schema = tool.parameters["properties"]["mailbox"]
         assert schema.get("const") == "Drafts" or schema.get("enum") == ["Drafts"]
         assert "mailbox" in tool.parameters["required"]
+
+
+class TestSendDraft:
+    @pytest.mark.asyncio
+    async def test_only_drafts_mailbox(self):
+        ctx, app = _ctx()
+        app.imap.get_message = AsyncMock()
+        with pytest.raises(ValueError, match="Bara utkast i Drafts"):
+            await drafts.send_draft(ctx, uid="3", mailbox="INBOX")
+        app.imap.get_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reads_drafts_and_deletes_permanently_after_send(self):
+        ctx, app = _ctx()
+        app.imap.get_message = AsyncMock(return_value=(
+            b"From: me@proton.me\r\nTo: a@example.se\r\nSubject: s\r\n"
+            b"Message-ID: <d@proton.me>\r\n\r\nText\r\n"
+        ))
+        app.imap.delete_message = AsyncMock(return_value=True)
+        app.smtp.send_prepared_message = AsyncMock(return_value=True)
+        result = await drafts.send_draft(ctx, uid="3", mailbox="Drafts")
+        app.imap.get_message.assert_awaited_once_with("Drafts", "3")
+        app.imap.delete_message.assert_awaited_once_with("Drafts", "3", permanent=True)
+        assert result == {"sent": True, "message_id": "<d@proton.me>", "draft_deleted": True}
+
+    @pytest.mark.asyncio
+    async def test_failed_send_keeps_draft(self):
+        ctx, app = _ctx()
+        app.imap.get_message = AsyncMock(return_value=b"To: a@example.se\r\n\r\nx\r\n")
+        app.imap.delete_message = AsyncMock()
+        app.smtp.send_prepared_message = AsyncMock(side_effect=OSError("nere"))
+        with pytest.raises(OSError):
+            await drafts.send_draft(ctx, uid="3", mailbox="Drafts")
+        app.imap.delete_message.assert_not_called()
