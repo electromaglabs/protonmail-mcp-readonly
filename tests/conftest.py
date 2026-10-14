@@ -1,5 +1,27 @@
 """Gemensamma fixtures för alla tester."""
+import asyncio.base_events
+
 import pytest
+
+# Bridges standardportar (IMAP, SMTP). Enhets- och BDD-tester får aldrig nå
+# dem: en mock som faller igenom skulle annars logga in mot riktiga Bridge.
+_BRIDGE_PORTS = {1143, 1026}
+
+
+@pytest.fixture(autouse=True)
+def _block_bridge_ports(request, monkeypatch):
+    if request.node.get_closest_marker("integration"):
+        return
+    original = asyncio.base_events.BaseEventLoop.create_connection
+
+    async def guarded(self, protocol_factory, host=None, port=None, *args, **kwargs):
+        if port in _BRIDGE_PORTS:
+            raise ConnectionRefusedError(
+                f"Anslutning till {host}:{port} är blockerad i tester (ej integration)"
+            )
+        return await original(self, protocol_factory, host, port, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio.base_events.BaseEventLoop, "create_connection", guarded)
 
 
 @pytest.fixture

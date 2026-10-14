@@ -132,6 +132,15 @@ def _parse_headers(raw: bytes) -> dict[str, str]:
     return result
 
 
+def _close_transport(client: aioimaplib.IMAP4) -> None:
+    transport = getattr(getattr(client, "protocol", None), "transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:
+            pass
+
+
 def _serialized(method):
     """Kör IMAP-operationen under klientens lås.
 
@@ -142,44 +151,155 @@ def _serialized(method):
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):
         async with self._lock:
-            return await method(self, *args, **kwargs)
+            try:
+                return await method(self, *args, **kwargs)
+            except (asyncio.CancelledError, asyncio.TimeoutError, OSError, aioimaplib.AioImapException):
+                # Efter timeout eller avbrott har aioimaplib kvar hängande kommandon
+                # och protokollet är i okänt tillstånd — börja om med ny anslutning.
+                self._discard_connection()
+                raise
     return wrapper
 
 
+# aioimaplib:s tillstånd före inloggning och efter utloggning (övriga: AUTH, SELECTED)
+_NOT_LOGGED_IN_STATES = (aioimaplib.STARTED, aioimaplib.CONNECTED, aioimaplib.NONAUTH, aioimaplib.LOGOUT)
+
+
+class IMAPAuthenticationError(Exception):
+    """Bridge nekade inloggningen (fel användarnamn/Bridge-lösenord, eller kontot inte laddat)."""
+
+
 class IMAPClient:
+    # aioimaplib:s timeout per kommando (hälsning, LOGIN, SELECT, SEARCH, ...)
+    timeout: float = 10.0
+    # UID STORE/COPY/EXPUNGE, som aioimaplib 2.0.1 kör helt utan timeout.
+    # COPY till en etikett kräver ett anrop till Proton-API:t, därav längre tid.
+    uid_timeout: float = 30.0
+    # Hälsokontrollen före varje anrop; svarar inte NOOP ansluter vi på nytt
+    noop_timeout: float = 5.0
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: aioimaplib.IMAP4 | None = None
         self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        logger.info("Ansluter till IMAP %s:%d (plain)", self._settings.imap_host, self._settings.imap_port)
+        host, port = self._settings.imap_host, self._settings.imap_port
+        logger.info("Ansluter till IMAP %s:%d (plain)", host, port)
+
+        def forget_on_connection_lost(_exc: Exception | None) -> None:
+            # Bridge omstartad eller nere: släpp klienten så att nästa anrop
+            # ansluter direkt i stället för att vänta ut NOOP-timeouten
+            if self._client is client:
+                logger.warning("Anslutningen till ProtonMail Bridge bröts")
+                self._client = None
+
         # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
-        self._client = aioimaplib.IMAP4(
-            host=self._settings.imap_host,
-            port=self._settings.imap_port,
+        client = aioimaplib.IMAP4(
+            host=host, port=port, timeout=self.timeout, conn_lost_cb=forget_on_connection_lost
         )
-        await self._client.wait_hello_from_server()
-        await self._client.login(self._settings.username, self._settings.password)
+        # self._client sätts först när inloggningen lyckats. Annars fastnar en
+        # klient i NONAUTH, där NOOP lyckas men allt annat avvisas, för alltid.
+        try:
+            await self._wait_for_socket(client, host, port)
+            try:
+                await client.wait_hello_from_server()
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"ProtonMail Bridge på {host}:{port} skickade ingen hälsning "
+                    f"inom {self.timeout:g} s — körs Bridge?"
+                ) from None
+            try:
+                resp = await client.login(self._settings.username, self._settings.password)
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"ProtonMail Bridge på {host}:{port} svarade inte på inloggningen "
+                    f"inom {self.timeout:g} s"
+                ) from None
+            if resp.result != "OK":
+                detail = _response_text(resp)
+                raise IMAPAuthenticationError(
+                    f"Inloggningen mot ProtonMail Bridge misslyckades ({resp.result} {detail}) — "
+                    "kontrollera PROTONMAIL_USERNAME och Bridge-lösenordet"
+                )
+        except BaseException:
+            # Även CancelledError: stäng socketen så att ingen halvinloggad session blir kvar
+            _close_transport(client)
+            raise
+        self._client = client
         logger.info("IMAP inloggad som %s", self._settings.username)
 
+    async def _wait_for_socket(self, client: aioimaplib.IMAP4, host: str, port: int) -> None:
+        """Väntar in TCP-anslutningen så att "connection refused" syns direkt.
+
+        Annars väntar wait_hello_from_server ut hela timeouten och felet från
+        aioimaplib:s anslutningstask hämtas aldrig. _client_task är privat i
+        aioimaplib, därav den försiktiga åtkomsten.
+        """
+        task = getattr(client, "_client_task", None)
+        if not isinstance(task, asyncio.Future):
+            return
+        try:
+            await asyncio.wait_for(task, self.timeout)
+        except (OSError, asyncio.TimeoutError) as exc:
+            reason = str(exc) or type(exc).__name__
+            raise ConnectionError(
+                f"Kan inte nå ProtonMail Bridge på {host}:{port} — körs Bridge? ({reason})"
+            ) from exc
+
     async def disconnect(self) -> None:
-        if self._client:
+        client, self._client = self._client, None
+        if client is not None:
             try:
-                await self._client.logout()
+                await client.logout()
             except Exception:
                 pass
-            self._client = None
+            finally:
+                _close_transport(client)
+
+    def _discard_connection(self) -> None:
+        """Släpper anslutningen och stänger dess socket; nästa anrop ansluter på nytt."""
+        client, self._client = self._client, None
+        if client is not None:
+            _close_transport(client)
+
+    async def _select(self, mailbox: str):
+        resp = await self._client.select(_quote_mailbox(mailbox))
+        if resp.result != "OK":
+            # Bridge (och aioimaplib) står kvar i förra mappen efter ett misslyckat
+            # SELECT, tvärtemot RFC 3501 §6.3.1, så nästa kommando skulle träffa fel
+            # mapp. CLOSE skulle expungera där och UNSELECT saknas — kasta anslutningen.
+            self._discard_connection()
+            detail = _response_text(resp)
+            raise ValueError(
+                f"Mappen finns inte eller kan inte väljas: {mailbox!r}"
+                + (f" ({detail})" if detail else "")
+            )
+        return resp
+
+    async def _uid(self, command: str, *args: str):
+        """UID STORE/COPY/EXPUNGE med timeout. UID FETCH har redan aioimaplib:s egen."""
+        try:
+            return await asyncio.wait_for(self._client.uid(command, *args), self.uid_timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(
+                f"ProtonMail Bridge svarade inte på UID {command.upper()} inom {self.uid_timeout:g} s"
+            ) from None
 
     async def _ensure_connected(self) -> None:
+        # NOOP är tillåtet i NONAUTH, så NOOP ensam visar inte att klienten är inloggad
+        state = getattr(self._client.protocol, "state", None) if self._client is not None else None
+        if state in _NOT_LOGGED_IN_STATES:
+            logger.warning("IMAP-klienten är inte inloggad (%s) — återansluter", state)
+            self._discard_connection()
         if self._client is None:
             await self.connect()
             return
         try:
-            await asyncio.wait_for(self._client.noop(), timeout=5.0)
+            await asyncio.wait_for(self._client.noop(), timeout=self.noop_timeout)
         except Exception:
             logger.warning("IMAP NOOP misslyckades — återansluter")
-            self._client = None
+            self._discard_connection()
             await self.connect()
 
     @_serialized
@@ -199,7 +319,7 @@ class IMAPClient:
         self, mailbox: str, page: int = 1, page_size: int = 20
     ) -> dict[str, Any]:
         await self._ensure_connected()
-        select_resp = await self._client.select(_quote_mailbox(mailbox))
+        select_resp = await self._select(mailbox)
 
         # Hämta EXISTS-räknaren från SELECT-svaret
         exists = 0
@@ -255,7 +375,7 @@ class IMAPClient:
     @_serialized
     async def get_message(self, mailbox: str, uid: str) -> bytes | None:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         resp = await self._client.uid("fetch", _validate_uid(uid), "BODY.PEEK[]")
         if resp.result != "OK":
             return None
@@ -278,7 +398,7 @@ class IMAPClient:
         max_results: int = 200,
     ) -> list[dict]:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
 
         criteria: list[str] = []
         if from_addr:
@@ -298,6 +418,9 @@ class IMAPClient:
 
         # search() returnerar sekvensnummer — vi hämtar sedan metadata
         resp = await self._client.search(" ".join(criteria))
+        if resp.result != "OK":
+            # Annars ser t.ex. ett ogiltigt datum ut som "inga träffar"
+            raise ValueError(f"Sökningen misslyckades ({resp.result}): {_response_text(resp)}")
         seqnums = _parse_seqnums(resp)
         if not seqnums:
             return []
@@ -310,7 +433,9 @@ class IMAPClient:
             "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])",
         )
         if fetch_resp.result != "OK":
-            return []
+            raise ValueError(
+                f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
+            )
 
         msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
         return msgs
@@ -318,11 +443,11 @@ class IMAPClient:
     @_serialized
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         safe_uid = _validate_uid(uid)
         await self._require_uid(mailbox, safe_uid)
         action = "+FLAGS" if add else "-FLAGS"
-        resp = await self._client.uid("store", safe_uid, action, flags)
+        resp = await self._uid("store", safe_uid, action, flags)
         _require_ok(resp, f"Ändringen av flaggorna på UID {safe_uid} i {mailbox}")
         return True
 
@@ -337,9 +462,9 @@ class IMAPClient:
         quoted_target = _quote_mailbox(target)
         _check_move(mailbox, target)
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         await self._require_uid(mailbox, safe_uid)
-        resp = await self._client.uid("move", safe_uid, quoted_target)
+        resp = await self._uid("move", safe_uid, quoted_target)
         _require_ok(resp, f"Flytten av UID {safe_uid} från {mailbox} till {target}")
         return True
 
@@ -365,14 +490,14 @@ class IMAPClient:
                 "Ta bort mejlet utan permanent först, så hamnar det i Trash."
             )
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         await self._require_uid(mailbox, safe_uid)
-        resp = await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
+        resp = await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         _require_ok(resp, f"Borttagningsmarkeringen av UID {safe_uid} i {mailbox}")
-        resp = await self._client.uid("expunge", safe_uid)
+        resp = await self._uid("expunge", safe_uid)
         if resp.result != "OK":
             # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlet
-            await self._client.uid("store", safe_uid, "-FLAGS", r"(\Deleted)")
+            await self._uid("store", safe_uid, "-FLAGS", r"(\Deleted)")
         _require_ok(resp, f"Den permanenta raderingen av UID {safe_uid} i {mailbox}")
         return True
 
@@ -396,7 +521,7 @@ class IMAPClient:
     @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         resp = await self._client.uid(
             "fetch", _validate_uid(uid),
             "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REPLY-TO)]"
@@ -462,14 +587,17 @@ class IMAPClient:
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
         await self._ensure_connected()
         resp = await self._client.status(_quote_mailbox(mailbox), "(MESSAGES UNSEEN)")
+        if resp.result != "OK":
+            raise ValueError(
+                f"Mappen finns inte eller kan inte läsas: {mailbox!r} ({_response_text(resp)})"
+            )
         status: dict[str, int] = {}
-        if resp.result == "OK":
-            for line in resp.lines:
-                text = _decode(line)
-                for m in _STATUS_NUM_RE.finditer(text):
-                    key = m.group(1).lower()
-                    if key in ("messages", "unseen"):
-                        status[key] = int(m.group(2))
+        for line in resp.lines:
+            text = _decode(line)
+            for m in _STATUS_NUM_RE.finditer(text):
+                key = m.group(1).lower()
+                if key in ("messages", "unseen"):
+                    status[key] = int(m.group(2))
         return status
 
 
