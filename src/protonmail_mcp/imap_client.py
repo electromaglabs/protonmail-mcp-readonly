@@ -993,8 +993,8 @@ def _check_move(source: str, target: str) -> None:
         # ur källmappen, så det bara ligger kvar i Starred och All Mail
         raise ValueError(
             f"Starred är inget mål för flytt: Bridge tar då bort mejlet ur {source}. "
-            "Stjärnmärkning görs med flaggan \\Flagged, inte genom att flytta mejlet; "
-            "ett eget verktyg för det kommer i nästa fas."
+            "Stjärnmärkning görs med flaggan \\Flagged, inte genom att flytta mejlet — "
+            "använd flag_email (och unflag_email för att ta bort stjärnan)."
         )
     if dst in _READD_DELETES and _is_label_view(source):
         raise ValueError(

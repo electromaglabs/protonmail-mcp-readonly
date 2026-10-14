@@ -69,13 +69,15 @@ async def move_email(
     Mejlet flyttas dit och försvinner ur källmappen.
 
     Proton skiljer på mappar och etiketter. Är målet en etikett (Labels/…)
-    eller Starred läggs etiketten till och mejlet ligger kvar i källmappen;
-    är källan en etikett tas den etiketten bort. För etiketter finns add_label
+    läggs etiketten till och mejlet ligger kvar i källmappen; är källan en
+    etikett tas den etiketten bort. För etiketter finns add_label
     och remove_label, för stjärnmärkning flag_email och unflag_email.
 
     Avvisas med fel (inget ändras):
     - källa och mål är samma mapp (i Trash/Drafts skulle Bridge radera mejlet),
     - flytt till eller från All Mail, och mellan INBOX och Sent (Bridge nekar),
+    - flytt till Starred (Bridge skulle ta bort mejlet ur källmappen) —
+      stjärnmärk med flag_email i stället,
     - flytt till Trash eller Drafts från en etikett eller Starred, eftersom
       mejlet redan kan ligga där och då raderas permanent,
     - UID:t finns inte i källmappen (UID:n gäller per mapp).
