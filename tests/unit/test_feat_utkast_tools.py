@@ -104,3 +104,77 @@ class TestCreateDraft:
         app.smtp.send_email = AsyncMock()
         await drafts.create_draft(ctx, to="a@example.se", subject="s", body="b")
         app.smtp.send_email.assert_not_called()
+
+
+ORIGINAL = (
+    b"From: Anna Ek <anna@example.se>\r\nTo: me@proton.me\r\nSubject: M\xc3\xb6te\r\n"
+    b"Message-ID: <orig-1@example.se>\r\nDate: Mon, 12 Oct 2026 09:30:00 +0200\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n\r\nOriginaltext\r\n"
+)
+
+
+def _ctx_with_original(raw=ORIGINAL):
+    ctx, app = _ctx()
+    app.imap.get_message = AsyncMock(return_value=raw)
+    return ctx, app
+
+
+class TestReplyDraft:
+    @pytest.mark.asyncio
+    async def test_reads_from_the_given_mailbox_and_keeps_bcc(self, monkeypatch):
+        saved = _appended(monkeypatch)
+        ctx, app = _ctx_with_original()
+        result = await drafts.create_reply_draft(
+            ctx, uid="7", mailbox="Archive", body="Svar", bcc="h@example.se",
+            quote_original=False,
+        )
+        app.imap.get_message.assert_awaited_once_with("Archive", "7")
+        msg = _parse(saved["raw"])
+        assert msg["Subject"] == "Re: Möte"
+        assert msg["Bcc"] == "h@example.se"
+        assert msg["In-Reply-To"] == "<orig-1@example.se>"
+        assert msg.get_body(("plain",)).get_content().strip() == "Svar"
+        assert result["mailbox"] == "Drafts" and result["uid"] == "42"
+
+    @pytest.mark.asyncio
+    async def test_html_reply_quotes_original(self, monkeypatch):
+        saved = _appended(monkeypatch)
+        ctx, _ = _ctx_with_original()
+        await drafts.create_reply_draft(
+            ctx, uid="7", mailbox="INBOX", body="Svar", body_html="<p>Svar</p>",
+        )
+        html = _parse(saved["raw"]).get_body(("html",)).get_content()
+        assert "<p>Svar</p>" in html and "blockquote" in html and "Originaltext" in html
+
+    @pytest.mark.asyncio
+    async def test_missing_original_raises_and_saves_nothing(self, monkeypatch):
+        saved = _appended(monkeypatch)
+        ctx, _ = _ctx_with_original(raw=None)
+        with pytest.raises(ValueError, match="Inget meddelande med UID 7 i INBOX"):
+            await drafts.create_reply_draft(ctx, uid="7", mailbox="INBOX", body="x")
+        assert saved == {}
+
+
+class TestForwardDraft:
+    @pytest.mark.asyncio
+    async def test_forward_draft_with_cc_and_bcc(self, monkeypatch):
+        saved = _appended(monkeypatch)
+        ctx, app = _ctx_with_original()
+        await drafts.create_forward_draft(
+            ctx, uid="7", mailbox="INBOX", to="bob@example.com",
+            cc="c@example.se", bcc="h@example.se",
+        )
+        msg = _parse(saved["raw"])
+        assert msg["Subject"] == "Fwd: Möte"
+        assert msg["To"] == "bob@example.com"
+        assert msg["Cc"] == "c@example.se"
+        assert msg["Bcc"] == "h@example.se"
+        assert "Originaltext" in msg.get_body(("plain",)).get_content()
+
+    @pytest.mark.asyncio
+    async def test_missing_original_raises(self, monkeypatch):
+        saved = _appended(monkeypatch)
+        ctx, _ = _ctx_with_original(raw=None)
+        with pytest.raises(ValueError, match="Inget meddelande med UID 7 i INBOX"):
+            await drafts.create_forward_draft(ctx, uid="7", mailbox="INBOX", to="b@example.com")
+        assert saved == {}

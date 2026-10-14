@@ -21,8 +21,16 @@ from ..smtp_client import (
 )
 from . import _get_app
 from ._types import OptionalStr
+from .reply import build_forward, build_reply
 
 DRAFTS = imap_drafts.DRAFTS
+
+
+def _not_found(uid: str, mailbox: str) -> ValueError:
+    return ValueError(
+        f"Inget meddelande med UID {uid} i {mailbox}. "
+        "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
+    )
 
 
 def _build_draft(
@@ -130,3 +138,88 @@ async def create_draft(
         cc=cc, bcc=bcc, reply_to=reply_to,
     )
     return await _save(app, msg)
+
+
+@mcp.tool()
+async def create_reply_draft(
+    ctx: Context,
+    uid: str,
+    mailbox: str,
+    body: str,
+    reply_all: bool = False,
+    body_html: OptionalStr = None,
+    cc: str | list[str] | None = None,
+    bcc: str | list[str] | None = None,
+    quote_original: bool = True,
+) -> dict:
+    """Skapa ett svar som utkast i Drafts i stället för att skicka det. Ingenting skickas.
+
+    Svaret byggs exakt som reply_to_email bygger det: samma mottagare (Reply-To,
+    annars From; svara alla tar med To och Cc utom ditt eget konto), ett enda
+    "Re: ", In-Reply-To och References så att det hamnar i rätt tråd, och
+    originalet citerat under texten. Utkastet kan granskas och skickas i
+    Proton, eller skickas härifrån med send_draft när det är godkänt.
+
+    Args:
+        uid: UID för mejlet att svara på
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp.
+        body: Svarstexten i klartext
+        reply_all: Svara alla — ta även med originalets To och Cc
+        body_html: Valfri HTML-version av svarstexten
+        cc: Ytterligare kopia-adress(er)
+        bcc: Hemlig kopia-adress(er) (sparas i utkastet)
+        quote_original: Citera originalet under svaret (standard: True)
+
+    Returns:
+        {"uid", "mailbox": "Drafts", "message_id"} för utkastet.
+
+    Raises:
+        ValueError: originalet finns inte, ogiltig adress, eller om Bridge
+            vägrar spara utkastet.
+    """
+    app = _get_app(ctx)
+    fields = await build_reply(
+        app, uid, mailbox, body,
+        body_html=body_html, reply_all=reply_all, cc=cc, quote_original=quote_original,
+    )
+    if fields is None:
+        raise _not_found(uid, mailbox)
+    return await _save(app, _build_draft(app, **fields, bcc=bcc))
+
+
+@mcp.tool()
+async def create_forward_draft(
+    ctx: Context,
+    uid: str,
+    mailbox: str,
+    to: str | list[str],
+    body: str = "",
+    cc: str | list[str] | None = None,
+    bcc: str | list[str] | None = None,
+) -> dict:
+    """Skapa en vidarebefordran som utkast i Drafts i stället för att skicka den.
+
+    Byggs exakt som forward_email: "Fwd: "-ämne, originalet inline under ett
+    rubrikblock (text och HTML) och alla bilagor och inbäddade bilder med.
+    Ingenting skickas; granska i Proton eller skicka med send_draft.
+
+    Args:
+        uid: UID för mejlet att vidarebefordra
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp.
+        to: Mottagaradress(er)
+        body: Valfri text ovanför det vidarebefordrade meddelandet
+        cc: Kopia-adress(er)
+        bcc: Hemlig kopia-adress(er) (sparas i utkastet)
+
+    Returns:
+        {"uid", "mailbox": "Drafts", "message_id"} för utkastet.
+
+    Raises:
+        ValueError: originalet finns inte, ogiltig adress, eller om Bridge
+            vägrar spara utkastet.
+    """
+    app = _get_app(ctx)
+    fields = await build_forward(app, uid, mailbox, to, body, cc=cc)
+    if fields is None:
+        raise _not_found(uid, mailbox)
+    return await _save(app, _build_draft(app, **fields, bcc=bcc))

@@ -422,9 +422,34 @@ async def reply_to_email(
         ett fel som anger vilka — skicka då inte om till alla.
     """
     app = _get_app(ctx)
+    fields = await build_reply(
+        app, uid, mailbox, body,
+        body_html=body_html, reply_all=reply_all, cc=cc, quote_original=quote_original,
+    )
+    if fields is None:
+        return False
+    return await app.smtp.send_email(**fields, bcc=bcc)
+
+
+async def build_reply(
+    app,
+    uid: str,
+    mailbox: str,
+    body: str,
+    *,
+    body_html: str | None = None,
+    reply_all: bool = False,
+    cc: str | Sequence[str] | None = None,
+    quote_original: bool = True,
+) -> dict | None:
+    """Fälten för ett svar (argument till SMTPClient.send_email utom bcc).
+
+    Delas av reply_to_email, som skickar svaret, och create_reply_draft, som
+    sparar det som utkast. None om originalet inte finns.
+    """
     raw = await app.imap.get_message(mailbox, uid)
     if raw is None:
-        return False
+        return None
 
     msg = _parse_original(raw)
 
@@ -449,15 +474,14 @@ async def reply_to_email(
                 f"{quoted_html}</blockquote>",
             )
 
-    return await app.smtp.send_email(
-        to=to_list,
-        subject=subject,
-        body=body,
-        body_html=body_html,
-        cc=cc_list or None,
-        bcc=bcc,
-        additional_headers=_threading_headers(msg),
-    )
+    return {
+        "to": to_list,
+        "subject": subject,
+        "body": body,
+        "body_html": body_html,
+        "cc": cc_list or None,
+        "additional_headers": _threading_headers(msg),
+    }
 
 
 def _content_id(part: EmailMessage) -> str:
@@ -523,9 +547,28 @@ async def forward_email(
         ett fel som anger vilka — skicka då inte om till alla.
     """
     app = _get_app(ctx)
+    fields = await build_forward(app, uid, mailbox, to, body, cc=cc)
+    if fields is None:
+        return False
+    return await app.smtp.send_email(**fields, bcc=bcc)
+
+
+async def build_forward(
+    app,
+    uid: str,
+    mailbox: str,
+    to: str | Sequence[str],
+    body: str = "",
+    *,
+    cc: str | Sequence[str] | None = None,
+) -> dict | None:
+    """Fälten för en vidarebefordran (argument till SMTPClient.send_email utom bcc).
+
+    Delas av forward_email och create_forward_draft. None om originalet inte finns.
+    """
     raw = await app.imap.get_message(mailbox, uid)
     if raw is None:
-        return False
+        return None
 
     msg = _parse_original(raw)
     subject = f"Fwd: {_base_subject(_header_text(msg, 'Subject'))}"
@@ -562,13 +605,12 @@ async def forward_email(
     body_parts = [p for p in (plain_part, html_part) if p is not None]
     inline, attached = _forward_parts(msg, body_parts, orig_html)
 
-    return await app.smtp.send_email(
-        to=to,
-        subject=subject,
-        body=forwarded,
-        body_html=forwarded_html,
-        cc=cc,
-        bcc=bcc,
-        attachments=attached or None,
-        inline_parts=inline or None,
-    )
+    return {
+        "to": to,
+        "subject": subject,
+        "body": forwarded,
+        "body_html": forwarded_html,
+        "cc": cc,
+        "attachments": attached or None,
+        "inline_parts": inline or None,
+    }
