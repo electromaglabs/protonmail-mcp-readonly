@@ -47,6 +47,17 @@ def _escape_imap_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _quote_mailbox(name: str) -> str:
+    """Validerar och citerar ett mailbox-namn som IMAP quoted-string (RFC 3501).
+
+    Mailbox-namn som innehaller tecken utanfor IMAP:s "atom"-syntax (t.ex.
+    hakparenteser eller mellanslag) maste skickas citerade, annars misslyckas
+    SELECT/STATUS/CREATE/COPY/RENAME tyst eller med fel mot vissa IMAP-servrar.
+    """
+    _validate_mailbox(name)
+    return f'"{_escape_imap_string(name)}"'
+
+
 def _decode(b: bytes | bytearray | str) -> str:
     if isinstance(b, (bytes, bytearray)):
         return b.decode("utf-8", errors="replace")
@@ -132,7 +143,7 @@ class IMAPClient:
         self, mailbox: str, page: int = 1, page_size: int = 20
     ) -> dict[str, Any]:
         await self._ensure_connected()
-        select_resp = await self._client.select(_validate_mailbox(mailbox))
+        select_resp = await self._client.select(_quote_mailbox(mailbox))
 
         # Hämta EXISTS-räknaren från SELECT-svaret
         exists = 0
@@ -184,7 +195,7 @@ class IMAPClient:
 
     async def get_message(self, mailbox: str, uid: str) -> bytes | None:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
         resp = await self._client.uid("fetch", _validate_uid(uid), "BODY[]")
         if resp.result != "OK":
             return None
@@ -206,7 +217,7 @@ class IMAPClient:
         max_results: int = 200,
     ) -> list[dict]:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
 
         criteria: list[str] = []
         if from_addr:
@@ -246,16 +257,16 @@ class IMAPClient:
 
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
         action = "+FLAGS" if add else "-FLAGS"
         resp = await self._client.uid("store", _validate_uid(uid), action, flags)
         return resp.result == "OK"
 
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
         safe_uid = _validate_uid(uid)
-        copy_resp = await self._client.uid("copy", safe_uid, _validate_mailbox(target))
+        copy_resp = await self._client.uid("copy", safe_uid, _quote_mailbox(target))
         if copy_resp.result != "OK":
             return False
         await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
@@ -264,7 +275,7 @@ class IMAPClient:
 
     async def delete_message(self, mailbox: str, uid: str) -> bool:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
         safe_uid = _validate_uid(uid)
         await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         await self._client.expunge()
@@ -272,7 +283,7 @@ class IMAPClient:
 
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
         await self._ensure_connected()
-        await self._client.select(_validate_mailbox(mailbox))
+        await self._client.select(_quote_mailbox(mailbox))
         resp = await self._client.uid(
             "fetch", _validate_uid(uid),
             "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REPLY-TO)]"
@@ -286,22 +297,22 @@ class IMAPClient:
 
     async def create_folder(self, name: str) -> bool:
         await self._ensure_connected()
-        resp = await self._client.create(_validate_mailbox(name))
+        resp = await self._client.create(_quote_mailbox(name))
         return resp.result == "OK"
 
     async def delete_folder(self, name: str) -> bool:
         await self._ensure_connected()
-        resp = await self._client.delete(_validate_mailbox(name))
+        resp = await self._client.delete(_quote_mailbox(name))
         return resp.result == "OK"
 
     async def rename_folder(self, old_name: str, new_name: str) -> bool:
         await self._ensure_connected()
-        resp = await self._client.rename(_validate_mailbox(old_name), _validate_mailbox(new_name))
+        resp = await self._client.rename(_quote_mailbox(old_name), _quote_mailbox(new_name))
         return resp.result == "OK"
 
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
         await self._ensure_connected()
-        resp = await self._client.status(_validate_mailbox(mailbox), "(MESSAGES UNSEEN)")
+        resp = await self._client.status(_quote_mailbox(mailbox), "(MESSAGES UNSEEN)")
         status: dict[str, int] = {}
         if resp.result == "OK":
             for line in resp.lines:

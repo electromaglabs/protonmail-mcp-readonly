@@ -660,21 +660,21 @@ class TestFolderManagement:
         client._client.create = AsyncMock(return_value=SimpleNamespace(result="OK"))
         result = await client.create_folder("NewFolder")
         assert result is True
-        client._client.create.assert_awaited_once_with("NewFolder")
+        client._client.create.assert_awaited_once_with('"NewFolder"')
 
     @pytest.mark.asyncio
     async def test_delete_folder_ok(self, client):
         client._client.delete = AsyncMock(return_value=SimpleNamespace(result="OK"))
         result = await client.delete_folder("OldFolder")
         assert result is True
-        client._client.delete.assert_awaited_once_with("OldFolder")
+        client._client.delete.assert_awaited_once_with('"OldFolder"')
 
     @pytest.mark.asyncio
     async def test_rename_folder_ok(self, client):
         client._client.rename = AsyncMock(return_value=SimpleNamespace(result="OK"))
         result = await client.rename_folder("OldName", "NewName")
         assert result is True
-        client._client.rename.assert_awaited_once_with("OldName", "NewName")
+        client._client.rename.assert_awaited_once_with('"OldName"', '"NewName"')
 
 
 # ---------------------------------------------------------------------------
