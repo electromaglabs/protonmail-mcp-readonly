@@ -28,6 +28,9 @@ class Settings(BaseSettings):
         env_prefix="PROTONMAIL_",
         # Senare filer vinner: en .env i arbetskatalogen går före projektrotens
         env_file=(PROJECT_ENV_FILE, ".env"),
+        # Annars skriver pydantic input_value={'password': ...} i felet,
+        # och lifespan loggar det till stderr (som Claude Desktop sparar).
+        hide_input_in_errors=True,
     )
 
 
