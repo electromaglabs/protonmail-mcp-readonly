@@ -64,6 +64,14 @@ def simple_message(mailbox, uid, sender, subject):
     ).encode("utf-8")
 
 
+@given(parsers.parse('ett mejl med UID "{uid}" med följande headers:'))
+def message_with_headers(mailbox, uid, docstring):
+    head = "\r\n".join(line.strip() for line in docstring.strip().splitlines())
+    mailbox[("INBOX", uid)] = (
+        f"{head}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nOriginaltext\r\n"
+    ).encode("utf-8")
+
+
 def _run(outcome, coro):
     try:
         outcome["result"] = asyncio.run(coro)
@@ -80,3 +88,9 @@ def reply(ctx, captured, outcome, uid, text):
 def reply_subject(captured, outcome, subject):
     assert "error" not in outcome, outcome.get("error")
     assert str(captured.parsed["Subject"]) == subject
+
+
+@then(parsers.re(r'ska svarets (?P<header>[A-Z][A-Za-z-]+) vara "(?P<value>[^"]*)"'))
+def reply_header(captured, outcome, header, value):
+    assert "error" not in outcome, outcome.get("error")
+    assert " ".join(str(captured.parsed[header]).split()) == value

@@ -87,3 +87,96 @@ async def test_reply_subject_with_encoded_linebreak_is_flattened():
     assert str(cap.parsed["Subject"]) == "Re: möte Bcc: evil@e.com"
     assert cap.parsed["Bcc"] is None
     assert cap.recipients == ["a@x.se"]
+
+
+# -------------------------------------------------------------------
+# B5: References läses skiftlägesokänsligt och bara som msg-id:n
+# -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["References", "references", "REFERENCES"])
+async def test_references_any_case_is_chained(name):
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m3@x>\n{name}: <m1@x>\n <m2@x>")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert str(cap.parsed["In-Reply-To"]) == "<m3@x>"
+    assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m2@x> <m3@x>"
+
+
+async def test_references_keeps_only_message_ids_and_dedupes():
+    raw = _raw(
+        f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m3@x>\n"
+        "References: =?utf-8?q?skr=C3=A4p?= <m1@x> junk <m1@x> <m3@x>"
+    )
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m3@x>"
+
+
+async def test_in_reply_to_used_when_references_missing():
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m2@x>\nIn-Reply-To: <m1@x>")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m2@x>"
+
+
+async def test_no_message_id_means_no_threading_headers():
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s")
+    with capture_smtp() as cap:
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+    assert cap.parsed["In-Reply-To"] is None
+    assert cap.parsed["References"] is None
+
+
+# -------------------------------------------------------------------
+# Säkerhetsgranskning: originalets headers styrs av avsändaren och får
+# inte kunna låsa servern (kvadratisk regex eller parsning)
+# -------------------------------------------------------------------
+
+
+def _elapsed(fn) -> float:
+    import time
+
+    start = time.perf_counter()
+    fn()
+    return time.perf_counter() - start
+
+
+def test_prefix_stripping_is_linear_on_whitespace_runs():
+    from protonmail_mcp.tools.reply import _base_subject
+
+    assert _elapsed(lambda: _base_subject("re" + " " * 50_000 + "x")) < 0.2
+
+
+def test_prefix_stripping_is_linear_on_many_prefixes():
+    from protonmail_mcp.tools.reply import _base_subject
+
+    assert _base_subject("re: " * 50_000 + "x") == "x"
+    assert _elapsed(lambda: _base_subject("re: " * 50_000 + "x")) < 0.2
+
+
+async def test_huge_references_header_is_cheap_and_trimmed():
+    refs = " ".join(f"<r{i}@x.se>" for i in range(50_000))
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m@x>\nReferences: {refs}")
+    import time
+
+    with capture_smtp() as cap:
+        start = time.perf_counter()
+        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        assert time.perf_counter() - start < 1.0
+    ids = str(cap.parsed["References"]).split()
+    # Första id:t (trådens rot) och de senaste behålls, och svarets id sist
+    assert ids[0] == "<r0@x.se>" and ids[-1] == "<m@x>" and len(ids) <= 50
+
+
+async def test_huge_subject_is_cheap():
+    raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: " + "möte " * 200_000 + "\nMessage-ID: <m@x>")
+    import time
+
+    with capture_smtp():
+        start = time.perf_counter()
+        try:
+            await reply_to_email(_ctx(raw), uid="1", body="ok")
+        except ValueError:
+            pass  # ett orimligt ämne får avvisas, men snabbt
+        assert time.perf_counter() - start < 1.0

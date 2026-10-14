@@ -9,13 +9,26 @@ from ..server import mcp
 from ..email_parser import parse_email
 from . import _get_app
 
-# Svars- och vidarebefordringsprefix på olika språk: Re, SV/Svar-förkortningen
-# (sv, da, no), AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"),
-# med valfri räknare som "Re[2]:" eller "RE (3):"
+# Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
+# AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"), med valfri
+# räknare som "Re[2]:" eller "RE (3):". Mönstret matchas från en given position
+# och har inga intilliggande \s* — ämnet styrs av avsändaren, och överlappande
+# kvantifierare gav kvadratisk tid på långa blankteckenserier.
 _PREFIX_RE = re.compile(
-    r"^\s*(?:re|sv|aw|vs|antw|fwd?|vb)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*",
+    r"(?:re|sv|aw|vs|antw|fwd?|vb)(?:[ \t]*(?:\[\d+\]|\(\d+\)))?[ \t]*:",
     re.IGNORECASE,
 )
+_WS_RE = re.compile(r"\s*")
+
+_MSGID_RE = re.compile(r"<[^<>\s]+>")
+
+# Hur stor en header i originalet får vara innan den parsas. Headerparsern i
+# email.policy är superlinjär (ett ämne på 1 MB tog över 20 s), och originalet
+# styrs av avsändaren. Normala headers är långt under en kilobyte.
+_MAX_HEADER_CHARS = 50_000
+
+# References trimmas som i vanliga e-postprogram: trådens rot och de senaste
+_MAX_REFERENCES = 50
 
 
 def _parse_original(raw: bytes) -> EmailMessage:
@@ -27,23 +40,70 @@ def _parse_original(raw: bytes) -> EmailMessage:
     return email.message_from_bytes(raw, policy=email.policy.default)
 
 
+def _raw_values(msg: EmailMessage, name: str, limit: int | None = _MAX_HEADER_CHARS) -> list[str]:
+    """Råa (oparsade) värden för en header, skiftlägesokänsligt."""
+    key = name.lower()
+    values = [str(v) for k, v in msg.raw_items() if k.lower() == key]
+    if limit is not None:
+        for value in values:
+            if len(value) > limit:
+                raise ValueError(
+                    f"Originalets {name}-header är orimligt stor ({len(value)} tecken)"
+                )
+    return values
+
+
 def _header_text(msg: EmailMessage, name: str) -> str:
-    """Avkodat headervärde på en enda rad (tomt om det saknas eller är trasigt)."""
-    try:
-        value = msg.get(name)
-    except Exception:  # trasiga headers ska inte stoppa ett svar
+    """Avkodat headervärde på en enda rad (tomt om det saknas)."""
+    values = _raw_values(msg, name)
+    if not values:
         return ""
+    try:
+        value = msg.policy.header_fetch_parse(name, values[0])
+    except Exception:  # trasiga headers ska inte stoppa ett svar
+        value = values[0]
     # Kodade ord kan innehålla radbrytningar — slå ihop till en rad
-    return " ".join(str(value or "").split())
+    return " ".join(str(value).split())
+
+
+def _msg_ids(msg: EmailMessage, name: str) -> list[str]:
+    """Alla <msg-id> i en header, i ordning och utan skräp mellan dem.
+
+    Läses ur råvärdet: msg-id:n kodas aldrig, och regexen är linjär även för
+    en mycket lång References-header.
+    """
+    ids: list[str] = []
+    for value in _raw_values(msg, name, limit=None):
+        ids.extend(_MSGID_RE.findall(value))
+    return ids
+
+
+def _threading_headers(msg: EmailMessage) -> dict[str, str]:
+    """In-Reply-To och References för ett svar (RFC 5322 3.6.4)."""
+    own_id = next(iter(_msg_ids(msg, "Message-ID")), "")
+    if not own_id:
+        return {}
+    # Föräldrakedjan: References, annars In-Reply-To om den är ett enda id
+    parents = _msg_ids(msg, "References")
+    if not parents:
+        in_reply_to = _msg_ids(msg, "In-Reply-To")
+        if len(in_reply_to) == 1:
+            parents = in_reply_to
+    chain = list(dict.fromkeys(parents + [own_id]))
+    if len(chain) > _MAX_REFERENCES:
+        chain = chain[:1] + chain[-(_MAX_REFERENCES - 1):]
+    return {"In-Reply-To": own_id, "References": " ".join(chain)}
 
 
 def _base_subject(subject: str) -> str:
-    """Ta bort alla inledande svars-/vidarebefordringsprefix."""
+    """Ta bort alla inledande svars-/vidarebefordringsprefix (linjär tid)."""
+    pos = 0
     while True:
-        stripped = _PREFIX_RE.sub("", subject, count=1)
-        if stripped == subject:
-            return subject
-        subject = stripped
+        pos = _WS_RE.match(subject, pos).end()
+        match = _PREFIX_RE.match(subject, pos)
+        if match is None:
+            return subject[pos:]
+        pos = match.end()
 
 
 @mcp.tool()
@@ -76,17 +136,7 @@ async def reply_to_email(
     # Reply-to: svara till avsändaren
     reply_to_addr = original["from"]
 
-    # Bygg In-Reply-To och References headers
-    message_id = original["message_id"]
-    additional_headers: dict[str, str] = {}
-    if message_id:
-        additional_headers["In-Reply-To"] = message_id
-        # References: kedja vidare befintliga references + original message-id
-        existing_refs = dict(original.get("headers", {})).get("References", "")
-        if existing_refs:
-            additional_headers["References"] = f"{existing_refs} {message_id}"
-        else:
-            additional_headers["References"] = message_id
+    additional_headers = _threading_headers(msg)
 
     return await app.smtp.send_email(
         to=reply_to_addr,
