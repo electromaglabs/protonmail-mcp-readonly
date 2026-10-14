@@ -182,7 +182,6 @@ class IMAPClient:
     async def connect(self) -> None:
         host, port = self._settings.imap_host, self._settings.imap_port
         logger.info("Ansluter till IMAP %s:%d (plain)", host, port)
-        # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
 
         def forget_on_connection_lost(_exc: Exception | None) -> None:
             # Bridge omstartad eller nere: släpp klienten så att nästa anrop
@@ -191,6 +190,7 @@ class IMAPClient:
                 logger.warning("Anslutningen till ProtonMail Bridge bröts")
                 self._client = None
 
+        # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
         client = aioimaplib.IMAP4(
             host=host, port=port, timeout=self.timeout, conn_lost_cb=forget_on_connection_lost
         )
