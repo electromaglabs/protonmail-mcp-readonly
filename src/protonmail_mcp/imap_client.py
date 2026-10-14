@@ -418,10 +418,27 @@ class IMAPClient:
         return True
 
     @_serialized
-    async def delete_folder(self, name: str) -> bool:
+    async def delete_folder(self, name: str, force: bool = False) -> bool:
+        """Tar bort en mapp eller etikett; vägrar om den inte är tom, utom med force.
+
+        Bridge tar bort mappen även när den innehåller mejl, och för en etikett
+        försvinner den då från alla mejl — därför kontrolleras STATUS först.
+        """
         kind = _check_user_folder(name)
         quoted = _quote_mailbox(name)
         await self._ensure_connected()
+        status = await self._client.status(quoted, "(MESSAGES)")
+        _require_ok(status, f"Kontrollen av {kind}en {name}")
+        count = _status_messages(status)
+        if count is None:
+            raise ValueError(f"Kunde inte läsa antal mejl i {name}: {_response_text(status)}")
+        if count and not force:
+            raise ValueError(
+                f"{kind.capitalize()}en {name} är inte tom ({count} mejl) och tas inte bort. "
+                f"Med force=True tas den bort ändå: mejlen raderas inte, men för en etikett "
+                f"försvinner etiketten från alla {count} mejl, och för en mapp ligger mejlen "
+                "sedan inte kvar i mappen (de finns i All Mail)."
+            )
         resp = await self._client.delete(quoted)
         _require_ok(resp, f"Att ta bort {kind}en {name}")
         return True
@@ -572,3 +589,12 @@ def _parent_hint(name: str) -> str:
     if name.startswith("Folders/") and len(parts) > 2:
         return f" (för en undermapp måste {'/'.join(parts[:-1])} redan finnas)"
     return ""
+
+
+def _status_messages(resp) -> int | None:
+    """MESSAGES ur ett STATUS-svar, eller None om det saknas."""
+    for line in resp.lines:
+        for m in _STATUS_NUM_RE.finditer(_decode(line)):
+            if m.group(1).upper() == "MESSAGES":
+                return int(m.group(2))
+    return None

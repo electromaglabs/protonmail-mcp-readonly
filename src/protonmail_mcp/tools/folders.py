@@ -27,14 +27,24 @@ async def create_folder(ctx: Context, name: str) -> bool:
 
 
 @mcp.tool()
-async def delete_folder(ctx: Context, name: str) -> bool:
-    """Ta bort en mapp (måste vara tom).
+async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
+    """Ta bort en egen mapp (Folders/…) eller etikett (Labels/…).
+
+    Mappen måste vara tom; annars avvisas anropet med fel och inget ändras.
+    Med force=True tas den bort ändå. Mejlen raderas inte, men:
+    - för en etikett försvinner etiketten från alla mejl som hade den,
+    - för en mapp ligger mejlen sedan inte kvar i mappen (de finns i All Mail).
+    Systemmapparna (INBOX, Sent, Trash, All Mail …) kan inte tas bort.
 
     Args:
-        name: Namn på mappen att ta bort
+        name: Namn med prefix, t.ex. "Folders/Gammalt" eller "Labels/Kvitton"
+        force: Ta bort även om mappen innehåller mejl (standard: False)
+
+    Returns:
+        True när mappen är borttagen. Annars kastas ett fel med förklaring.
     """
     app = _get_app(ctx)
-    return await app.imap.delete_folder(name)
+    return await app.imap.delete_folder(name, force=force)
 
 
 @mcp.tool()

@@ -264,7 +264,7 @@ class TestDeleteFolder:
     async def test_delete_folder_delegates(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.delete_folder.return_value = True
         result = await delete_folder(mock_ctx, name="OldFolder")
-        mock_ctx.request_context.lifespan_context.imap.delete_folder.assert_called_once_with("OldFolder")
+        mock_ctx.request_context.lifespan_context.imap.delete_folder.assert_called_once_with("OldFolder", force=False)
         assert result is True
 
 

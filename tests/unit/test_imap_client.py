@@ -688,6 +688,10 @@ class TestFolderManagement:
 
     @pytest.mark.asyncio
     async def test_delete_folder_ok(self, client):
+        # delete_folder kontrollerar först att mappen är tom
+        client._client.status = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=[b'"Folders/OldFolder" (MESSAGES 0)', b"STATUS completed"]
+        ))
         client._client.delete = AsyncMock(return_value=SimpleNamespace(result="OK"))
         result = await client.delete_folder("Folders/OldFolder")
         assert result is True
