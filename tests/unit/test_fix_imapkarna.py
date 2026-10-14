@@ -187,3 +187,34 @@ class TestUidTimeout:
         with pytest.raises(ValueError):
             await client.delete_message("INBOX", "1:*")
         assert client._client is imap
+
+
+# ---------------------------------------------------------------------------
+# reconnect-leak: den gamla anslutningen ska stängas
+# ---------------------------------------------------------------------------
+class TestNoLeakedConnections:
+    @pytest.mark.asyncio
+    async def test_reconnect_after_failed_noop_closes_old_transport(self, client):
+        old = client._client
+        old.noop.side_effect = ConnectionResetError
+        new = _mock_imap(state="AUTH")
+        new.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            await client._ensure_connected()
+        assert client._client is new
+        old.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_closes_transport_when_logout_fails(self, client):
+        old = client._client
+        old.logout.side_effect = asyncio.TimeoutError
+        await client.disconnect()
+        assert client._client is None
+        old.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_closes_transport_after_logout(self, client):
+        old = client._client
+        await client.disconnect()
+        old.logout.assert_awaited_once()
+        old.protocol.transport.close.assert_called_once()

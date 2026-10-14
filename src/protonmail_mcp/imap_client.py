@@ -166,6 +166,8 @@ class IMAPClient:
     # UID STORE/COPY/EXPUNGE, som aioimaplib 2.0.1 kör helt utan timeout.
     # COPY till en etikett kräver ett anrop till Proton-API:t, därav längre tid.
     uid_timeout: float = 30.0
+    # Hälsokontrollen före varje anrop; svarar inte NOOP ansluter vi på nytt
+    noop_timeout: float = 5.0
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -202,12 +204,14 @@ class IMAPClient:
         logger.info("IMAP inloggad som %s", self._settings.username)
 
     async def disconnect(self) -> None:
-        if self._client:
+        client, self._client = self._client, None
+        if client is not None:
             try:
-                await self._client.logout()
+                await client.logout()
             except Exception:
                 pass
-            self._client = None
+            finally:
+                _close_transport(client)
 
     def _discard_connection(self) -> None:
         """Släpper anslutningen och stänger dess socket; nästa anrop ansluter på nytt."""
@@ -246,10 +250,10 @@ class IMAPClient:
             await self.connect()
             return
         try:
-            await asyncio.wait_for(self._client.noop(), timeout=5.0)
+            await asyncio.wait_for(self._client.noop(), timeout=self.noop_timeout)
         except Exception:
             logger.warning("IMAP NOOP misslyckades — återansluter")
-            self._client = None
+            self._discard_connection()
             await self.connect()
 
     @_serialized

@@ -22,6 +22,7 @@ def env():
     # Korta timeouter så att scenarierna om uteblivna svar går snabbt
     e.client.timeout = 0.3
     e.client.uid_timeout = 0.3
+    e.client.noop_timeout = 0.3
     e.run = loop.run_until_complete
     yield e
     loop.run_until_complete(e.client.disconnect())
@@ -163,3 +164,17 @@ def bridge_never_answers(env, command):
 @when(parsers.parse('jag flyttar meddelande {uid:d} från "{mailbox}" till "{target}"'))
 def move_message(env, uid, mailbox, target):
     _attempt(env, env.client.move_message(mailbox, str(uid), target))
+
+
+@when(parsers.parse('jag listar mejlen i "{mailbox}" {times:d} gånger'))
+def list_many_times(env, mailbox, times):
+    for _ in range(times):
+        _attempt(env, env.client.list_messages(mailbox))
+
+
+@then(parsers.parse("ska Bridge ha högst {count:d} öppen anslutning"))
+def bridge_open_connections(env, count):
+    env.run(asyncio.sleep(0.05))  # låt servern märka stängda socketar
+    assert env.bridge.open_connections <= count, (
+        f"{env.bridge.open_connections} öppna av {env.bridge.total_connections} totalt"
+    )
