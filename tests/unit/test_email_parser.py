@@ -290,6 +290,15 @@ class TestHeaderNewlineSanitizing:
         assert "\r" not in result
         assert "\n" not in result
 
+    @pytest.mark.parametrize(
+        "sep",
+        ["\r\n", "\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"],
+    )
+    def test_decode_header_value_strips_all_line_boundaries(self, sep):
+        value = self._encoded(f"<a@b>{sep}Bcc: attacker@evil.example".encode())
+        result = decode_header_value(value)
+        assert result.splitlines() == [result]
+
     def test_parse_email_headers_contain_no_crlf(self):
         evil = self._encoded(b"<a@b>\r\nBcc: attacker@evil.example")
         raw = (
