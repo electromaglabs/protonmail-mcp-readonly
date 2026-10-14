@@ -157,6 +157,12 @@ class TestParseHeaders:
         result = _parse_headers(raw)
         assert result["subject"] == "Re: Hello"
 
+    def test_long_whitespace_is_linear(self):
+        import time
+        start = time.perf_counter()
+        _parse_headers(b"Subject: " + b" " * 200_000 + b"x\r\n")
+        assert time.perf_counter() - start < 0.5
+
     def test_folded_header_keeps_continuation(self):
         """En vikt From-rad får inte tappa adressen på fortsättningsraden."""
         raw = (

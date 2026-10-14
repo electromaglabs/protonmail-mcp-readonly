@@ -299,6 +299,10 @@ class TestHeaderNewlineSanitizing:
         result = decode_header_value(value)
         assert result.splitlines() == [result]
 
+    @pytest.mark.parametrize("value", ["abc\n", "abc\r\n", "abc\u2028"])
+    def test_trailing_line_break_is_removed(self, value):
+        assert decode_header_value(value) == "abc"
+
     def test_parse_email_headers_contain_no_crlf(self):
         evil = self._encoded(b"<a@b>\r\nBcc: attacker@evil.example")
         raw = (
@@ -308,3 +312,16 @@ class TestHeaderNewlineSanitizing:
         result = parse_email(raw)
         for value in result["headers"].values():
             assert "\r" not in value and "\n" not in value
+
+
+class TestHeaderDecodingPerformance:
+    """Givet en header med en mycket lång blankstegsföljd (fientligt mejl)
+    När den avkodas
+    Så tar det linjär tid — ingen ReDoS som låser servern."""
+
+    def test_long_whitespace_run_is_linear(self):
+        import time
+        start = time.perf_counter()
+        decode_header_value(" " * 200_000 + "x")
+        decode_header_value(" " * 100_000 + "\r\n" + " " * 100_000 + "x")
+        assert time.perf_counter() - start < 0.5
