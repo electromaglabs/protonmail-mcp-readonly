@@ -50,6 +50,9 @@ _MAX_REFERENCES = 50
 # också, eftersom varje del har egna headers som avsändaren styr.
 _MAX_MIME_HEADER_CHARS = 10_000
 _MAX_TOTAL_HEADER_CHARS = 1_000_000
+# Varje del parsas (Content-Type) med email.policy: 20 000 små delar tog
+# flera sekunder. Vanliga mejl har högst några tiotal delar.
+_MAX_MIME_PARTS = 1_000
 _MIME_HEADERS = frozenset(
     ("content-type", "content-disposition", "content-transfer-encoding")
 )
@@ -71,9 +74,15 @@ def _parse_original(raw: bytes) -> EmailMessage:
 def _check_header_sizes(msg: Message) -> None:
     """Avvisa orimligt stora headers innan något av dem parsas (linjär tid)."""
     total = 0
+    parts = 0
     stack = [msg]
     while stack:
         part = stack.pop()
+        parts += 1
+        if parts > _MAX_MIME_PARTS:
+            raise ValueError(
+                f"Originalet har orimligt många MIME-delar (över {_MAX_MIME_PARTS})"
+            )
         for name, value in part.raw_items():
             size = len(str(value))
             total += size

@@ -74,3 +74,48 @@ async def test_huge_headers_spread_over_mime_parts_are_rejected_fast(tool):
                 await forward_email(_ctx(raw), uid="1", to="b@x.se")
         assert time.perf_counter() - start < 1.0
     assert cap.sent == []
+
+
+@pytest.mark.parametrize("tool", ["reply", "forward"])
+async def test_huge_number_of_mime_parts_is_rejected_fast(tool):
+    """Varje del parsas (Content-Type) med email.policy; 20 000 små delar
+    tog flera sekunder innan något skickades."""
+    import time
+
+    from protonmail_mcp.tools.reply import forward_email
+
+    parts = "".join(
+        f"--B\r\nContent-Type: application/octet-stream\r\n\r\n{i}\r\n" for i in range(20_000)
+    )
+    raw = (
+        f"From: a@x.se\r\nTo: {KONTO}\r\nSubject: s\r\n"
+        'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+        f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
+    ).encode()
+    with capture_smtp() as cap:
+        start = time.perf_counter()
+        with pytest.raises(ValueError, match="delar"):
+            if tool == "reply":
+                await reply_to_email(_ctx(raw), uid="1", body="ok")
+            else:
+                await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        assert time.perf_counter() - start < 1.0
+    assert cap.sent == []
+
+
+async def test_normal_number_of_attachments_still_forwarded():
+    from protonmail_mcp.tools.reply import forward_email
+
+    parts = "".join(
+        f"--B\r\nContent-Type: application/octet-stream\r\n"
+        f"Content-Disposition: attachment; filename=f{i}.bin\r\n\r\n{i}\r\n"
+        for i in range(200)
+    )
+    raw = (
+        f"From: a@x.se\r\nTo: {KONTO}\r\nSubject: s\r\n"
+        'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+        f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
+    ).encode()
+    with capture_smtp() as cap:
+        await forward_email(_ctx(raw), uid="1", to="b@x.se")
+    assert len(list(cap.parsed.iter_attachments())) == 200
