@@ -172,7 +172,7 @@ class IMAPClient:
 
         fetch_resp = await self._client.fetch(
             f"{start}:{stop}",
-            "(UID FLAGS BODY[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)])",
+            "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)])",
         )
         if fetch_resp.result != "OK":
             return {
