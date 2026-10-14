@@ -17,7 +17,8 @@ def decode_header_value(value) -> str:
             decoded.append(part.decode(charset or "utf-8", errors="replace"))
         else:
             decoded.append(part)
-    return "".join(decoded)
+    # Avkodade ord kan dölja CR/LF — ta bort dem så värdet inte kan injicera headers
+    return re.sub(r"[\r\n]+", " ", "".join(decoded))
 
 
 def extract_addresses(header_value: str | None) -> list[str]:

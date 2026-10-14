@@ -268,3 +268,34 @@ class TestBodyFormatAndMaxLength:
         assert "Hello!" in result["body_plain"]
         assert "<p>" not in result["body_plain"]
         assert "<html>" not in result["body_plain"]
+
+
+class TestHeaderNewlineSanitizing:
+    """Avkodade headers får aldrig innehålla CR/LF.
+
+    Givet ett mejl vars header är ett RFC 2047-kodat ord som döljer CRLF
+    När headern avkodas
+    Så ersätts radbrytningarna, så att värdet inte kan smuggla in nya headers
+    om det återanvänds vid svar (t.ex. References).
+    """
+
+    @staticmethod
+    def _encoded(text: bytes) -> str:
+        import base64
+        return f"=?utf-8?b?{base64.b64encode(text).decode()}?="
+
+    def test_decode_header_value_strips_crlf(self):
+        value = self._encoded(b"<a@b>\r\nBcc: attacker@evil.example")
+        result = decode_header_value(value)
+        assert "\r" not in result
+        assert "\n" not in result
+
+    def test_parse_email_headers_contain_no_crlf(self):
+        evil = self._encoded(b"<a@b>\r\nBcc: attacker@evil.example")
+        raw = (
+            "From: x@y.se\r\nTo: me@proton.me\r\nSubject: hi\r\n"
+            f"Message-ID: <m1@y.se>\r\nReferences: {evil}\r\n\r\nbody\r\n"
+        ).encode()
+        result = parse_email(raw)
+        for value in result["headers"].values():
+            assert "\r" not in value and "\n" not in value
