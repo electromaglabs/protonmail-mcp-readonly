@@ -70,6 +70,12 @@ def fetch_status(mock_ctx, bridge, mailbox):
     run_tool(bridge, get_mailbox_status(mock_ctx, mailbox=unescape(mailbox)))
 
 
+@then(parsers.parse("ska statusen vara {messages:d} mejl och {unseen:d} olästa"))
+def status_is(bridge, messages, unseen):
+    assert bridge.errors == []
+    assert bridge.result == {"messages": messages, "unseen": unseen}
+
+
 @then("ska verktyget svara att det lyckades")
 def tool_succeeded(bridge):
     assert bridge.errors == []

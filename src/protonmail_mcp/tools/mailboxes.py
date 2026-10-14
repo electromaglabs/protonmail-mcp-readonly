@@ -26,6 +26,9 @@ async def list_mailboxes(ctx: Context) -> list[dict]:
 async def get_mailbox_status(ctx: Context, mailbox: str = "INBOX") -> dict:
     """Hämta antal meddelanden och olästa i en mapp.
 
+    Kastar fel om mappen inte finns, och om den är en behållare (Folders,
+    Labels; selectable: false i list_mailboxes) som inte kan innehålla mejl.
+
     Args:
         mailbox: Mappnamn (standard: INBOX)
     """

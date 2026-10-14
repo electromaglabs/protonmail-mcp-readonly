@@ -112,7 +112,8 @@ class FakeBridge:
             ".*" if c == "*" else "[^/]*" if c == "%" else re.escape(c) for c in pattern
         ))
         lines = []
-        for name in [*sorted(self.containers), *self.mailboxes]:
+        # En behållare kan också ligga i mailboxes: Bridge svarar OK med 0 mejl på SELECT av den
+        for name in dict.fromkeys([*sorted(self.containers), *self.mailboxes]):
             if regex.fullmatch(name):
                 attrs = "\\Noselect" if name in self.containers else "\\HasNoChildren"
                 lines.append(f'({attrs}) "/" "{name}"'.encode())

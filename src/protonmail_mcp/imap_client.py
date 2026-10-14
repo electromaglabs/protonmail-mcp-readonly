@@ -28,6 +28,7 @@ _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
 # aioimaplib tar bort "* " före otaggade svar, men tål det om det står kvar
 _FETCH_START_RE = re.compile(r'^(?:\*\s+)?\d+\s+FETCH\s+\(', re.IGNORECASE)
 _LITERAL_END_RE = re.compile(r'\{\d+\}$')
+_EXISTS_RE = re.compile(r'^(?:\*\s+)?(\d+)\s+EXISTS\b', re.IGNORECASE)
 # Statuslistan sist på STATUS-raden: '"namn" (MESSAGES 5 UNSEEN 1)'. Bara den
 # tolkas — mappnamnet före kan själv innehålla t.ex. "Messages 0".
 _STATUS_ITEMS_RE = re.compile(r'\(([^()]*)\)\s*$')
@@ -132,6 +133,17 @@ def _decode(b: bytes | bytearray | str) -> str:
 def _response_text(resp) -> str:
     """Serverns förklaring i ett IMAP-svar, t.ex. "no such mailbox"."""
     return " ".join(_decode(line) for line in resp.lines).strip()
+
+
+def _exists(resp) -> int | None:
+    """EXISTS-räknaren ur ett SELECT-svar, eller None om den saknas."""
+    for line in resp.lines:
+        if isinstance(line, bytearray):
+            continue
+        m = _EXISTS_RE.search(_decode(line))
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def _parse_seqnums(resp) -> list[str]:
@@ -329,7 +341,33 @@ class IMAPClient:
                 f"Mappen finns inte eller kan inte väljas: {mailbox!r}"
                 + (f" ({detail})" if detail else "")
             )
+        if _exists(resp) == 0:
+            await self._refuse_container(mailbox)
         return resp
+
+    async def _refuse_container(self, mailbox: str) -> None:
+        """Kastar ValueError om mailbox är en \\Noselect-behållare (Folders, Labels).
+
+        Bridge svarar OK med 0 mejl på SELECT och STATUS av behållarna, så de
+        ser ut som tomma mappar. Attributen finns bara i LIST, och LIST frågas
+        bara när mappen ser tom ut, så vanliga anrop kostar ingen extra rundresa.
+        Kontrollen bygger på serverns egna attribut — samma källa som
+        selectable i list_mailboxes — i stället för en lista med kända namn.
+        Nekas LIST går det inte att avgöra, och då får det tomma svaret stå.
+        """
+        resp = await self._client.list('""', _quote_mailbox(mailbox))
+        if resp.result != "OK":
+            logger.warning("LIST för %r nekades, kan inte avgöra om det är en behållare", mailbox)
+            return
+        for line in resp.lines:
+            entry = _parse_list_entry(_decode(line))
+            # "*" och "%" i namnet är jokertecken i LIST: bara exakt samma namn räknas
+            if entry and entry[1] == mailbox and not describe_mailbox(mailbox, entry[0])["selectable"]:
+                raise ValueError(
+                    f"{mailbox} är en behållare, inte en mapp, och innehåller inga mejl. "
+                    f"Ange en mapp under den (t.ex. {mailbox}/…); list_mailboxes visar "
+                    "vilka som går att öppna (selectable: true)."
+                )
 
     async def _uid(self, command: str, *args: str):
         """UID STORE/COPY/EXPUNGE med timeout. UID FETCH har redan aioimaplib:s egen."""
@@ -384,14 +422,7 @@ class IMAPClient:
         await self._ensure_connected()
         select_resp = await self._select(mailbox)
 
-        # Hämta EXISTS-räknaren från SELECT-svaret
-        exists = 0
-        for line in select_resp.lines:
-            text = _decode(line)
-            m = re.search(r'(\d+)\s+EXISTS', text)
-            if m:
-                exists = int(m.group(1))
-                break
+        exists = _exists(select_resp) or 0
 
         if page < 1 or page_size < 1:
             raise ValueError(f"page och page_size måste vara >= 1 (fick page={page}, page_size={page_size})")
@@ -737,6 +768,8 @@ class IMAPClient:
                 f"Mappen finns inte eller kan inte läsas: {mailbox!r} ({_response_text(resp)})"
             )
         items = _status_items(resp)
+        if items.get("messages") == 0:
+            await self._refuse_container(mailbox)
         return {key: items[key] for key in ("messages", "unseen") if key in items}
 
 
