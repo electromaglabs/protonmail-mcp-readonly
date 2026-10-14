@@ -167,3 +167,35 @@ def attachment_filenames(result, filename):
 @then("ska body_plain vara tom")
 def plain_empty(result):
     assert result["body_plain"] == ""
+
+
+def _html_only(html: str) -> bytes:
+    return (
+        "From: a@b.se\r\nSubject: s\r\nMIME-Version: 1.0\r\n"
+        f"Content-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n"
+    ).encode()
+
+
+@given("ett HTML-mejl utan textdel med stilmall, entiteter och stycken", target_fixture="raw")
+def styled_html(mock_ctx):
+    html = (
+        "<html><head><style>p { color: red }</style></head><body>"
+        "<p>Hej &amp; välkommen</p><div>Rad 1</div><div>Rad 2</div></body></html>"
+    )
+    return _serve(mock_ctx, _html_only(html))
+
+
+@given(
+    parsers.parse('ett HTML-mejl utan textdel med svaret "{reply}" och citatet "{quote}"'),
+    target_fixture="raw",
+)
+def html_reply(mock_ctx, reply, quote):
+    html = f"<div>{reply}</div><blockquote><div>{quote}</div></blockquote>"
+    return _serve(mock_ctx, _html_only(html))
+
+
+@then(parsers.parse('"{first}" och "{second}" ska stå på olika rader i body_plain'))
+def on_separate_lines(result, first, second):
+    lines = result["body_plain"].splitlines()
+    assert any(first in line for line in lines)
+    assert not any(first in line and second in line for line in lines)

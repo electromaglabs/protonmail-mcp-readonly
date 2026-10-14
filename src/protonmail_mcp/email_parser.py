@@ -8,6 +8,8 @@ import re
 from email.message import Message
 from typing import Any
 
+from .html_text import html_to_text
+
 # Etiketter som är vanliga i post men saknas i Python eller oftast är fel
 _CHARSET_ALIASES = {
     "us-ascii": "utf-8",  # 8-bitars data märkt us-ascii är nästan alltid utf-8
@@ -309,8 +311,8 @@ def get_attachments(msg: Message) -> list[dict[str, Any]]:
 
 
 def _strip_html(html: str) -> str:
-    """Ta bort HTML-taggar och returnera ren text."""
-    return re.sub(r"<[^>]+>", "", html).strip()
+    """Gör om HTML till läsbar text (se html_text.html_to_text)."""
+    return html_to_text(html)
 
 
 def _strip_quotes_and_signature(text: str) -> str:

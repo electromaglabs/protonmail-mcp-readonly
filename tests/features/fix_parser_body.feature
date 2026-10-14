@@ -45,3 +45,17 @@ Feature: Brödtext och bilagor i hämtade mejl
     When jag hämtar mejlet med get_email och body_format "full"
     Then ska body_html innehålla "Del 1"
     And body_html ska innehålla "Del 2"
+
+  Scenario: HTML-brev utan textdel blir läsbar text
+    Given ett HTML-mejl utan textdel med stilmall, entiteter och stycken
+    When jag hämtar mejlet med get_email med förvalda parametrar
+    Then body_plain ska innehålla "Hej & välkommen"
+    And body_plain ska inte innehålla "color"
+    And body_plain ska inte innehålla "&amp;"
+    And "Rad 1" och "Rad 2" ska stå på olika rader i body_plain
+
+  Scenario: Citat i ett HTML-svar tas bort i stripped-läget
+    Given ett HTML-mejl utan textdel med svaret "Mitt svar" och citatet "Gammal text"
+    When jag hämtar mejlet med get_email och body_format "stripped"
+    Then body_plain ska innehålla "Mitt svar"
+    And body_plain ska inte innehålla "Gammal text"
