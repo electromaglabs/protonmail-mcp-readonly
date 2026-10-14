@@ -35,16 +35,17 @@ _FETCH_CHUNK_SIZE = 200
 # Så många av de nyaste kandidaterna jämförs lokalt mot avkodat ämne och
 # avsändare (Bridge söker bara i okodade headers). 1000 brev tar ~4 s.
 _LOCAL_SCAN_LIMIT = 1000
-_VALID_UID_RE = re.compile(r'^\d+$')
+# fullmatch: "$" släpper igenom ett avslutande "\n", och "\d" matchar Unicode-siffror
+_VALID_UID_RE = re.compile(r'[0-9]+')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
 # Backslash och citattecken escapas av _quote_mailbox; "%", "*" och ".." är
 # giltiga namn hos Proton och har ingen särskild betydelse utanför LIST-mönster.
 # Ensamma surrogater går inte att koda till modified UTF-7.
-_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F\uD800-\uDFFF]{1,255}$')
+_VALID_MAILBOX_RE = re.compile(r'[^\x00-\x1F\x7F\uD800-\uDFFF]{1,255}')
 
 
 def _validate_mailbox(name: str) -> str:
-    if not _VALID_MAILBOX_RE.match(name):
+    if not _VALID_MAILBOX_RE.fullmatch(name):
         raise ValueError(f"Ogiltigt mailbox-namn: {name!r}")
     return name
 
@@ -84,7 +85,7 @@ def _to_imap_date(value: str, field: str = "datum") -> str:
 
 def _validate_uid(uid: str) -> str:
     """Kastar ValueError om uid inte är ett rent heltal (förhindrar IMAP sequence-set-injektion)."""
-    if not _VALID_UID_RE.match(uid):
+    if not _VALID_UID_RE.fullmatch(uid):
         raise ValueError(f"Ogiltigt UID: {uid!r} — måste vara ett heltal")
     return uid
 
