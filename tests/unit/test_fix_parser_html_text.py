@@ -49,3 +49,26 @@ def test_large_input_is_fast():
     start = time.perf_counter()
     html_to_text(html)
     assert time.perf_counter() - start < 2
+
+
+class TestHostileHtml:
+    """Givet fientlig HTML i ett inkommande mejl
+    När den görs om till text
+    Så tar det linjär tid och utdata växer inte mer än indata."""
+
+    def test_many_inline_fragments_on_one_line_is_linear(self):
+        import time
+
+        html = "<b>x</b> " * 200_000
+        start = time.perf_counter()
+        html_to_text(html)
+        assert time.perf_counter() - start < 1.5
+
+    def test_deep_blockquote_nesting_does_not_amplify(self):
+        html = "<blockquote>x<br>" * 5_000
+        assert len(html_to_text(html)) <= 10 * len(html)
+
+    def test_quote_prefix_is_capped(self):
+        html = "<blockquote>" * 50 + "djupt"
+        line = html_to_text(html)
+        assert line.endswith("djupt") and line.count(">") < 50

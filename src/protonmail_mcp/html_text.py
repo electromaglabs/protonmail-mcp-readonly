@@ -19,12 +19,15 @@ _BLOCK = {
 # Ger tom rad före och efter
 _PARAGRAPH = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "pre", "blockquote"}
 _WS_RE = re.compile(r"\s+")
+# Fler citatnivåer än så visas som tio — annars kan djupt nästlade
+# <blockquote> blåsa upp utdata kvadratiskt mot indata
+_MAX_QUOTE_PREFIX = 10
 
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)  # entiteter avkodas i handle_data
-        self.lines: list[list] = []  # [citatdjup, text]
+        self.lines: list[tuple[int, list[str]]] = []  # (citatdjup, textfragment)
         self.open = False  # är lines[-1] en pågående rad?
         self.blank_before_next = False
         self.skip = 0
@@ -36,9 +39,9 @@ class _TextExtractor(HTMLParser):
     def _start_line(self) -> None:
         if self.blank_before_next and self.lines:
             depth = min(self.lines[-1][0], self.quote)
-            self.lines.append([depth, ""])
+            self.lines.append((depth, []))
         self.blank_before_next = False
-        self.lines.append([self.quote, ""])
+        self.lines.append((self.quote, []))
         self.open = True
 
     def _end_line(self) -> None:
@@ -55,10 +58,11 @@ class _TextExtractor(HTMLParser):
             self._start_line()
             if not self.pre:
                 text = text.lstrip()
-        line = self.lines[-1]
-        if not self.pre and text.startswith(" ") and line[1].endswith(" "):
+        fragments = self.lines[-1][1]
+        if not self.pre and text.startswith(" ") and fragments and fragments[-1].endswith(" "):
             text = text[1:]
-        line[1] += text
+        if text:
+            fragments.append(text)  # lista + join: += på str blir kvadratiskt
 
     # --- HTMLParser-hooks -------------------------------------------------
     def handle_starttag(self, tag, attrs):
@@ -122,10 +126,11 @@ class _TextExtractor(HTMLParser):
 
     def text(self) -> str:
         rendered: list[str] = []
-        for depth, line in self.lines:
+        for depth, fragments in self.lines:
+            line = "".join(fragments)
             if line != "-- ":  # signaturavgränsaren (RFC 3676) behåller sitt blanksteg
                 line = line.rstrip()
-            prefix = "> " * depth
+            prefix = "> " * min(depth, _MAX_QUOTE_PREFIX)
             rendered.append(prefix + line if line else prefix.rstrip())
         # Inga inledande/avslutande tomrader och högst en tomrad i följd
         out: list[str] = []
