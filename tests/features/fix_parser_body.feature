@@ -59,3 +59,8 @@ Feature: Brödtext och bilagor i hämtade mejl
     When jag hämtar mejlet med get_email och body_format "stripped"
     Then body_plain ska innehålla "Mitt svar"
     And body_plain ska inte innehålla "Gammal text"
+
+  Scenario: Utskick med en tom textdel och riktig HTML
+    Given ett multipart/alternative-mejl med textdelen " " och HTML-delen "<p>Riktigt innehåll</p>"
+    When jag hämtar mejlet med get_email med förvalda parametrar
+    Then body_plain ska innehålla "Riktigt innehåll"

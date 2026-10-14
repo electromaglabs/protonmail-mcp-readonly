@@ -164,3 +164,17 @@ class TestAttachedMessageSize:
         (att,) = parse_email(raw)["attachments"]
         assert att["filename"] == "fw.eml"
         assert att["size"] > len("Inre text som är lång nog")
+
+
+class TestWhitespaceOnlyPlainFallsBackToHtml:
+    """PE12: en textdel med bara blanktecken stänger inte av HTML-fallbacken."""
+
+    @pytest.mark.parametrize("fmt", ["text", "stripped"])
+    @pytest.mark.parametrize("plain", [" ", "\r\n", " \r\n \t"])
+    def test_fallback(self, fmt, plain):
+        result = parse_email(_alternative(plain, "<p>Riktigt innehåll</p>"), body_format=fmt)
+        assert "Riktigt innehåll" in result["body_plain"]
+
+    def test_full_mode_keeps_raw_plain(self):
+        result = parse_email(_alternative(" ", "<p>H</p>"), body_format="full")
+        assert result["body_plain"].strip() == ""

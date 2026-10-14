@@ -370,12 +370,12 @@ def parse_email(
         # Returnera råa body utan trunkering
         pass
     elif body_format == "text":
-        # Om ingen plain text, strippa HTML-taggar som fallback
-        if not body_plain and body_html:
+        # Saknas text (eller är den bara blanktecken, vanligt i utskick): använd HTML
+        if not body_plain.strip() and body_html:
             body_plain = _strip_html(body_html)
         body_plain = _truncate(body_plain, max_length)
     elif body_format == "stripped":
-        if not body_plain and body_html:
+        if not body_plain.strip() and body_html:
             body_plain = _strip_html(body_html)
         body_plain = _strip_quotes_and_signature(body_plain)
         body_plain = _truncate(body_plain, max_length)

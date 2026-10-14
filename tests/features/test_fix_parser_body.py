@@ -199,3 +199,17 @@ def on_separate_lines(result, first, second):
     lines = result["body_plain"].splitlines()
     assert any(first in line for line in lines)
     assert not any(first in line and second in line for line in lines)
+
+
+@given(
+    parsers.parse('ett multipart/alternative-mejl med textdelen "{plain}" och HTML-delen "{html}"'),
+    target_fixture="raw",
+)
+def alternative_mail(mock_ctx, plain, html):
+    raw = (
+        "From: a@b.se\r\nSubject: s\r\nMIME-Version: 1.0\r\n"
+        'Content-Type: multipart/alternative; boundary="b"\r\n\r\n'
+        f"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{plain}\r\n"
+        f"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n--b--\r\n"
+    ).encode()
+    return _serve(mock_ctx, raw)
