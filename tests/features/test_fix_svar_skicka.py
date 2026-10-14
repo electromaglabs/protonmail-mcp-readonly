@@ -61,3 +61,13 @@ def header_contains(captured, name, display, addr):
 @then(parsers.parse('SMTP-mottagarna ska vara "{recipients}"'))
 def smtp_recipients(captured, recipients):
     assert captured.recipients == [r.strip() for r in recipients.split(",")]
+
+
+@when(parsers.parse('jag skickar ett mail utan mottagare men med hemlig kopia till "{bcc}"'))
+def send_bcc_only(client, captured, outcome, bcc):
+    _send(client, outcome, to=[], bcc=bcc)
+
+
+@then(parsers.parse('ska mejlet sakna headern "{name}"'))
+def header_missing(captured, name):
+    assert name not in captured.parsed

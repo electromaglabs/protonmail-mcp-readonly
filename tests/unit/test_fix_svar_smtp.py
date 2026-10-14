@@ -89,3 +89,22 @@ def test_build_message_rejects_crlf_in_additional_header():
             body="b",
             additional_headers={"References": "<a@x>\r\nBcc: evil@e.com"},
         )
+
+
+# -------------------------------------------------------------------
+# B10: ingen tom To-header
+# -------------------------------------------------------------------
+
+
+def test_build_message_without_to_has_no_to_header():
+    msg = _build_message(
+        from_addr="me@proton.me", to_list=[], subject="s", body="b"
+    )
+    assert "To" not in msg
+
+
+async def test_bcc_only_send_has_no_empty_to_on_the_wire():
+    with capture_smtp() as cap:
+        await make_client().send_email(to=[], bcc="h@x.se", subject="s", body="b")
+    assert b"\r\nTo:" not in cap.raw and not cap.raw.startswith(b"To:")
+    assert cap.recipients == ["h@x.se"]

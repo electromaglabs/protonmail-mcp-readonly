@@ -20,3 +20,10 @@ Feature: Skicka e-post med korrekta headers
     When jag skickar ett mail till "user@exämple.se"
     Then ska headern "To" innehålla "" med adressen "user@xn--exmple-cua.se"
     And SMTP-mottagarna ska vara "user@xn--exmple-cua.se"
+
+  Scenario: Mejl enbart till hemlig kopia får ingen tom To-header
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail utan mottagare men med hemlig kopia till "hemlig@example.se"
+    Then ska mejlet sakna headern "To"
+    And ska mejlet sakna headern "Bcc"
+    And SMTP-mottagarna ska vara "hemlig@example.se"

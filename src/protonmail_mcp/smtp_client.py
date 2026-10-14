@@ -84,7 +84,9 @@ def _build_message(
         msg.add_alternative(body_html, subtype="html")
 
     msg["From"] = _to_address(from_addr)
-    msg["To"] = [_to_address(a) for a in to_list]
+    # To är valfri enligt RFC 5322, men får inte vara tom om den finns
+    if to_list:
+        msg["To"] = [_to_address(a) for a in to_list]
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()

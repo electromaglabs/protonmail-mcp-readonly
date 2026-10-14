@@ -355,14 +355,14 @@ async def test_send_email_login_failure(settings: Settings, mock_smtp):
 
 
 def test_build_message_empty_to_list():
-    """_build_message med tom to_list sätter tomt To-header."""
+    """_build_message med tom to_list sätter ingen To-header (tom är ogiltig)."""
     msg = _build_message(
         from_addr="sender@test.com",
         to_list=[],
         subject="Empty",
         body="No recipients",
     )
-    assert msg["To"] == ""
+    assert msg["To"] is None
 
 
 # -------------------------------------------------------------------
