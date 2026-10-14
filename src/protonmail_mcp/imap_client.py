@@ -687,7 +687,12 @@ class IMAPClient:
 
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
-        """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas."""
+        """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas.
+
+        Till en etikett (Labels/…) läggs etiketten till och mejlet ligger kvar
+        i källmappen. Starred avvisas som mål: Bridge tar då bort mejlet ur
+        källmappen (stjärnmärkning är flaggan \\Flagged).
+        """
         return await self._move(mailbox, uid, target)
 
     async def _move(self, mailbox: str, uid: str, target: str) -> bool:
@@ -987,6 +992,14 @@ def _check_move(source: str, target: str) -> None:
         )
     if {src, dst} == {"inbox", "sent"}:
         raise ValueError("Bridge tillåter inte flytt mellan INBOX och Sent.")
+    if dst == "starred":
+        # Bridge räknar Starred som systemetikett: UID MOVE dit tar bort mejlet
+        # ur källmappen, så det bara ligger kvar i Starred och All Mail
+        raise ValueError(
+            f"Starred är inget mål för flytt: Bridge tar då bort mejlet ur {source}. "
+            "Stjärnmärkning görs med flaggan \\Flagged, inte genom att flytta mejlet; "
+            "ett eget verktyg för det kommer i nästa fas."
+        )
     if dst in _READD_DELETES and _is_label_view(source):
         raise ValueError(
             f"Flytt till {target} från {source} avvisas: mejlet kan redan ligga i {target}, "
