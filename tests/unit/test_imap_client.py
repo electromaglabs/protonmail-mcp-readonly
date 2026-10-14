@@ -273,8 +273,8 @@ class TestListMailboxes:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_list_mailboxes_returns_type_folder(self, client):
-        """Vanlig mapp ska ha type='folder'."""
+    async def test_list_mailboxes_returns_type_system(self, client):
+        """INBOX är en systemmapp (N6: typerna är system/folder/label/container)."""
         client._client.list = AsyncMock(return_value=SimpleNamespace(
             result="OK",
             lines=[
@@ -284,7 +284,7 @@ class TestListMailboxes:
         ))
         result = await client.list_mailboxes()
         assert len(result) == 1
-        assert result[0] == {"name": "INBOX", "type": "folder"}
+        assert result[0] == {"name": "INBOX", "type": "system", "selectable": True, "special_use": None}
 
     @pytest.mark.asyncio
     async def test_list_mailboxes_returns_type_label(self, client):
@@ -298,7 +298,7 @@ class TestListMailboxes:
         ))
         result = await client.list_mailboxes()
         assert len(result) == 1
-        assert result[0] == {"name": "Labels/Arbete", "type": "label"}
+        assert result[0] == {"name": "Labels/Arbete", "type": "label", "selectable": True, "special_use": None}
 
     @pytest.mark.asyncio
     async def test_list_mailboxes_mixed(self, client):
@@ -317,8 +317,8 @@ class TestListMailboxes:
         result = await client.list_mailboxes()
         assert len(result) == 5
         types = {m["name"]: m["type"] for m in result}
-        assert types["INBOX"] == "folder"
-        assert types["Sent"] == "folder"
+        assert types["INBOX"] == "system"
+        assert types["Sent"] == "system"
         assert types["Labels/Arbete"] == "label"
         assert types["Labels/Privat"] == "label"
         assert types["Folders/Projekt"] == "folder"

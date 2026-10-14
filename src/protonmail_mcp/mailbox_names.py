@@ -77,3 +77,32 @@ def decode_modified_utf7(wire: str) -> str:
     if encode_modified_utf7(name) != wire:
         raise ValueError(f"Inte kanonisk modified UTF-7: {wire!r}")
     return name
+
+
+# Special-use-attribut (RFC 6154). Bridge skickar dem i LIST trots att
+# SPECIAL-USE inte annonseras.
+_SPECIAL_USE = {a.lower(): a for a in ("\\All", "\\Archive", "\\Drafts", "\\Flagged", "\\Junk", "\\Sent", "\\Trash")}
+# \NonExistent (RFC 5258) innebär \Noselect
+_NOSELECT = {"\\noselect", "\\nonexistent"}
+
+
+def describe_mailbox(name: str, attributes: list[str]) -> dict:
+    """Beskriver en mapp utifrån namnet och LIST-attributen.
+
+    type: "container" för \\Noselect (Folders, Labels och pseudo-föräldrar till
+    etiketter med "/" i namnet), "label" för Labels/*, "folder" för Folders/*
+    och "system" för Protons övriga mappar (INBOX, Drafts, Sent, Starred,
+    Archive, Spam, Trash, All Mail).
+    """
+    attrs = {a.lower() for a in attributes}
+    selectable = not (attrs & _NOSELECT)
+    special_use = next((_SPECIAL_USE[a] for a in sorted(attrs) if a in _SPECIAL_USE), None)
+    if not selectable:
+        mb_type = "container"
+    elif name.startswith("Labels/"):
+        mb_type = "label"
+    elif name.startswith("Folders/"):
+        mb_type = "folder"
+    else:
+        mb_type = "system"
+    return {"name": name, "type": mb_type, "selectable": selectable, "special_use": special_use}

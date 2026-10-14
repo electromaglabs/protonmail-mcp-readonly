@@ -11,7 +11,7 @@ import aioimaplib
 
 from .config import Settings
 from .email_parser import decode_header_value
-from .mailbox_names import decode_modified_utf7, encode_modified_utf7
+from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,13 @@ def _parse_seqnums(resp) -> list[str]:
 
 
 def _parse_list_line(line: str) -> str | None:
-    """Extraherar det läsbara mappnamnet ur en IMAP LIST-rad.
+    """Extraherar det läsbara mappnamnet ur en IMAP LIST-rad. Returnerar None om raden inte matchar."""
+    entry = _parse_list_entry(line)
+    return entry[1] if entry else None
+
+
+def _parse_list_entry(line: str) -> tuple[list[str], str] | None:
+    """Extraherar attributen och det läsbara mappnamnet ur en IMAP LIST-rad.
 
     Namnet avescapas och avkodas från modified UTF-7, så att _quote_mailbox
     ger tillbaka exakt samma namn. Returnerar None om raden inte matchar.
@@ -99,15 +105,16 @@ def _parse_list_line(line: str) -> str | None:
     m = _LIST_RE.match(line)
     if not m:
         return None
+    attributes = m.group(1).split()
     if m.group(2) is not None:
         wire = _QUOTED_ESCAPE_RE.sub(r"\1", m.group(2))
     else:
         wire = m.group(3)
     try:
-        return decode_modified_utf7(wire)
+        return attributes, decode_modified_utf7(wire)
     except ValueError:
         logger.warning("Mappnamnet är inte giltig modified UTF-7, behålls oavkodat: %r", wire)
-        return wire
+        return attributes, wire
 
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
@@ -171,16 +178,15 @@ class IMAPClient:
             await self.connect()
 
     @_serialized
-    async def list_mailboxes(self) -> list[dict[str, str]]:
+    async def list_mailboxes(self) -> list[dict[str, Any]]:
         await self._ensure_connected()
         resp = await self._client.list('""', "*")
         mailboxes = []
         if resp.result == "OK":
             for line in resp.lines:
-                name = _parse_list_line(_decode(line))
-                if name:
-                    mb_type = "label" if name.startswith("Labels/") else "folder"
-                    mailboxes.append({"name": name, "type": mb_type})
+                entry = _parse_list_entry(_decode(line))
+                if entry and entry[1]:
+                    mailboxes.append(describe_mailbox(entry[1], entry[0]))
         return mailboxes
 
     @_serialized
