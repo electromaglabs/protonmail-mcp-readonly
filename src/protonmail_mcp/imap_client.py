@@ -80,6 +80,11 @@ def _decode(b: bytes | bytearray | str) -> str:
     return b
 
 
+def _response_text(resp) -> str:
+    """Serverns förklaring i ett IMAP-svar, t.ex. "no such mailbox"."""
+    return " ".join(_decode(line) for line in resp.lines).strip()
+
+
 def _parse_seqnums(resp) -> list[str]:
     if resp.result != "OK" or not resp.lines:
         return []
@@ -208,7 +213,7 @@ class IMAPClient:
                     f"inom {self.timeout:g} s"
                 ) from None
             if resp.result != "OK":
-                detail = " ".join(_decode(line) for line in resp.lines).strip()
+                detail = _response_text(resp)
                 raise IMAPAuthenticationError(
                     f"Inloggningen mot ProtonMail Bridge misslyckades ({resp.result} {detail}) — "
                     "kontrollera PROTONMAIL_USERNAME och Bridge-lösenordet"
@@ -261,7 +266,7 @@ class IMAPClient:
             # SELECT, tvärtemot RFC 3501 §6.3.1, så nästa kommando skulle träffa fel
             # mapp. CLOSE skulle expungera där och UNSELECT saknas — kasta anslutningen.
             self._discard_connection()
-            detail = " ".join(_decode(line) for line in resp.lines).strip()
+            detail = _response_text(resp)
             raise ValueError(
                 f"Mappen finns inte eller kan inte väljas: {mailbox!r}"
                 + (f" ({detail})" if detail else "")
@@ -407,6 +412,9 @@ class IMAPClient:
 
         # search() returnerar sekvensnummer — vi hämtar sedan metadata
         resp = await self._client.search(" ".join(criteria))
+        if resp.result != "OK":
+            # Annars ser t.ex. ett ogiltigt datum ut som "inga träffar"
+            raise ValueError(f"Sökningen misslyckades ({resp.result}): {_response_text(resp)}")
         seqnums = _parse_seqnums(resp)
         if not seqnums:
             return []
@@ -419,7 +427,9 @@ class IMAPClient:
             "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])",
         )
         if fetch_resp.result != "OK":
-            return []
+            raise ValueError(
+                f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
+            )
 
         msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
         return msgs
@@ -490,14 +500,17 @@ class IMAPClient:
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
         await self._ensure_connected()
         resp = await self._client.status(_quote_mailbox(mailbox), "(MESSAGES UNSEEN)")
+        if resp.result != "OK":
+            raise ValueError(
+                f"Mappen finns inte eller kan inte läsas: {mailbox!r} ({_response_text(resp)})"
+            )
         status: dict[str, int] = {}
-        if resp.result == "OK":
-            for line in resp.lines:
-                text = _decode(line)
-                for m in _STATUS_NUM_RE.finditer(text):
-                    key = m.group(1).lower()
-                    if key in ("messages", "unseen"):
-                        status[key] = int(m.group(2))
+        for line in resp.lines:
+            text = _decode(line)
+            for m in _STATUS_NUM_RE.finditer(text):
+                key = m.group(1).lower()
+                if key in ("messages", "unseen"):
+                    status[key] = int(m.group(2))
         return status
 
 

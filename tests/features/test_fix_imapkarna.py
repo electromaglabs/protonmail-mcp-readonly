@@ -205,3 +205,19 @@ def error_bridge_unreachable(env):
 @then(parsers.parse("ska anropet ha tagit under {ms:d} ms"))
 def call_was_fast(env, ms):
     assert env.elapsed * 1000 < ms, f"tog {env.elapsed * 1000:.0f} ms"
+
+
+@given("att Bridge avvisar sökningen")
+def bridge_rejects_search(env):
+    env.bridge.search_reply = "BAD"
+
+
+@when(parsers.parse('jag frågar efter status för mappen "{mailbox}"'))
+def status_of_mailbox(env, mailbox):
+    _attempt(env, env.client.get_mailbox_status(mailbox))
+
+
+@then("ska jag få ett fel som säger att sökningen misslyckades")
+def error_search_failed(env):
+    assert env.error is not None, f"Inget fel, resultat: {env.result!r}"
+    assert "Sökningen misslyckades" in str(env.error)

@@ -79,3 +79,14 @@ Feature: Robust IMAP-anslutning mot ProtonMail Bridge
     And jag listar mejlen i "INBOX"
     Then ska listningen visa 2 meddelanden
     And ska anropet ha tagit under 150 ms
+
+  Scenario: Status för en mapp som inte finns ger fel i stället för en tom status
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    When jag frågar efter status för mappen "Finns-inte"
+    Then ska jag få ett fel som säger att mappen "Finns-inte" inte finns
+
+  Scenario: En sökning som Bridge avvisar ger fel i stället för inga träffar
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att Bridge avvisar sökningen
+    When jag söker i mappen "INBOX"
+    Then ska jag få ett fel som säger att sökningen misslyckades

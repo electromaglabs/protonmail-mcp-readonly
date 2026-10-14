@@ -270,3 +270,36 @@ class TestBridgeDown:
 
         stale_cb(None)
         assert client._client is replacement
+
+
+# ---------------------------------------------------------------------------
+# silent-not-found: STATUS och SEARCH ska inte dölja fel
+# ---------------------------------------------------------------------------
+class TestNoSilentFailures:
+    @pytest.mark.asyncio
+    async def test_status_no_raises(self, client):
+        client._client.status.return_value = SimpleNamespace(result="NO", lines=[b"no such mailbox"])
+        with pytest.raises(ValueError, match="Mappen finns inte.*Finns-inte.*no such mailbox"):
+            await client.get_mailbox_status("Finns-inte")
+
+    @pytest.mark.asyncio
+    async def test_status_ok_still_parsed(self, client):
+        client._client.status.return_value = SimpleNamespace(
+            result="OK", lines=[b'"INBOX" (MESSAGES 4 UNSEEN 1)', b"STATUS completed"]
+        )
+        assert await client.get_mailbox_status("INBOX") == {"messages": 4, "unseen": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("result", ["NO", "BAD"])
+    async def test_search_rejected_raises(self, client, result):
+        client._client.search.return_value = SimpleNamespace(result=result, lines=[b"invalid search criteria"])
+        with pytest.raises(ValueError, match="Sökningen misslyckades.*invalid search criteria"):
+            await client.search_messages("INBOX", since="2026/01/01")
+        client._client.fetch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_search_fetch_rejected_raises(self, client):
+        client._client.search.return_value = SimpleNamespace(result="OK", lines=[b"1 2"])
+        client._client.fetch.return_value = SimpleNamespace(result="NO", lines=[b"fetch failed"])
+        with pytest.raises(ValueError, match="misslyckades"):
+            await client.search_messages("INBOX")

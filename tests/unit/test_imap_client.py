@@ -619,14 +619,14 @@ class TestSearchMessagesEmpty:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_search_no_result_returns_empty(self, client):
-        """search som returnerar NO ska ge tom lista."""
+    async def test_search_no_result_raises(self, client):
+        """search som returnerar NO ska ge ett fel, inte en tom lista som ser ut som inga träffar."""
         client._client.search = AsyncMock(return_value=SimpleNamespace(
             result="NO",
             lines=[],
         ))
-        result = await client.search_messages("INBOX", from_addr="nobody@example.com")
-        assert result == []
+        with pytest.raises(ValueError, match="Sökningen misslyckades"):
+            await client.search_messages("INBOX", from_addr="nobody@example.com")
 
 
 # ---------------------------------------------------------------------------
