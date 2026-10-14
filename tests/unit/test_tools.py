@@ -288,7 +288,7 @@ class TestReplyToEmail:
     async def test_reply_sets_re_prefix(self, mock_ctx, sample_raw_email):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
         mock_ctx.request_context.lifespan_context.smtp.send_email.return_value = True
-        result = await reply_to_email(mock_ctx, uid="10", body="Thanks!")
+        result = await reply_to_email(mock_ctx, mailbox="INBOX", uid="10", body="Thanks!")
         mock_ctx.request_context.lifespan_context.smtp.send_email.assert_called_once()
         call_kwargs = mock_ctx.request_context.lifespan_context.smtp.send_email.call_args[1]
         assert call_kwargs["subject"] == "Re: Test subject"
@@ -306,7 +306,7 @@ class TestReplyToEmail:
         ).encode()
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
         mock_ctx.request_context.lifespan_context.smtp.send_email.return_value = True
-        await reply_to_email(mock_ctx, uid="11", body="Got it")
+        await reply_to_email(mock_ctx, mailbox="INBOX", uid="11", body="Got it")
         call_kwargs = mock_ctx.request_context.lifespan_context.smtp.send_email.call_args[1]
         assert call_kwargs["subject"] == "Re: Already replied"
 
@@ -315,7 +315,7 @@ class TestForwardEmail:
     async def test_forward_sets_fwd_prefix(self, mock_ctx, sample_raw_email):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
         mock_ctx.request_context.lifespan_context.smtp.send_email.return_value = True
-        result = await forward_email(mock_ctx, uid="10", to="bob@example.com")
+        result = await forward_email(mock_ctx, mailbox="INBOX", uid="10", to="bob@example.com")
         call_kwargs = mock_ctx.request_context.lifespan_context.smtp.send_email.call_args[1]
         assert call_kwargs["subject"] == "Fwd: Test subject"
         assert result is True
@@ -323,7 +323,7 @@ class TestForwardEmail:
     async def test_forward_includes_original_body(self, mock_ctx, sample_raw_email):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
         mock_ctx.request_context.lifespan_context.smtp.send_email.return_value = True
-        await forward_email(mock_ctx, uid="10", to="bob@example.com", body="FYI")
+        await forward_email(mock_ctx, mailbox="INBOX", uid="10", to="bob@example.com", body="FYI")
         call_kwargs = mock_ctx.request_context.lifespan_context.smtp.send_email.call_args[1]
         assert "Hello world!" in call_kwargs["body"]
         assert "FYI" in call_kwargs["body"]

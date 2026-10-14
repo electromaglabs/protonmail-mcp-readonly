@@ -392,7 +392,7 @@ async def reply_to_email(
     ctx: Context,
     uid: str,
     body: str,
-    mailbox: str = "INBOX",
+    mailbox: str,
     body_html: OptionalStr = None,
     reply_all: bool = False,
     cc: str | list[str] | None = None,
@@ -408,7 +408,9 @@ async def reply_to_email(
     Args:
         uid: UID för e-posten att svara på
         body: Svarstexten i klartext
-        mailbox: Mappnamn (standard: INBOX)
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma UID i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
         body_html: Valfri HTML-version av svarstexten
         reply_all: Svara alla — ta även med originalets To och Cc (utom ditt eget konto)
         cc: Ytterligare kopia-adress(er)
@@ -495,8 +497,8 @@ async def forward_email(
     ctx: Context,
     uid: str,
     to: str | list[str],
+    mailbox: str,
     body: str = "",
-    mailbox: str = "INBOX",
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
 ) -> bool:
@@ -510,7 +512,9 @@ async def forward_email(
         uid: UID för e-posten att vidarebefordra
         to: Mottagaradress(er)
         body: Valfri text att lägga till ovanför det vidarebefordrade meddelandet
-        mailbox: Mappnamn (standard: INBOX)
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma UID i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
         cc: Kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
 

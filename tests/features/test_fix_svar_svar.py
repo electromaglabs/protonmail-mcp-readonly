@@ -98,12 +98,12 @@ def _run(outcome, coro):
 
 @when(parsers.re(r'jag svarar på mejlet med UID "(?P<uid>[^"]+)" med texten "(?P<text>[^"]*)"'))
 def reply(ctx, captured, outcome, uid, text):
-    _run(outcome, reply_to_email(ctx, uid=uid, body=text))
+    _run(outcome, reply_to_email(ctx, mailbox="INBOX", uid=uid, body=text))
 
 
 @when(parsers.re(r'jag svarar alla på mejlet med UID "(?P<uid>[^"]+)" med texten "(?P<text>[^"]*)"'))
 def reply_all(ctx, captured, outcome, uid, text):
-    _run(outcome, reply_to_email(ctx, uid=uid, body=text, reply_all=True))
+    _run(outcome, reply_to_email(ctx, mailbox="INBOX", uid=uid, body=text, reply_all=True))
 
 
 @when(
@@ -125,7 +125,7 @@ def reply_in_folder(ctx, captured, outcome, all, uid, folder, text):
     )
 )
 def reply_with_cc_bcc(ctx, captured, outcome, uid, cc, bcc):
-    _run(outcome, reply_to_email(ctx, uid=uid, body="Se kopia", cc=cc, bcc=bcc))
+    _run(outcome, reply_to_email(ctx, mailbox="INBOX", uid=uid, body="Se kopia", cc=cc, bcc=bcc))
 
 
 def _sent(captured, outcome):
@@ -226,7 +226,7 @@ def message_with_attachment(mailbox, uid, filename, ctype):
     )
 )
 def forward(ctx, captured, outcome, uid, to, text):
-    _run(outcome, forward_email(ctx, uid=uid, to=to, body=text))
+    _run(outcome, forward_email(ctx, mailbox="INBOX", uid=uid, to=to, body=text))
 
 
 @when(
@@ -236,7 +236,7 @@ def forward(ctx, captured, outcome, uid, to, text):
     )
 )
 def forward_cc_bcc(ctx, captured, outcome, uid, to, cc, bcc):
-    _run(outcome, forward_email(ctx, uid=uid, to=to, cc=cc, bcc=bcc))
+    _run(outcome, forward_email(ctx, mailbox="INBOX", uid=uid, to=to, cc=cc, bcc=bcc))
 
 
 @then(parsers.parse('ska den vidarebefordrade texten innehålla "{text}"'))

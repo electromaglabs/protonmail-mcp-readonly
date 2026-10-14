@@ -47,12 +47,12 @@ async def test_send_email_explicit_null_is_none(ctx, field):
 
 @pytest.mark.parametrize("value", ["null", "[1]"])
 async def test_reply_body_html_keeps_json_looking_strings(ctx, value):
-    kwargs = await _run(ctx, "reply_to_email", uid="1", body="b", body_html=value)
+    kwargs = await _run(ctx, "reply_to_email", mailbox="INBOX", uid="1", body="b", body_html=value)
     assert kwargs["body_html"].startswith(value)
 
 
 async def test_reply_body_html_explicit_null_is_none(ctx):
-    kwargs = await _run(ctx, "reply_to_email", uid="1", body="b", body_html=None)
+    kwargs = await _run(ctx, "reply_to_email", mailbox="INBOX", uid="1", body="b", body_html=None)
     assert kwargs["body_html"] is None
 
 

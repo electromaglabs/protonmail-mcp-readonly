@@ -46,7 +46,7 @@ def _raw(headers: str, body: str = "Originaltext\r\n", content_type="text/plain;
 async def test_reply_subject_prefix_normalized(subject, expected):
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: {subject}\nMessage-ID: <m@x.se>")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert str(cap.parsed["Subject"]) == expected
 
 
@@ -63,7 +63,7 @@ async def test_reply_subject_prefix_normalized(subject, expected):
 async def test_forward_subject_prefix_normalized(subject, expected):
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: {subject}\nMessage-ID: <m@x.se>")
     with capture_smtp() as cap:
-        await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
     assert str(cap.parsed["Subject"]) == expected
 
 
@@ -73,7 +73,7 @@ async def test_reply_subject_from_raw_utf8_header_is_not_mojibake():
         "Message-ID: <m@x.se>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nx\r\n"
     ).encode("utf-8")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert str(cap.parsed["Subject"]) == "Re: möte"
 
 
@@ -83,7 +83,7 @@ async def test_reply_subject_with_encoded_linebreak_is_flattened():
         "Message-ID: <m@x.se>"
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert str(cap.parsed["Subject"]) == "Re: möte Bcc: evil@e.com"
     assert cap.parsed["Bcc"] is None
     assert cap.recipients == ["a@x.se"]
@@ -98,7 +98,7 @@ async def test_reply_subject_with_encoded_linebreak_is_flattened():
 async def test_references_any_case_is_chained(name):
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m3@x>\n{name}: <m1@x>\n <m2@x>")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert str(cap.parsed["In-Reply-To"]) == "<m3@x>"
     assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m2@x> <m3@x>"
 
@@ -109,21 +109,21 @@ async def test_references_keeps_only_message_ids_and_dedupes():
         "References: =?utf-8?q?skr=C3=A4p?= <m1@x> junk <m1@x> <m3@x>"
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m3@x>"
 
 
 async def test_in_reply_to_used_when_references_missing():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: <m2@x>\nIn-Reply-To: <m1@x>")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert " ".join(str(cap.parsed["References"]).split()) == "<m1@x> <m2@x>"
 
 
 async def test_no_message_id_means_no_threading_headers():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.parsed["In-Reply-To"] is None
     assert cap.parsed["References"] is None
 
@@ -162,7 +162,7 @@ async def test_huge_references_header_is_cheap_and_trimmed():
 
     with capture_smtp() as cap:
         start = time.perf_counter()
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
         assert time.perf_counter() - start < 1.0
     ids = str(cap.parsed["References"]).split()
     # Första id:t (trådens rot) och de senaste behålls, och svarets id sist
@@ -176,7 +176,7 @@ async def test_huge_subject_is_cheap():
     with capture_smtp():
         start = time.perf_counter()
         try:
-            await reply_to_email(_ctx(raw), uid="1", body="ok")
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
         except ValueError:
             pass  # ett orimligt ämne får avvisas, men snabbt
         assert time.perf_counter() - start < 1.0
@@ -198,7 +198,7 @@ def _cc(cap):
 async def test_reply_to_header_wins_over_from():
     raw = _raw(f"From: n@x.se\nReply-To: Lista <l@x.se>\nTo: {KONTO}\nSubject: s\nMessage-ID: <m@x>")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert _to(cap) == [("Lista", "l@x.se")]
     assert cap.recipients == ["l@x.se"]
 
@@ -206,14 +206,14 @@ async def test_reply_to_header_wins_over_from():
 async def test_reply_header_case_insensitive_reply_to():
     raw = _raw(f"From: n@x.se\nreply-to: l@x.se\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.recipients == ["l@x.se"]
 
 
 async def test_reply_without_reply_all_ignores_other_recipients():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}, b@x.se\nCc: c@x.se\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.recipients == ["a@x.se"]
     assert cap.parsed["Cc"] is None
 
@@ -226,7 +226,7 @@ async def test_reply_all_dedupes_and_drops_own_account_case_insensitively():
         "Subject: s"
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True)
     assert _to(cap) == [("Anna", "a@x.se"), ("Bo", "b@x.se")]
     assert _cc(cap) == [("", "c@x.se")]
     assert cap.recipients == ["a@x.se", "b@x.se", "c@x.se"]
@@ -235,7 +235,7 @@ async def test_reply_all_dedupes_and_drops_own_account_case_insensitively():
 async def test_reply_all_with_reply_to_uses_reply_to_instead_of_from():
     raw = _raw(f"From: n@x.se\nReply-To: l@x.se\nTo: {KONTO}, b@x.se\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True)
     assert [a for _, a in _to(cap)] == ["l@x.se", "b@x.se"]
 
 
@@ -252,7 +252,7 @@ async def test_reply_all_with_reply_to_uses_reply_to_instead_of_from():
 async def test_reply_reads_addresses_from_raw_header(from_header, expected):
     raw = _raw(f"From: {from_header}\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert _to(cap) == expected
     assert cap.recipients == [a for _, a in expected]
 
@@ -263,14 +263,14 @@ async def test_reply_from_raw_utf8_header_keeps_name():
         "Content-Type: text/plain; charset=utf-8\r\n\r\nx\r\n"
     ).encode("utf-8")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert _to(cap) == [("Åsa Öberg", "a@x.se")]
 
 
 async def test_encoded_linebreak_in_display_name_is_flattened():
     raw = _raw(f"From: =?utf-8?q?Anna=0D=0ABcc=3A_evil=40e.com?= <a@x.se>\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.recipients == ["a@x.se"]
     assert _to(cap) == [("Anna Bcc: evil@e.com", "a@x.se")]
     assert cap.parsed["Bcc"] is None
@@ -282,7 +282,7 @@ async def test_malformed_encoded_word_with_at_sign_sends_nothing():
     raw = _raw(f"From: =?utf-8?q?Anna=0D=0ABcc=3A_evil@e.com?= <a@x.se>\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
         with pytest.raises(ValueError, match="mottagare"):
-            await reply_to_email(_ctx(raw), uid="1", body="ok")
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.sent == []
 
 
@@ -297,7 +297,7 @@ async def test_reply_to_own_sent_message_goes_to_original_recipients():
 async def test_reply_all_to_own_sent_message_includes_cc():
     raw = _raw(f"From: {KONTO}\nTo: b@x.se\nCc: c@x.se, {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True)
     assert [a for _, a in _to(cap)] == ["b@x.se"]
     assert [a for _, a in _cc(cap)] == ["c@x.se"]
 
@@ -306,7 +306,7 @@ async def test_reply_to_note_to_self_without_other_recipients_is_an_error():
     raw = _raw(f"From: {KONTO}\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
         with pytest.raises(ValueError, match="mottagare"):
-            await reply_to_email(_ctx(raw), uid="1", body="ok")
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.sent == []
 
 
@@ -314,7 +314,7 @@ async def test_reply_with_extra_cc_and_bcc():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
         await reply_to_email(
-            _ctx(raw), uid="1", body="ok", cc=["c@x.se"], bcc="h@x.se"
+            _ctx(raw), mailbox="INBOX", uid="1", body="ok", cc=["c@x.se"], bcc="h@x.se"
         )
     assert [a for _, a in _cc(cap)] == ["c@x.se"]
     assert cap.recipients == ["a@x.se", "c@x.se", "h@x.se"]
@@ -324,7 +324,7 @@ async def test_reply_with_extra_cc_and_bcc():
 async def test_reply_all_with_extra_cc_does_not_duplicate():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nCc: c@x.se\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True, cc="C@x.se")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True, cc="C@x.se")
     assert cap.recipients == ["a@x.se", "c@x.se"]
 
 
@@ -334,7 +334,7 @@ async def test_reply_quotes_original_plain_text():
         body="Hej!\r\n\r\n> tidigare\r\nSes!\r\n",
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="Tack")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="Tack")
     text = cap.parsed.get_body(("plain",)).get_content().replace("\r\n", "\n")
     assert text == (
         "Tack\n\nDen 2026-10-12 09:30 skrev Anna Ek:\n> Hej!\n>\n> > tidigare\n> Ses!\n"
@@ -344,7 +344,7 @@ async def test_reply_quotes_original_plain_text():
 async def test_reply_quote_without_date_or_name():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s", body="Hej\r\n")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="Tack")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="Tack")
     text = cap.parsed.get_body(("plain",)).get_content()
     assert "a@x.se skrev:\n> Hej" in text.replace("\r\n", "\n")
 
@@ -356,7 +356,7 @@ async def test_reply_quote_of_html_only_original_uses_text():
         content_type="text/html; charset=utf-8",
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="Tack")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="Tack")
     text = cap.parsed.get_body(("plain",)).get_content()
     assert "> Viktigt innehåll" in text
 
@@ -364,7 +364,7 @@ async def test_reply_quote_of_html_only_original_uses_text():
 async def test_reply_can_skip_quote():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s", body="Hemligt\r\n")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="Tack", quote_original=False)
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="Tack", quote_original=False)
     text = cap.parsed.get_body(("plain",)).get_content()
     assert text.strip() == "Tack"
 
@@ -373,7 +373,7 @@ async def test_reply_html_body_gets_escaped_blockquote():
     raw = _raw(f"From: Anna <a@x.se>\nTo: {KONTO}\nSubject: s", body="1 < 2 & <b>fet</b>\r\n")
     with capture_smtp() as cap:
         await reply_to_email(
-            _ctx(raw), uid="1", body="Tack", body_html="<html><body><p>Tack</p></body></html>"
+            _ctx(raw), mailbox="INBOX", uid="1", body="Tack", body_html="<html><body><p>Tack</p></body></html>"
         )
     html = cap.parsed.get_body(("html",)).get_content()
     assert "<blockquote" in html
@@ -390,7 +390,7 @@ async def test_reply_with_mocked_smtp_still_works_without_account_address():
     app.imap.get_message.return_value = _raw("From: a@x.se\nTo: b@x.se\nSubject: s")
     app.smtp = AsyncMock()
     app.smtp.send_email.return_value = True
-    assert await reply_to_email(ctx, uid="1", body="ok") is True
+    assert await reply_to_email(ctx, mailbox="INBOX", uid="1", body="ok") is True
     kwargs = app.smtp.send_email.call_args.kwargs
     assert kwargs["to"] == ["a@x.se"]
 
@@ -405,7 +405,7 @@ async def test_non_ascii_message_id_is_skipped_instead_of_crashing():
         "References: <r1@x> <å@x>\r\n\r\nhej\r\n"
     ).encode("utf-8")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
         cap.raw  # serialiseringen får inte krascha
     assert cap.parsed["In-Reply-To"] is None
     assert cap.parsed["References"] is None
@@ -431,7 +431,7 @@ async def test_forward_html_only_includes_html_and_text_version():
     msg = _orig_msg()
     msg.set_content("<html><body><p>Viktigt <b>innehåll</b></p></body></html>", subtype="html")
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se", body="FYI")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se", body="FYI")
     sent = cap.parsed
     plain = sent.get_body(("plain",)).get_content()
     html = sent.get_body(("html",)).get_content()
@@ -446,7 +446,7 @@ async def test_forward_user_text_is_escaped_in_html():
     msg = _orig_msg()
     msg.set_content("<p>x</p>", subtype="html")
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se", body="<script>1</script>")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se", body="<script>1</script>")
     html = cap.parsed.get_body(("html",)).get_content()
     assert "<script>" not in html and "&lt;script&gt;" in html
 
@@ -455,7 +455,7 @@ async def test_forward_plain_only_original_has_no_html_part():
     msg = _orig_msg()
     msg.set_content("Bara text")
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se")
     assert cap.parsed.get_body(("html",)) is None
     assert "Bara text" in cap.parsed.get_body(("plain",)).get_content()
 
@@ -467,7 +467,7 @@ async def test_forward_keeps_all_attachments_byte_for_byte():
     msg.add_attachment(b"\x00\x01binar", maintype="application", subtype="octet-stream", filename="data.bin")
     msg.add_attachment("rad 1\nrad 2\n", filename="anteckning.txt")
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se")
     found = {a.get_filename(): a for a in cap.parsed.iter_attachments()}
     assert found["data.bin"].get_content() == b"\x00\x01binar"
     assert found["anteckning.txt"].get_content().replace("\r\n", "\n") == "rad 1\nrad 2\n"
@@ -481,7 +481,7 @@ async def test_forward_keeps_attached_message():
     msg.set_content("Se bifogat mejl")
     msg.add_attachment(inner)
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se")
     attached = [a for a in cap.parsed.iter_attachments() if a.get_content_type() == "message/rfc822"]
     assert len(attached) == 1
     assert str(attached[0].get_content()["Subject"]) == "Inre mejl"
@@ -497,7 +497,7 @@ async def test_forward_keeps_inline_image_related_to_html():
         b"\x89PNGfejk", maintype="image", subtype="png", cid="<logo@x>"
     )
     with capture_smtp() as cap:
-        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+        await forward_email(_ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to="b@x.se")
     sent = cap.parsed
     html_part = sent.get_body(("html",))
     assert 'src="cid:logo@x"' in html_part.get_content()
@@ -514,7 +514,7 @@ async def test_forward_with_cc_and_bcc():
     msg.set_content("x")
     with capture_smtp() as cap:
         await forward_email(
-            _ctx(msg.as_bytes()), uid="1", to=["b@x.se"], cc="c@x.se", bcc=["h@x.se"]
+            _ctx(msg.as_bytes()), mailbox="INBOX", uid="1", to=["b@x.se"], cc="c@x.se", bcc=["h@x.se"]
         )
     assert [a for _, a in _cc(cap)] == ["c@x.se"]
     assert cap.recipients == ["b@x.se", "c@x.se", "h@x.se"]
@@ -528,7 +528,7 @@ async def test_forward_header_block_is_decoded():
         "Content-Type: text/plain; charset=utf-8\r\n\r\nhej\r\n"
     ).encode("utf-8")
     with capture_smtp() as cap:
-        await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
     plain = cap.parsed.get_body(("plain",)).get_content()
     assert 'From: "Svensson, Åsa" <asa@x.se>' in plain
     assert "Subject: SV: möte" in plain
@@ -543,7 +543,7 @@ async def test_forward_with_mocked_smtp_passes_attachments_keyword():
     app.imap.get_message.return_value = _raw("From: a@x.se\nTo: b@x.se\nSubject: s")
     app.smtp = AsyncMock()
     app.smtp.send_email.return_value = True
-    assert await forward_email(ctx, uid="1", to="c@x.se") is True
+    assert await forward_email(ctx, mailbox="INBOX", uid="1", to="c@x.se") is True
 
 
 
@@ -573,7 +573,7 @@ async def test_reply_all_does_not_send_to_address_hidden_in_comment():
         f'From: a@x.se\nTo: {KONTO}, "=?utf-8?q?B=0A?=" <b@x.se> (<hidden@evil.com>)\nSubject: s'
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True)
     assert "hidden@evil.com" not in cap.recipients
     assert cap.recipients == ["a@x.se", "b@x.se"]
 
@@ -581,14 +581,14 @@ async def test_reply_all_does_not_send_to_address_hidden_in_comment():
 async def test_reply_to_pointing_only_at_own_account_falls_back_to_from():
     raw = _raw(f"From: a@x.se\nReply-To: {KONTO}\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert cap.recipients == ["a@x.se"]
 
 
 async def test_extra_cc_with_display_name_is_deduplicated():
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok", cc=["A <A@x.se>", "Cia <c@x.se>"])
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", cc=["A <A@x.se>", "Cia <c@x.se>"])
     assert cap.recipients == ["a@x.se", "c@x.se"]
     assert _cc(cap) == [("Cia", "c@x.se")]
 
@@ -598,7 +598,7 @@ async def test_control_characters_are_removed_from_subject_and_names():
         f"From: =?utf-8?q?An=00na?= <a@x.se>\nTo: {KONTO}\nSubject: =?utf-8?q?m=C3=B6=00te=07?=\nMessage-ID: <m@x>"
     )
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     assert b"\x00" not in cap.raw and b"\x07" not in cap.raw
     assert str(cap.parsed["Subject"]) == "Re: möte"
     assert _to(cap) == [("Anna", "a@x.se")]
@@ -608,7 +608,7 @@ async def test_overlong_message_ids_are_skipped():
     long_id = "<" + "a" * 200_000 + "@x>"
     raw = _raw(f"From: a@x.se\nTo: {KONTO}\nSubject: s\nMessage-ID: {long_id}\nReferences: <r@x> {long_id}")
     with capture_smtp() as cap:
-        await reply_to_email(_ctx(raw), uid="1", body="ok")
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
     head = cap.raw.split(b"\r\n\r\n", 1)[0]
     assert max(len(line) for line in head.split(b"\r\n")) <= 998
     assert cap.parsed["In-Reply-To"] is None

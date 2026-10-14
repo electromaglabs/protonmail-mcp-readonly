@@ -31,7 +31,7 @@ def call_send(ctx, html):
 
 @when(parsers.parse('jag anropar verktyget reply_to_email med HTML-texten "{html}"'))
 def call_reply(ctx, html):
-    args = {"uid": "1", "body": "b", "body_html": html}
+    args = {"uid": "1", "mailbox": "INBOX", "body": "b", "body_html": html}
     asyncio.run(mcp._tool_manager.get_tool("reply_to_email").run(args, context=ctx))
 
 

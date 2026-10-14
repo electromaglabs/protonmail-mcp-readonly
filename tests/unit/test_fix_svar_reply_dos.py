@@ -20,7 +20,7 @@ async def test_header_cap_cannot_be_defeated_by_repeating_the_header():
     with capture_smtp() as cap:
         start = time.perf_counter()
         with pytest.raises(ValueError, match="orimligt"):
-            await reply_to_email(_ctx(raw), uid="1", body="ok", reply_all=True)
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok", reply_all=True)
         assert time.perf_counter() - start < 1.0
     assert cap.sent == []
 
@@ -41,9 +41,9 @@ async def test_html_only_original_is_handled_in_linear_time(pattern, tool):
     with capture_smtp():
         start = time.perf_counter()
         if tool == "reply":
-            await reply_to_email(_ctx(raw), uid="1", body="ok")
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
         else:
-            await forward_email(_ctx(raw), uid="1", to="b@x.se")
+            await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
         assert time.perf_counter() - start < 1.0
 
 
@@ -69,9 +69,9 @@ async def test_huge_headers_spread_over_mime_parts_are_rejected_fast(tool):
         start = time.perf_counter()
         with pytest.raises(ValueError, match="orimligt"):
             if tool == "reply":
-                await reply_to_email(_ctx(raw), uid="1", body="ok")
+                await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
             else:
-                await forward_email(_ctx(raw), uid="1", to="b@x.se")
+                await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
         assert time.perf_counter() - start < 1.0
     assert cap.sent == []
 
@@ -96,9 +96,9 @@ async def test_huge_number_of_mime_parts_is_rejected_fast(tool):
         start = time.perf_counter()
         with pytest.raises(ValueError, match="delar"):
             if tool == "reply":
-                await reply_to_email(_ctx(raw), uid="1", body="ok")
+                await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
             else:
-                await forward_email(_ctx(raw), uid="1", to="b@x.se")
+                await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
         assert time.perf_counter() - start < 1.0
     assert cap.sent == []
 
@@ -117,7 +117,7 @@ async def test_normal_number_of_attachments_still_forwarded():
         f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
     ).encode()
     with capture_smtp() as cap:
-        await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
     assert len(list(cap.parsed.iter_attachments())) == 200
 
 
@@ -142,9 +142,9 @@ async def _timed(tool, raw, cap):
     start = time.perf_counter()
     try:
         if tool == "reply":
-            await reply_to_email(_ctx(raw), uid="1", body="ok")
+            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
         else:
-            await forward_email(_ctx(raw), uid="1", to="b@x.se")
+            await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
         cap.raw
     except ValueError as exc:
         assert "orimligt" in str(exc)
@@ -191,6 +191,6 @@ async def test_deep_nesting_gives_clear_error_not_recursion_error(tool):
     with capture_smtp():
         with pytest.raises(ValueError, match="nästlat"):
             if tool == "reply":
-                await reply_to_email(_ctx(raw.encode()), uid="1", body="ok")
+                await reply_to_email(_ctx(raw.encode()), mailbox="INBOX", uid="1", body="ok")
             else:
-                await forward_email(_ctx(raw.encode()), uid="1", to="b@x.se")
+                await forward_email(_ctx(raw.encode()), mailbox="INBOX", uid="1", to="b@x.se")

@@ -97,7 +97,7 @@ def reply(mock_ctx, raw):
 
     smtp = mock_ctx.request_context.lifespan_context.smtp
     smtp.send_email.return_value = True
-    asyncio.run(reply_to_email(mock_ctx, uid="1", body="Svar"))
+    asyncio.run(reply_to_email(mock_ctx, mailbox="INBOX", uid="1", body="Svar"))
     return smtp.send_email.call_args.kwargs["to"]
 
 
