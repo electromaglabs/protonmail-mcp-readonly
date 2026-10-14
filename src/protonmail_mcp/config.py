@@ -1,9 +1,7 @@
-from __future__ import annotations
-
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # <repo>/src/protonmail_mcp/config.py → <repo>/.env. Läses även när servern
@@ -23,6 +21,12 @@ class Settings(BaseSettings):
     password: str
     verify_ssl: bool = False
     smtp_ca_cert: str | None = None
+    # All filåtkomst för bilagor (get_attachment, attachments-parametern)
+    # begränsas till den här katalogen. Den skapas med rättigheterna 0700
+    # första gången något sparas.
+    attachment_dir: Path = Field(default=Path("~/Downloads/protonmail-mcp"), validate_default=True)
+    # Största bilaga som get_attachment returnerar direkt (save=False), i byte
+    attachment_max_inline_bytes: int = Field(default=1024 * 1024, gt=0)
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
@@ -32,6 +36,11 @@ class Settings(BaseSettings):
         # och lifespan loggar det till stderr (som Claude Desktop sparar).
         hide_input_in_errors=True,
     )
+
+    @field_validator("attachment_dir", mode="after")
+    @classmethod
+    def _expand_home(cls, value: Path) -> Path:
+        return value.expanduser()
 
 
 @lru_cache(maxsize=1)
