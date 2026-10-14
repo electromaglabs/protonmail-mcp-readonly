@@ -30,3 +30,14 @@ Feature: Tålig avkodning av rubriker i inkommande mejl
     Given en IMAP-sida med tre mejl där det mittersta har ämnet "Hälsningar från Göteborg"
     When sidans metadata parsas
     Then det mittersta mejlets ämne ska vara "Hälsningar från Göteborg"
+
+  Scenario: Kodade namn i To och Cc avkodas
+    Given ett mejl med rubrikraden "To: =?utf-8?q?Gr=C3=B6n?= <g@x.se>, =?utf-8?b?w4VzYQ==?= <asa@x.se>"
+    When jag hämtar mejlet med get_email
+    Then ska mottagarna vara "Grön <g@x.se>" och "Åsa <asa@x.se>"
+
+  Scenario: Svar till en avsändare med kommatecken i det kodade namnet
+    Given ett mejl från "=?utf-8?q?=C3=96berg=2C_=C3=85sa?= <asa@x.se>" i INBOX
+    When jag svarar på mejlet med reply_to_email
+    Then ska svaret skickas till adressen "asa@x.se"
+    And mottagaren ska godkännas av SMTP-klientens adresskontroll

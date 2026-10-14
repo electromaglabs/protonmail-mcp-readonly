@@ -163,11 +163,40 @@ def decode_header_value(value) -> str:
     return " ".join(stripped for line in lines if (stripped := line.strip()))
 
 
-def extract_addresses(header_value: str | None) -> list[str]:
+# Tecken som kräver citering av visningsnamnet (RFC 5322 specials, som formataddr)
+_ADDR_SPECIALS_RE = re.compile(r'[][\\()<>@,:;".]')
+_ADDR_ESCAPES_RE = re.compile(r'[\\"]')
+
+
+def parse_addresses(header_value) -> list[tuple[str, str]]:
+    """Parsa en adressrubrik till (namn, adress)-par med avkodade namn.
+
+    Adresslistan delas upp FÖRE RFC 2047-avkodningen, så att ett kodat
+    kommatecken eller "<…>" i namnet inte kan skapa nya adresser.
+    """
     if not header_value:
         return []
-    addresses = email.utils.getaddresses([_header_to_text(header_value)])
-    return [f"{name} <{addr}>" if name else addr for name, addr in addresses]
+    text = _header_to_text(header_value)
+    pairs = []
+    for name, addr in email.utils.getaddresses([text]):
+        name, addr = decode_header_value(name), decode_header_value(addr)
+        if name or addr:
+            pairs.append((name, addr))
+    return pairs
+
+
+def format_address(name: str, addr: str) -> str:
+    """Som email.utils.formataddr men utan att RFC 2047-koda icke-ASCII-namn:
+    namn med specialtecken citeras så att strängen kan parsas tillbaka."""
+    if not name:
+        return addr
+    if _ADDR_SPECIALS_RE.search(name):
+        name = '"%s"' % _ADDR_ESCAPES_RE.sub(r"\\\g<0>", name)
+    return f"{name} <{addr}>" if addr else name
+
+
+def extract_addresses(header_value: str | None) -> list[str]:
+    return [format_address(name, addr) for name, addr in parse_addresses(header_value)]
 
 
 def _safe_decode(payload: bytes, charset: str | None) -> str:
@@ -347,14 +376,29 @@ def parse_email(
         # finns i "full" eller med max_length=None.
         body_html = _truncate(body_html, max_length)
 
+    addresses = {
+        key: parse_addresses(_raw_header(msg, name))
+        for key, name in (
+            ("from", "From"), ("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"), ("reply_to", "Reply-To")
+        )
+    }
+    formatted = {key: [format_address(n, a) for n, a in pairs] for key, pairs in addresses.items()}
+    # Utan parsbar adress (bara ett namn, trasig rubrik): visa den avkodade texten
+    if any(addr for _, addr in addresses["from"]):
+        from_ = ", ".join(formatted["from"])
+    else:
+        from_ = decode_header_value(_raw_header(msg, "From"))
+
     return {
         "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
         "subject": decode_header_value(_raw_header(msg, "Subject")),
-        "from": decode_header_value(_raw_header(msg, "From")),
-        "to": extract_addresses(_raw_header(msg, "To")),
-        "cc": extract_addresses(_raw_header(msg, "Cc")),
-        "bcc": extract_addresses(_raw_header(msg, "Bcc")),
-        "reply_to": extract_addresses(_raw_header(msg, "Reply-To")),
+        "from": from_,
+        "to": formatted["to"],
+        "cc": formatted["cc"],
+        "bcc": formatted["bcc"],
+        "reply_to": formatted["reply_to"],
+        # (namn, adress)-par, för anropare som vill ha adressen utan att parsa om
+        "addresses": {key: [[n, a] for n, a in pairs] for key, pairs in addresses.items()},
         "date": decode_header_value(_raw_header(msg, "Date")),
         "body_plain": body_plain,
         "body_html": body_html,

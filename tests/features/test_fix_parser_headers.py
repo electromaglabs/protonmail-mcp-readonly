@@ -77,3 +77,39 @@ def json_serializable(result):
     import json
 
     json.dumps(result, ensure_ascii=False).encode("utf-8")
+
+
+@then(parsers.parse('ska mottagarna vara "{first}" och "{second}"'))
+def recipients_are(result, first, second):
+    assert result["to"] == [first, second]
+
+
+@given(parsers.parse('ett mejl från "{sender}" i INBOX'), target_fixture="raw")
+def mail_from(mock_ctx, sender):
+    raw = f"From: {sender}\r\nSubject: Fråga\r\nMessage-ID: <q@x.se>\r\n\r\nhej\r\n".encode()
+    mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
+    return raw
+
+
+@when("jag svarar på mejlet med reply_to_email", target_fixture="sent_to")
+def reply(mock_ctx, raw):
+    from protonmail_mcp.tools.reply import reply_to_email
+
+    smtp = mock_ctx.request_context.lifespan_context.smtp
+    smtp.send_email.return_value = True
+    asyncio.run(reply_to_email(mock_ctx, uid="1", body="Svar"))
+    return smtp.send_email.call_args.kwargs["to"]
+
+
+@then(parsers.parse('ska svaret skickas till adressen "{addr}"'))
+def reply_goes_to(sent_to, addr):
+    from email.utils import parseaddr
+
+    assert parseaddr(sent_to)[1] == addr
+
+
+@then("mottagaren ska godkännas av SMTP-klientens adresskontroll")
+def smtp_accepts(sent_to):
+    from protonmail_mcp.smtp_client import _validate_email_addr
+
+    _validate_email_addr(sent_to)
