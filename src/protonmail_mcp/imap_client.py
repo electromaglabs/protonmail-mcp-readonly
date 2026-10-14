@@ -569,15 +569,28 @@ class IMAPClient:
         before: str | None = None,
         unseen: bool | None = None,
         max_results: int = 50,
+        *,
+        to_addr: str | None = None,
+        cc_addr: str | None = None,
+        text: str | None = None,
+        body: str | None = None,
+        flagged: bool | None = None,
+        answered: bool | None = None,
+        larger_than: int | None = None,
+        smaller_than: int | None = None,
     ) -> dict[str, Any]:
         """Söker i mappen och returnerar de nyaste träffarna med metadata.
 
-        Bridge jämför SUBJECT och FROM mot de okodade headervärdena, så "ä"
-        eller ett ord i ett B-kodat ämne ger aldrig träff på servern. Servern
-        söker därför bara på datum och flaggor, och ämne/avsändare jämförs
-        lokalt mot avkodade värden för de _LOCAL_SCAN_LIMIT nyaste kandidaterna.
-        Är alla termer ASCII får servern dessutom leta bland äldre brev, där
-        den åtminstone hittar träffar i okodade headers.
+        Bridge jämför SUBJECT, FROM, TO och CC mot de okodade headervärdena,
+        så "ä" eller ett ord i ett B-kodat ämne ger aldrig träff på servern.
+        Servern söker därför bara på datum, flaggor, storlek och brödtext, och
+        ämne/avsändare/mottagare jämförs lokalt mot avkodade värden för de
+        _LOCAL_SCAN_LIMIT nyaste kandidaterna. Är alla termer ASCII får servern
+        dessutom leta bland äldre brev, där den åtminstone hittar träffar i
+        okodade headers.
+
+        text (IMAP TEXT, hela meddelandet) och body (IMAP BODY, brödtexten)
+        söks på servern; se _text_search_criteria för hur åäö hanteras.
 
         Returnerar dict med messages (nyaste först, högst max_results), total
         (antal hittade träffar; en undre gräns när complete är False),
@@ -594,15 +607,28 @@ class IMAPClient:
         if subject:
             text_criteria += ["SUBJECT", _imap_quoted(subject, "subject")]
             terms.append(("subject", subject))
+        if to_addr:
+            text_criteria += ["TO", _imap_quoted(to_addr, "to_addr")]
+            terms.append(("to", to_addr))
+        if cc_addr:
+            text_criteria += ["CC", _imap_quoted(cc_addr, "cc_addr")]
+            terms.append(("cc", cc_addr))
         criteria: list[str] = []
         if since:
             criteria += ["SINCE", _to_imap_date(since, "since")]
         if before:
             criteria += ["BEFORE", _to_imap_date(before, "before")]
-        if unseen is True:
-            criteria.append("UNSEEN")
-        elif unseen is False:
-            criteria.append("SEEN")
+        criteria += _flag_criteria(unseen, "SEEN", "UNSEEN", negate_true=True)
+        criteria += _flag_criteria(flagged, "FLAGGED", "UNFLAGGED")
+        criteria += _flag_criteria(answered, "ANSWERED", "UNANSWERED")
+        if larger_than is not None:
+            criteria += ["LARGER", str(_validate_size(larger_than, "larger_than"))]
+        if smaller_than is not None:
+            criteria += ["SMALLER", str(_validate_size(smaller_than, "smaller_than"))]
+        if text:
+            criteria += _text_search_criteria("TEXT", text, "text")
+        if body:
+            criteria += _text_search_criteria("BODY", body, "body")
         _quote_mailbox(mailbox)
 
         await self._ensure_connected()
@@ -632,7 +658,7 @@ class IMAPClient:
         if not complete:
             note = (
                 f"Bara de {len(window)} nyaste av {len(candidates)} brev som matchar övriga "
-                "villkor jämfördes mot avkodat ämne och avsändare. "
+                "villkor jämfördes mot avkodat ämne, avsändare och mottagare. "
             )
             if ascii_terms:
                 note += (
@@ -663,12 +689,15 @@ class IMAPClient:
         msgs: list[dict[str, Any]] = []
         for start in range(0, len(seqnums), _FETCH_CHUNK_SIZE):
             chunk = seqnums[start:start + _FETCH_CHUNK_SIZE]
-            fetch_resp = await self._client.fetch(",".join(chunk), _METADATA_ITEMS)
+            fetch_resp = await self._client.fetch(
+                ",".join(chunk),
+                "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID)])",
+            )
             if fetch_resp.result != "OK":
                 raise ValueError(
                     f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
                 )
-            msgs += _parse_fetch_metadata(fetch_resp.lines)
+            msgs += _parse_fetch_metadata(fetch_resp.lines, extra_headers=("cc",))
         return msgs
 
     @_serialized
@@ -868,6 +897,77 @@ def _header_matches(value: str, term: str) -> bool:
     return fold(term) in fold(value)
 
 
+def _flag_criteria(value: bool | None, true_key: str, false_key: str, negate_true: bool = False) -> list[str]:
+    """SEARCH-nyckel för ett tristate-filter: True, False eller None (inget villkor).
+
+    negate_true: nyckeln för True är false_key (unseen=True → UNSEEN).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, bool):
+        raise ValueError(f"Filtret måste vara true, false eller null (fick {value!r})")
+    if negate_true:
+        value = not value
+    return [true_key if value else false_key]
+
+
+def _validate_size(value: object, field: str) -> int:
+    """Storleksgräns i byte för LARGER/SMALLER: ett heltal >= 0 (inte bool)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} måste vara ett heltal >= 0 (byte), fick {value!r}")
+    return value
+
+
+# Högst så många skiftlägesvarianter av ett sökord med åäö skickas till Bridge
+_CASE_VARIANTS = 4
+
+
+def _quoted_printable(text: str) -> str:
+    """Tecken utanför ASCII som Bridge skriver dem i quoted-printable: ö → =C3=B6."""
+    return "".join(
+        ch if ch.isascii() else "".join(f"={b:02X}" for b in ch.encode("utf-8"))
+        for ch in text
+    )
+
+
+def _text_search_criteria(key: str, value: str, field: str) -> list[str]:
+    """SEARCH-kriterier för TEXT eller BODY som hittar sökordet även med åäö.
+
+    Bridge (Gluon) jämför sökordet med det okodade meddelandet. Textdelarna
+    skriver Bridge som quoted-printable i UTF-8 (verifierat live: 150 av 150
+    textdelar), så "behöver" står som "beh=C3=B6ver" och hittas aldrig som det
+    skrivs. Ett ord utan åäö skickas som det är. Ett ord med åäö skickas både
+    som det är (8-bitars text) och quoted-printable-kodat, i några
+    skiftlägesvarianter: Bridge viker bara ASCII, och "Ö" (=C3=96) är andra
+    byte än "ö" (=C3=B6). Varianterna kombineras med OR.
+
+    Begränsningar (dokumenteras i verktyget): ett ord som quoted-printable
+    radbryter mitt i ("beh=\r\növer") hittas inte, inte heller ord i
+    base64-kodade delar eller HTML-entiteter (&ouml;).
+    """
+    _imap_quoted(value, field)  # kontrolltecken avvisas innan något byggs
+    term = unicodedata.normalize("NFC", value)
+    if term.isascii():
+        return [key, _imap_quoted(term, field)]
+    forms: list[str] = []
+    for variant in (term, term.lower(), term.capitalize(), term.upper())[:_CASE_VARIANTS]:
+        for form in (variant, _quoted_printable(variant)):
+            # Bridge viker ASCII själv: varianter som bara skiljer i ASCII är dubbletter
+            if not any(_ascii_fold(form) == _ascii_fold(f) for f in forms):
+                forms.append(form)
+    keys = [[key, _imap_quoted(form, field)] for form in forms]
+    criteria: list[str] = []
+    for i, pair in enumerate(keys):
+        if i < len(keys) - 1:
+            criteria.append("OR")
+        criteria += pair
+    return criteria
+
+
+def _ascii_fold(text: str) -> str:
+    return "".join(ch.lower() if ch.isascii() else ch for ch in text)
+
+
 def _filter_messages(msgs: list[dict[str, Any]], terms: list[tuple[str, str]]) -> list[dict[str, Any]]:
     return [m for m in msgs if all(_header_matches(m[field], term) for field, term in terms)]
 
@@ -899,8 +999,11 @@ def _decode_header_bytes(raw: bytes) -> str:
         return raw.decode("latin-1")
 
 
-def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
+def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """Parsar FETCH-svar med UID, FLAGS och header-fält.
+
+    extra_headers är fler headers (gemener) som tas med avkodade, med "-"
+    utbytt mot "_" i nyckeln: ("cc", "in-reply-to") → "cc", "in_reply_to".
 
     Bara svar som har header-literalen tas med: en oombedd flaggändring från
     en annan klient (`* 1 FETCH (UID 999 FLAGS (\\Seen))`) hamnar i samma svar
@@ -944,7 +1047,7 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
         # headers (RFC 6532) avkodas först, annars blir "ö" till "��"
         hdrs = HeaderParser().parsestr(_decode_header_bytes(headers_raw))
 
-        messages.append({
+        meta = {
             "uid": uid,
             "flags": flags_m.group(1).split() if flags_m else [],
             "subject": decode_header_value(hdrs.get("subject")),
@@ -952,7 +1055,10 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
             "to": decode_header_value(hdrs.get("to")),
             "date": decode_header_value(hdrs.get("date")),
             "message_id": decode_header_value(hdrs.get("message-id")),
-        })
+        }
+        for name in extra_headers:
+            meta[name.replace("-", "_")] = decode_header_value(hdrs.get(name))
+        messages.append(meta)
     return messages
 
 
