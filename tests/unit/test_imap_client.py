@@ -244,6 +244,7 @@ class TestListMailboxes:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -336,6 +337,7 @@ class TestGetMessage:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -393,6 +395,7 @@ class TestSearchMessages:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -425,6 +428,7 @@ class TestDeleteMessage:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -519,6 +523,7 @@ class TestListMailboxesBadResult:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -544,6 +549,7 @@ class TestSearchMessagesMetadata:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -597,6 +603,7 @@ class TestSearchMessagesEmpty:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -632,6 +639,7 @@ class TestGetMessageHeaders:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -673,6 +681,7 @@ class TestFolderManagement:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     @pytest.mark.asyncio
@@ -709,6 +718,7 @@ class TestListMessagesPagination:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         return imap
 
     def _make_select_resp(self, exists: int):
@@ -790,6 +800,7 @@ class TestReadOnlyAndDecodedListing:
         from protonmail_mcp.config import Settings
         imap = IMAPClient(Settings())
         imap._client = AsyncMock()
+        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
         imap._client.select = AsyncMock(
             return_value=SimpleNamespace(result="OK", lines=["5 EXISTS"])
         )

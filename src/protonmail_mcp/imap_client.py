@@ -127,6 +127,15 @@ def _parse_headers(raw: bytes) -> dict[str, str]:
     return result
 
 
+def _close_transport(client: aioimaplib.IMAP4) -> None:
+    transport = getattr(getattr(client, "protocol", None), "transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:
+            pass
+
+
 def _serialized(method):
     """Kör IMAP-operationen under klientens lås.
 
@@ -166,6 +175,26 @@ class IMAPClient:
                 pass
             self._client = None
 
+    def _discard_connection(self) -> None:
+        """Släpper anslutningen och stänger dess socket; nästa anrop ansluter på nytt."""
+        client, self._client = self._client, None
+        if client is not None:
+            _close_transport(client)
+
+    async def _select(self, mailbox: str):
+        resp = await self._client.select(_quote_mailbox(mailbox))
+        if resp.result != "OK":
+            # Bridge (och aioimaplib) står kvar i förra mappen efter ett misslyckat
+            # SELECT, tvärtemot RFC 3501 §6.3.1, så nästa kommando skulle träffa fel
+            # mapp. CLOSE skulle expungera där och UNSELECT saknas — kasta anslutningen.
+            self._discard_connection()
+            detail = " ".join(_decode(line) for line in resp.lines).strip()
+            raise ValueError(
+                f"Mappen finns inte eller kan inte väljas: {mailbox!r}"
+                + (f" ({detail})" if detail else "")
+            )
+        return resp
+
     async def _ensure_connected(self) -> None:
         if self._client is None:
             await self.connect()
@@ -194,7 +223,7 @@ class IMAPClient:
         self, mailbox: str, page: int = 1, page_size: int = 20
     ) -> dict[str, Any]:
         await self._ensure_connected()
-        select_resp = await self._client.select(_quote_mailbox(mailbox))
+        select_resp = await self._select(mailbox)
 
         # Hämta EXISTS-räknaren från SELECT-svaret
         exists = 0
@@ -250,7 +279,7 @@ class IMAPClient:
     @_serialized
     async def get_message(self, mailbox: str, uid: str) -> bytes | None:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         resp = await self._client.uid("fetch", _validate_uid(uid), "BODY.PEEK[]")
         if resp.result != "OK":
             return None
@@ -273,7 +302,7 @@ class IMAPClient:
         max_results: int = 200,
     ) -> list[dict]:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
 
         criteria: list[str] = []
         if from_addr:
@@ -313,7 +342,7 @@ class IMAPClient:
     @_serialized
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         action = "+FLAGS" if add else "-FLAGS"
         resp = await self._client.uid("store", _validate_uid(uid), action, flags)
         return resp.result == "OK"
@@ -321,7 +350,7 @@ class IMAPClient:
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         safe_uid = _validate_uid(uid)
         copy_resp = await self._client.uid("copy", safe_uid, _quote_mailbox(target))
         if copy_resp.result != "OK":
@@ -333,7 +362,7 @@ class IMAPClient:
     @_serialized
     async def delete_message(self, mailbox: str, uid: str) -> bool:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         safe_uid = _validate_uid(uid)
         await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         await self._client.expunge()
@@ -342,7 +371,7 @@ class IMAPClient:
     @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
         await self._ensure_connected()
-        await self._client.select(_quote_mailbox(mailbox))
+        await self._select(mailbox)
         resp = await self._client.uid(
             "fetch", _validate_uid(uid),
             "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REPLY-TO)]"
