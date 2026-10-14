@@ -98,3 +98,32 @@ class TestNoParserDifferential:
             assert "\r" not in formatted and "\n" not in formatted
             if addr and "@" in addr:
                 assert parseaddr(formatted)[1] == addr
+
+
+class TestNoRecipientInjection:
+    """Givet en adressrubrik vars kodade ord avkodas till flera adresser
+    När from/to formateras
+    Så kan strängen aldrig parsas till andra adresser än de som faktiskt
+    stod i rubrikens adressdel (reply_to_email skickar till "from")."""
+
+    NASTY = TestNoParserDifferential.NASTY + [
+        "=?utf-8?q?a=40x.se=2C_evil=40y.se?=",
+        "=?utf-8?q?a=40x.se=2C_evil=40y.se?= <>",
+        "=?utf-8?q?evil=40y.se?=",
+    ]
+
+    @staticmethod
+    def _parsed(value):
+        from email.utils import getaddresses
+
+        return {addr for _, addr in getaddresses([value]) if addr}
+
+    @pytest.mark.parametrize("value", NASTY)
+    def test_from_and_to_only_contain_real_addresses(self, value):
+        r = parse_email(_mail(f"From: {value}\r\nTo: {value}"))
+        real = {addr for _, addr in r["addresses"]["from"]}
+        assert self._parsed(r["from"]) <= real
+        for formatted in r["to"]:
+            assert len(self._parsed(formatted)) <= 1
+            assert self._parsed(formatted) <= real
+        assert "evil@y.se" not in self._parsed(r["from"])

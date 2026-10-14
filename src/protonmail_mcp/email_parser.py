@@ -184,29 +184,42 @@ def parse_addresses(header_value) -> list[tuple[str, str]]:
     pairs = []
     for name, addr in email.utils.getaddresses([text]):
         name, addr = decode_header_value(name), "".join(addr.split())
-        if name or addr:
+        if addr:  # ett namn utan adress går inte att skicka till
             pairs.append((name, addr))
     return pairs
 
 
+def _parses_to(formatted: str, addr: str) -> bool:
+    """Ger strängen exakt en adress, och är det addr?"""
+    try:
+        found = [a for _, a in email.utils.getaddresses([formatted]) if a]
+    except Exception:
+        return False
+    return found == [addr]
+
+
 def format_address(name: str, addr: str) -> str:
     """Som email.utils.formataddr men utan att RFC 2047-koda icke-ASCII-namn:
-    namn med specialtecken citeras så att strängen kan parsas tillbaka."""
-    if not name:
-        return addr
-    if _ADDR_SPECIALS_RE.search(name):
-        name = '"%s"' % _ADDR_ESCAPES_RE.sub(r"\\\g<0>", name)
-    if not addr:
-        return name
-    formatted = f"{name} <{addr}>"
-    # Ingen tolkningsskillnad: den som parsar strängen ska få samma adress
-    if email.utils.parseaddr(formatted)[1] != addr:
-        return addr
-    return formatted
+    namn med specialtecken citeras så att strängen kan parsas tillbaka.
+
+    Ingen tolkningsskillnad: resultatet parsas alltid till exakt addr (som
+    reply_to_email skickar till). Går det inte med namnet blir det bara
+    adressen, och går inte ens den att parsa tillbaka blir det "".
+    """
+    candidates = [addr]
+    if name:
+        if _ADDR_SPECIALS_RE.search(name):
+            name = '"%s"' % _ADDR_ESCAPES_RE.sub(r"\\\g<0>", name)
+        candidates.insert(0, f"{name} <{addr}>")
+    for candidate in candidates:
+        if addr and _parses_to(candidate, addr):
+            return candidate
+    return ""
 
 
 def extract_addresses(header_value: str | None) -> list[str]:
-    return [format_address(name, addr) for name, addr in parse_addresses(header_value)]
+    formatted = (format_address(name, addr) for name, addr in parse_addresses(header_value))
+    return [a for a in formatted if a]
 
 
 def _safe_decode(payload: bytes, charset: str | None) -> str:
@@ -401,12 +414,18 @@ def parse_email(
             ("from", "From"), ("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"), ("reply_to", "Reply-To")
         )
     }
-    formatted = {key: [format_address(n, a) for n, a in pairs] for key, pairs in addresses.items()}
+    formatted = {
+        key: [f for f in (format_address(n, a) for n, a in pairs) if f]
+        for key, pairs in addresses.items()
+    }
     # Utan parsbar adress (bara ett namn, trasig rubrik): visa den avkodade texten
-    if any("@" in addr for _, addr in addresses["from"]):
-        from_ = ", ".join(formatted["from"])
-    else:
-        from_ = decode_header_value(_raw_header(msg, "From"))
+    from_ = ", ".join(formatted["from"])
+    if not any("@" in addr for _, addr in addresses["from"]):
+        # Bara ett namn: visa avkodad text — men aldrig om den avkodade texten
+        # i sig kan tolkas som adresser (kodat "a@x.se, evil@y.se")
+        decoded = decode_header_value(_raw_header(msg, "From"))
+        if not any("@" in a for _, a in email.utils.getaddresses([decoded])):
+            from_ = decoded
 
     return {
         "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
