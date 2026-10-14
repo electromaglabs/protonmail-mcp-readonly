@@ -75,3 +75,24 @@ def recipient_address_is(result, addr):
 @then(parsers.parse("mottagaren ska visas som '{formatted}'"))
 def recipient_shown_as(result, formatted):
     assert result["to"] == [formatted]
+
+
+@given(parsers.parse("ett HTML-brev med innehållet '{markup}'"), target_fixture="raw")
+def html_mail(mock_ctx, markup):
+    raw = (
+        "From: a@b.se\r\nSubject: s\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+        + markup
+        + "\r\n"
+    ).encode()
+    mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
+    return raw
+
+
+@when("jag hämtar mejlet som text med get_email", target_fixture="result")
+def fetch_mail_as_text(mock_ctx, raw):
+    return asyncio.run(get_email(mock_ctx, uid="1", body_format="text", max_length=None))
+
+
+@then(parsers.parse("ska brödtexten vara '{body}'"))
+def body_is(result, body):
+    assert result["body_plain"] == body

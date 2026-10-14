@@ -33,3 +33,13 @@ Feature: Efter granskningen — rubriker, adresser och HTML-text i inkommande me
     Given ett mejl med rubrikraden 'To: Anna <anna. svensson@x.se>'
     When jag hämtar mejlet med get_email
     Then ska mottagarens adress vara 'anna.svensson@x.se'
+
+  Scenario: HTML-brev där head aldrig stängs och body saknas
+    Given ett HTML-brev med innehållet '<html><head><meta charset="utf-8"><p>Hej Mattias</p></html>'
+    When jag hämtar mejlet som text med get_email
+    Then ska brödtexten vara 'Hej Mattias'
+
+  Scenario: Titel och stilar i ett ostängt head visas inte
+    Given ett HTML-brev med innehållet '<head><title>Nyhetsbrev</title><style>p{}</style><div>Innehåll</div>'
+    When jag hämtar mejlet som text med get_email
+    Then ska brödtexten vara 'Innehåll'

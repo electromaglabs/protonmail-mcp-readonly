@@ -126,3 +126,40 @@ class TestQuotedLocalPartKeepsSpaces:
             assert addr.splitlines() == [addr]
         for formatted in extract_addresses(value):
             assert formatted.splitlines() == [formatted]
+
+
+class TestUnclosedHead:
+    """K5. Givet HTML där <head> aldrig stängs och <body> saknas
+    När den görs om till text
+    Så stängs head vid första element eller text som inte hör hemma där,
+    som i en webbläsare, och brevets innehåll visas."""
+
+    @pytest.mark.parametrize(
+        "markup, expected",
+        [
+            ("<html><head><meta charset='utf-8'><p>Hej Mattias</p></html>", "Hej Mattias"),
+            ("<head><title>x</title>\n<div>Innehåll</div>", "Innehåll"),
+            ("<head><title>x</title>Bara text", "Bara text"),
+            ("<head><link rel=x><base href=y><table><tr><td>a</td></tr></table>", "a"),
+            # sådant som hör till head visas fortfarande inte
+            ("<head><title>T</title><style>p{}</style><script>x</script>"
+             "<meta name=a><noscript><link rel=b></noscript><p>Text</p>", "Text"),
+            ("<head>\n  <title>T</title>\n</head><body>Text</body>", "Text"),
+            # ett stängt head påverkas inte
+            ("<html><head><title>T</title></head><body><p>A</p></body></html>", "A"),
+        ],
+    )
+    def test_html_to_text(self, markup, expected):
+        from protonmail_mcp.html_text import html_to_text
+
+        assert html_to_text(markup) == expected
+
+    def test_still_linear(self):
+        from protonmail_mcp.html_text import html_to_text
+
+        markup = "<head><meta a=b>" + "<p>x</p><title>t</title>" * 50_000
+        start = time.perf_counter()
+        text = html_to_text(markup)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 5, f"tog {elapsed:.2f} s"
+        assert text.count("x") == 50_000

@@ -18,6 +18,10 @@ _BLOCK = {
 }
 # Ger tom rad före och efter
 _PARAGRAPH = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "pre", "blockquote"}
+# Hör hemma i <head>; allt annat stänger head, som i en webbläsare (K5)
+_HEAD_TAGS = {
+    "html", "head", "title", "meta", "link", "style", "script", "base", "noscript", "template",
+}
 _WS_RE = re.compile(r"\s+")
 # Fler citatnivåer än så visas som tio — annars kan djupt nästlade
 # <blockquote> blåsa upp utdata kvadratiskt mot indata
@@ -68,8 +72,8 @@ class _TextExtractor(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag == "head":
             self.in_head = True
-        elif tag == "body":
-            self.in_head = False  # även när </head> saknas
+        elif tag == "body" or tag not in _HEAD_TAGS:
+            self.in_head = False  # även när </head> och <body> saknas
         if tag in _SKIP:
             self.skip += 1
         if self.skip or self.in_head:
@@ -109,6 +113,8 @@ class _TextExtractor(HTMLParser):
             self._end_line()
 
     def handle_data(self, data):
+        if self.in_head and not self.skip and data.strip():
+            self.in_head = False  # text stänger också ett ostängt head
         if self.skip or self.in_head:
             return
         if self.pre:
