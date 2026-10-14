@@ -11,6 +11,7 @@ from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from . import _get_app
+from ._types import OptionalStr
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
 # AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"), med valfri
@@ -357,7 +358,7 @@ async def reply_to_email(
     uid: str,
     body: str,
     mailbox: str = "INBOX",
-    body_html: str | None = None,
+    body_html: OptionalStr = None,
     reply_all: bool = False,
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,

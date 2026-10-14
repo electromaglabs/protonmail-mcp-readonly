@@ -2,6 +2,7 @@ from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from . import _get_app
+from ._types import OptionalStr
 
 
 @mcp.tool()
@@ -10,10 +11,10 @@ async def send_email(
     to: str | list[str],
     subject: str,
     body: str,
-    body_html: str | None = None,
+    body_html: OptionalStr = None,
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
-    reply_to: str | None = None,
+    reply_to: OptionalStr = None,
 ) -> bool:
     """Skicka ett e-post.
 
