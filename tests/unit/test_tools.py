@@ -66,7 +66,7 @@ class TestListEmails:
             "Sent", page=2, page_size=10
         )
         assert result["page"] == 2
-        assert result["messages"] == [{"uid": "1"}]
+        assert result["messages"] == [{"uid": "1", "mailbox": "Sent"}]
 
     async def test_default_args(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.list_messages.return_value = {
@@ -99,7 +99,9 @@ class TestGetEmail:
 
 class TestSearchEmails:
     async def test_delegates_all_filter_params(self, mock_ctx):
-        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = ["1", "2", "3"]
+        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = [
+            {"uid": "1"}, {"uid": "2"}, {"uid": "3"}
+        ]
         result = await search_emails(
             mock_ctx,
             mailbox="INBOX",
@@ -117,7 +119,11 @@ class TestSearchEmails:
             before="01-Feb-2024",
             unseen=True,
         )
-        assert result == ["1", "2", "3"]
+        assert result == [
+            {"uid": "1", "mailbox": "INBOX"},
+            {"uid": "2", "mailbox": "INBOX"},
+            {"uid": "3", "mailbox": "INBOX"},
+        ]
 
     async def test_defaults_none_filters(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = []
@@ -232,6 +238,7 @@ class TestGetEmailHeaders:
             "from": "alice@example.com",
             "subject": "Hello",
             "message-id": "<abc@example.com>",
+            "mailbox": "INBOX",
         }
 
     async def test_get_email_headers_raises_when_not_found(self, mock_ctx):

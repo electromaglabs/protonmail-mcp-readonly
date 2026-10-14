@@ -2,6 +2,7 @@ from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from . import _get_app
+from .messages import _with_mailbox
 
 
 @mcp.tool()
@@ -25,10 +26,11 @@ async def search_emails(
         unseen: True=bara olästa, False=bara lästa, None=alla
 
     Returns:
-        Lista med metadata-dicts (uid, subject, from, date, flags) för matchande e-post
+        Lista med metadata-dicts (uid, mailbox, subject, from, date, flags) för matchande
+        e-post. UID:t gäller bara i den mapp som anges i mailbox.
     """
     app = _get_app(ctx)
-    return await app.imap.search_messages(
+    hits = await app.imap.search_messages(
         mailbox,
         from_addr=from_addr,
         subject=subject,
@@ -36,3 +38,4 @@ async def search_emails(
         before=before,
         unseen=unseen,
     )
+    return _with_mailbox(hits, mailbox)

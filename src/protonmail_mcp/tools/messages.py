@@ -8,6 +8,11 @@ from ..email_parser import parse_email
 from . import _get_app
 
 
+def _with_mailbox(messages: list[dict], mailbox: str) -> list[dict]:
+    """Märk varje meddelande med mappen — UID är bara unikt inom en mapp."""
+    return [{**m, "mailbox": mailbox} for m in messages]
+
+
 def _not_found(uid: str, mailbox: str) -> ValueError:
     # UID gäller per mapp — ett UID från en annan mapp är det vanligaste skälet
     return ValueError(
@@ -29,14 +34,14 @@ async def get_email_headers(
         mailbox: Mappnamn (standard: INBOX)
 
     Returns:
-        Dict med from, to, cc, subject, date, message_id, reply_to.
+        Dict med from, to, cc, subject, date, message_id, reply_to och mailbox.
         Kastar fel om det inte finns något meddelande med UID:t i mappen.
     """
     app = _get_app(ctx)
     headers = await app.imap.get_message_headers(mailbox, uid)
     if headers is None:
         raise _not_found(uid, mailbox)
-    return headers
+    return {**headers, "mailbox": mailbox}
 
 
 @mcp.tool()
@@ -54,10 +59,16 @@ async def list_emails(
         page_size: Antal e-post per sida, 1–100 (standard: 20)
 
     Returns:
-        dict med nycklar: messages, total, page, pages, has_more
+        dict med nycklar: mailbox, messages, total, page, pages, has_more.
+        Varje meddelande har mailbox — UID:t gäller bara i den mappen.
     """
     app = _get_app(ctx)
-    return await app.imap.list_messages(mailbox, page=page, page_size=page_size)
+    result = await app.imap.list_messages(mailbox, page=page, page_size=page_size)
+    return {
+        **result,
+        "mailbox": mailbox,
+        "messages": _with_mailbox(result["messages"], mailbox),
+    }
 
 
 @mcp.tool()
@@ -77,9 +88,12 @@ async def get_email(
             trunkering), eller "stripped" (text utan citat och signaturblock)
         max_length: Max antal tecken i body (standard: 500). None = ingen trunkering.
             Ignoreras för body_format="full".
+
+    Returns:
+        Det parsade meddelandet, inklusive mailbox som UID:t gäller i.
     """
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)
     if raw is None:
         raise _not_found(uid, mailbox)
-    return parse_email(raw, body_format=body_format, max_length=max_length)
+    return {**parse_email(raw, body_format=body_format, max_length=max_length), "mailbox": mailbox}
