@@ -5,7 +5,7 @@ import math
 import re
 import unicodedata
 from datetime import date
-from email.parser import BytesHeaderParser, HeaderParser
+from email.parser import HeaderParser
 from typing import Any
 
 import aioimaplib
@@ -187,12 +187,14 @@ def _parse_list_entry(line: str) -> tuple[list[str], str] | None:
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
     """Parsar raw RFC822-headers till en dict med lowercase-nycklar."""
-    # BytesHeaderParser vecklar ut vikta rader (RFC 5322 §2.2.3); värdena
+    # HeaderParser vecklar ut vikta rader (RFC 5322 §2.2.3); värdena
     # lämnas annars råa, eftersom get_email_headers används för analys.
     # Radvis strip i stället för re.sub(r"\s*\r?\n\s*"), som tar kvadratisk
     # tid på en lång blankteckenföljd utan radbrytning (100 000 blanksteg: 50 s).
+    # Rå 8-bitars text (RFC 6532) avkodas före parsningen — BytesHeaderParser
+    # gör den annars till ersättningstecken.
     result: dict[str, str] = {}
-    for k, v in BytesHeaderParser().parsebytes(raw).items():
+    for k, v in HeaderParser().parsestr(_decode_header_bytes(raw)).items():
         parts = (part.strip() for part in str(v).split("\n"))
         result[k.lower()] = " ".join(part for part in parts if part)
     return result
