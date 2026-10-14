@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import Context
 
+from ..attachments import AttachmentPaths, load_for_sending
 from ..server import mcp
 from . import _get_app
 from ._types import OptionalStr
@@ -15,6 +16,7 @@ async def send_email(
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
     reply_to: OptionalStr = None,
+    attachments: AttachmentPaths = None,
 ) -> bool:
     """Skicka ett e-post.
 
@@ -26,12 +28,17 @@ async def send_email(
         cc: Kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
         reply_to: Svarsadress
+        attachments: Filer att bifoga — filnamn eller sökvägar inom bilagekatalogen
+            (PROTONMAIL_ATTACHMENT_DIR, standard ~/Downloads/protonmail-mcp).
+            Högst 20 filer och 25 MB tillsammans. Filer utanför katalogen
+            (även via symlänk) avvisas, och då skickas inget.
 
     Returns:
         True om e-posten skickades utan fel. Vägrar servern bara några av
         mottagarna kastas ett fel som anger vilka som vägrades och vilka som
         ändå fick mejlet — skicka då inte om till alla.
     """
+    files = load_for_sending(attachments)
     app = _get_app(ctx)
     return await app.smtp.send_email(
         to=to,
@@ -41,4 +48,5 @@ async def send_email(
         cc=cc,
         bcc=bcc,
         reply_to=reply_to,
+        **({"attachments": files} if files else {}),
     )

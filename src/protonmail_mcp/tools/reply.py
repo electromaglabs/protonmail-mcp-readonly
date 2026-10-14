@@ -9,6 +9,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 
 from mcp.server.fastmcp import Context
 
+from ..attachments import AttachmentPaths, load_for_sending
 from ..email_parser import parse_addresses
 from ..server import mcp
 from . import _get_app
@@ -398,6 +399,7 @@ async def reply_to_email(
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
     quote_original: bool = True,
+    attachments: AttachmentPaths = None,
 ) -> bool:
     """Svara på ett e-post. Sätter In-Reply-To, References och Re:-prefix automatiskt.
 
@@ -416,11 +418,15 @@ async def reply_to_email(
         cc: Ytterligare kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
         quote_original: Citera originalet under svaret (standard: True)
+        attachments: Filer att bifoga — filnamn eller sökvägar inom bilagekatalogen
+            (PROTONMAIL_ATTACHMENT_DIR). Högst 20 filer och 25 MB tillsammans.
+            Originalets bilagor följer inte med i ett svar.
 
     Returns:
         True om svaret skickades. Vägrar servern några av mottagarna kastas
         ett fel som anger vilka — skicka då inte om till alla.
     """
+    files = load_for_sending(attachments)
     app = _get_app(ctx)
     fields = await build_reply(
         app, uid, mailbox, body,
@@ -428,6 +434,8 @@ async def reply_to_email(
     )
     if fields is None:
         return False
+    if files:
+        fields["attachments"] = files
     return await app.smtp.send_email(**fields, bcc=bcc)
 
 
@@ -525,6 +533,7 @@ async def forward_email(
     body: str = "",
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
+    attachments: AttachmentPaths = None,
 ) -> bool:
     """Vidarebefordra ett e-post med originalets text, HTML-version och bilagor.
 
@@ -541,15 +550,21 @@ async def forward_email(
             mailbox från svaret av list_emails, search_emails eller get_email.
         cc: Kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
+        attachments: Ytterligare filer att bifoga, utöver originalets bilagor —
+            filnamn eller sökvägar inom bilagekatalogen (PROTONMAIL_ATTACHMENT_DIR).
+            Högst 20 filer och 25 MB tillsammans.
 
     Returns:
         True om mejlet skickades. Vägrar servern några av mottagarna kastas
         ett fel som anger vilka — skicka då inte om till alla.
     """
+    files = load_for_sending(attachments)
     app = _get_app(ctx)
     fields = await build_forward(app, uid, mailbox, to, body, cc=cc)
     if fields is None:
         return False
+    if files:
+        fields["attachments"] = (fields["attachments"] or []) + files
     return await app.smtp.send_email(**fields, bcc=bcc)
 
 

@@ -12,15 +12,30 @@ kommer från klienten (en AI-modell). Båda behandlas som opålitliga:
 """
 from __future__ import annotations
 
+import email.policy
 import mimetypes
 import os
 import re
 import unicodedata
+from collections.abc import Sequence
+from email.message import EmailMessage
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Optional
+
+from pydantic import Field
 
 if TYPE_CHECKING:
     from .config import Settings
+
+# Gränser för bilagor som skickas (send_email, reply_to_email, forward_email).
+# Proton tar emot högst 25 MB bilagor per mejl.
+MAX_SEND_FILES = 20
+MAX_SEND_BYTES = 25 * 1024 * 1024
+
+# Parametertyp för verktygen: filnamn/sökvägar inom bilagekatalogen
+AttachmentPaths = Optional[
+    Annotated[list[Annotated[str, Field(min_length=1)]], Field(max_length=MAX_SEND_FILES)]
+]
 
 # Längsta filnamn i byte (UTF-8). De flesta filsystem tillåter 255; marginalen
 # räcker till kollisionssuffixet " (999)".
@@ -192,6 +207,55 @@ class AttachmentStore:
         if not resolved.is_file():
             raise ValueError(f"{name!r} är inte en vanlig fil")
         return resolved
+
+
+def _guess_type(name: str) -> tuple[str, str]:
+    ctype, encoding = mimetypes.guess_type(name, strict=False)
+    if ctype is None or encoding is not None or "/" not in ctype:
+        # Okänd typ, eller komprimerad (a.tar.gz är inte application/x-tar)
+        return "application", "octet-stream"
+    maintype, subtype = ctype.split("/", 1)
+    return maintype, subtype
+
+
+def load_for_sending(
+    names: Sequence[str] | None, store: AttachmentStore | None = None
+) -> list[EmailMessage]:
+    """Läs filer ur bilagekatalogen och gör dem till MIME-bilagor.
+
+    Högst MAX_SEND_FILES filer och MAX_SEND_BYTES byte tillsammans. Typen
+    gissas ur filändelsen; filnamnet (sista ledet) RFC 2231-kodas i
+    Content-Disposition om det inte är ASCII. Allt kontrolleras innan något
+    skickas, så ett fel betyder att inget mejl har gått iväg.
+    """
+    if not names:
+        return []
+    if len(names) > MAX_SEND_FILES:
+        raise ValueError(f"För många bilagor ({len(names)}) — högst {MAX_SEND_FILES} per mejl")
+    store = store or get_store()
+    paths = [store.resolve_existing(name) for name in names]
+    total = sum(path.stat().st_size for path in paths)
+    if total > MAX_SEND_BYTES:
+        raise ValueError(
+            f"Bilagorna är tillsammans {total} byte — högst {MAX_SEND_BYTES} byte "
+            "(25 MB) per mejl"
+        )
+    parts: list[EmailMessage] = []
+    remaining = MAX_SEND_BYTES
+    for path in paths:
+        with open(path, "rb") as fh:
+            data = fh.read(remaining + 1)  # filen kan ha vuxit sedan stat()
+        remaining -= len(data)
+        if remaining < 0:
+            raise ValueError(f"Bilagorna är tillsammans över {MAX_SEND_BYTES} byte (25 MB)")
+        maintype, subtype = _guess_type(path.name)
+        part = EmailMessage(policy=email.policy.SMTP)
+        part.set_content(
+            data, maintype=maintype, subtype=subtype,
+            disposition="attachment", filename=path.name,
+        )
+        parts.append(part)
+    return parts
 
 
 def get_store() -> AttachmentStore:
