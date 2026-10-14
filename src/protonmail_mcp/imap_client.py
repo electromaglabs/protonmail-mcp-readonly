@@ -174,20 +174,24 @@ class IMAPClient:
                 exists = int(m.group(1))
                 break
 
+        if page < 1 or page_size < 1:
+            raise ValueError(f"page och page_size måste vara >= 1 (fick page={page}, page_size={page_size})")
+
         total_pages = math.ceil(exists / page_size) if exists > 0 else 0
 
-        if exists == 0:
+        # Beräkna sekvensintervall för nyaste-först paginering. En sida förbi
+        # slutet är tom — annars skulle max(1, ...) nedan ge det äldsta brevet.
+        offset = (page - 1) * page_size
+        if offset >= exists:
             return {
                 "messages": [],
-                "total": 0,
+                "total": exists,
                 "page": page,
-                "pages": 0,
+                "pages": total_pages,
                 "has_more": False,
             }
 
-        # Beräkna sekvensintervall för nyaste-först paginering
-        offset = (page - 1) * page_size
-        stop = max(1, exists - offset)
+        stop = exists - offset
         start = max(1, stop - page_size + 1)
 
         fetch_resp = await self._client.fetch(

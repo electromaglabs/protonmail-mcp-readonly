@@ -1,4 +1,7 @@
+from typing import Annotated
+
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from ..server import mcp
 from ..email_parser import parse_email
@@ -28,15 +31,15 @@ async def get_email_headers(
 async def list_emails(
     ctx: Context,
     mailbox: str = "INBOX",
-    page: int = 1,
-    page_size: int = 20,
+    page: Annotated[int, Field(ge=1)] = 1,
+    page_size: Annotated[int, Field(ge=1, le=100)] = 20,
 ) -> dict:
     """Lista e-post i en mapp med metadata (sidbaserad paginering).
 
     Args:
         mailbox: Mappnamn (standard: INBOX)
-        page: Sidnummer, 1-baserat (standard: 1)
-        page_size: Antal e-post per sida (standard: 20)
+        page: Sidnummer, 1-baserat (standard: 1). En sida förbi slutet ger en tom lista.
+        page_size: Antal e-post per sida, 1–100 (standard: 20)
 
     Returns:
         dict med nycklar: messages, total, page, pages, has_more
