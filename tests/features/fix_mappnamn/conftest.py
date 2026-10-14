@@ -106,4 +106,5 @@ def call_rejected(bridge):
 
 @then("ska Bridge inte ha fått något kommando")
 def bridge_untouched(bridge):
-    bridge.imap._client.status.assert_not_called()
+    # Inte ens NOOP: namnet ska valideras innan anslutningen kontrolleras
+    assert bridge.imap._client.method_calls == [], bridge.imap._client.method_calls

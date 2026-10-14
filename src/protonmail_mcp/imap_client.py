@@ -366,6 +366,7 @@ class IMAPClient:
     async def list_messages(
         self, mailbox: str, page: int = 1, page_size: int = 20
     ) -> dict[str, Any]:
+        _quote_mailbox(mailbox)
         await self._ensure_connected()
         select_resp = await self._select(mailbox)
 
@@ -422,9 +423,11 @@ class IMAPClient:
 
     @_serialized
     async def get_message(self, mailbox: str, uid: str) -> bytes | None:
+        safe_uid = _validate_uid(uid)
+        _quote_mailbox(mailbox)
         await self._ensure_connected()
         await self._select(mailbox)
-        resp = await self._client.uid("fetch", _validate_uid(uid), "BODY.PEEK[]")
+        resp = await self._client.uid("fetch", safe_uid, "BODY.PEEK[]")
         if resp.result != "OK":
             return None
         # lines[0] = "SEQNUM FETCH (BODY[] {SIZE}"
@@ -478,6 +481,7 @@ class IMAPClient:
             criteria.append("UNSEEN")
         elif unseen is False:
             criteria.append("SEEN")
+        _quote_mailbox(mailbox)
 
         await self._ensure_connected()
         await self._select(mailbox)
@@ -550,9 +554,10 @@ class IMAPClient:
 
     @_serialized
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
+        safe_uid = _validate_uid(uid)
+        _quote_mailbox(mailbox)
         await self._ensure_connected()
         await self._select(mailbox)
-        safe_uid = _validate_uid(uid)
         await self._require_uid(mailbox, safe_uid)
         action = "+FLAGS" if add else "-FLAGS"
         resp = await self._uid("store", safe_uid, action, flags)
@@ -628,10 +633,12 @@ class IMAPClient:
 
     @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
+        safe_uid = _validate_uid(uid)
+        _quote_mailbox(mailbox)
         await self._ensure_connected()
         await self._select(mailbox)
         resp = await self._client.uid(
-            "fetch", _validate_uid(uid),
+            "fetch", safe_uid,
             "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REPLY-TO)]"
         )
         if resp.result != "OK":
@@ -693,8 +700,9 @@ class IMAPClient:
 
     @_serialized
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
+        quoted = _quote_mailbox(mailbox)
         await self._ensure_connected()
-        resp = await self._client.status(_quote_mailbox(mailbox), "(MESSAGES UNSEEN)")
+        resp = await self._client.status(quoted, "(MESSAGES UNSEEN)")
         if resp.result != "OK":
             raise ValueError(
                 f"Mappen finns inte eller kan inte läsas: {mailbox!r} ({_response_text(resp)})"
