@@ -41,3 +41,8 @@ Feature: Tålig avkodning av rubriker i inkommande mejl
     When jag svarar på mejlet med reply_to_email
     Then ska svaret skickas till adressen "asa@x.se"
     And mottagaren ska godkännas av SMTP-klientens adresskontroll
+
+  Scenario: Svar på ett mejl med References i gemener bevarar trådkedjan
+    Given ett mejl med Message-ID "<m@x.se>" och rubriken "references: <a@x.se> <b@x.se>" i INBOX
+    When jag svarar på mejlet med reply_to_email
+    Then ska svarets References vara "<a@x.se> <b@x.se> <m@x.se>"

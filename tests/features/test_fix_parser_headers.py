@@ -113,3 +113,19 @@ def smtp_accepts(sent_to):
     from protonmail_mcp.smtp_client import _validate_email_addr
 
     _validate_email_addr(sent_to)
+
+
+@given(
+    parsers.parse('ett mejl med Message-ID "{msgid}" och rubriken "{header}" i INBOX'),
+    target_fixture="raw",
+)
+def mail_with_refs(mock_ctx, msgid, header):
+    raw = f"From: a@b.se\r\nSubject: s\r\nMessage-ID: {msgid}\r\n{header}\r\n\r\nhej\r\n".encode()
+    mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
+    return raw
+
+
+@then(parsers.parse('ska svarets References vara "{refs}"'))
+def reply_references(mock_ctx, sent_to, refs):
+    kwargs = mock_ctx.request_context.lifespan_context.smtp.send_email.call_args.kwargs
+    assert kwargs["additional_headers"]["References"] == refs

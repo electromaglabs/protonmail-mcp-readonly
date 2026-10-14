@@ -362,6 +362,33 @@ def _truncate(text: str, max_length: int | None) -> str:
 
 _BODY_FORMATS = ("text", "full", "stripped")
 
+# Vedertagen stavning för rubriker som anropare slår upp i headers-dicten
+_CANONICAL_HEADERS = {
+    name.lower(): name
+    for name in (
+        "From", "To", "Cc", "Bcc", "Reply-To", "Sender", "Subject", "Date",
+        "Message-ID", "In-Reply-To", "References", "Return-Path", "Received",
+        "MIME-Version", "Content-Type", "Content-Transfer-Encoding",
+        "Content-Disposition", "Content-ID", "List-Unsubscribe", "List-Id",
+    )
+}
+
+
+def _headers_dict(msg: Message) -> dict[str, str]:
+    """Rubriker som str. Nycklar är skiftlägesokänsliga i e-post (RFC 5322):
+    välkända rubriker får vedertagen stavning, övriga stavningen från första
+    förekomsten, och vid dubbletter gäller första förekomsten — samma värde
+    som message_id/references m.fl. bygger på."""
+    headers: dict[str, str] = {}
+    seen: set[str] = set()
+    for key, value in msg.raw_items():
+        lower = key.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        headers[_CANONICAL_HEADERS.get(lower, key)] = decode_header_value(value)
+    return headers
+
 
 def _raw_header(msg: Message, name: str) -> str | None:
     """Första förekomsten av en rubrik, rå (före compat32:s Header-omvandling)."""
@@ -442,7 +469,9 @@ def parse_email(
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": parts["attachments"],
-        "headers": {k: decode_header_value(v) for k, v in msg.raw_items()},
+        "in_reply_to": decode_header_value(_raw_header(msg, "In-Reply-To")),
+        "references": decode_header_value(_raw_header(msg, "References")),
+        "headers": _headers_dict(msg),
     }
 
 
