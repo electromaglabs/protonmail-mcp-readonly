@@ -671,6 +671,8 @@ class IMAPClient:
 
         Bridge tar bort mappen även när den innehåller mejl, och för en etikett
         försvinner den då från alla mejl — därför kontrolleras STATUS först.
+        Bridge tittar inte heller på undermappar, så en mapp med undermappar
+        räknas inte som tom (LIST "<namn>/*").
         """
         kind = _check_user_folder(name)
         quoted = _quote_mailbox(name)
@@ -687,9 +689,28 @@ class IMAPClient:
                 f"försvinner etiketten från alla {count} mejl, och för en mapp ligger mejlen "
                 "sedan inte kvar i mappen (de finns i All Mail)."
             )
+        if not force:
+            await self._refuse_subfolders(name, kind)
         resp = await self._client.delete(quoted)
         _require_ok(resp, f"Att ta bort {kind}en {name}")
         return True
+
+    async def _refuse_subfolders(self, name: str, kind: str) -> None:
+        """Kastar ValueError om mappen har undermappar, tomma eller inte."""
+        # Kodat och citerat som namnet; "*" och "%" i själva namnet är också
+        # jokertecken i LIST, därav prefixkontrollen på svaret
+        pattern = _quote_mailbox(name)[:-1] + '/*"'
+        prefix = name + "/"
+        children = sorted(n for _, n in await self._list(pattern) if n.startswith(prefix))
+        if children:
+            shown = ", ".join(children[:5]) + (" …" if len(children) > 5 else "")
+            raise ValueError(
+                f"{kind.capitalize()}en {name} har {len(children)} "
+                f"undermapp{'ar' if len(children) != 1 else ''} ({shown}) och tas "
+                "inte bort. Bridge kontrollerar inte undermapparna, och vad Proton gör med dem "
+                "och deras mejl när föräldern tas bort är inte känt. Ta bort eller flytta "
+                "undermapparna först, eller använd force=True för att ta bort den ändå."
+            )
 
     @_serialized
     async def rename_folder(self, old_name: str, new_name: str) -> bool:

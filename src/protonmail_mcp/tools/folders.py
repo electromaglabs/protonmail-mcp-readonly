@@ -30,10 +30,11 @@ async def create_folder(ctx: Context, name: str) -> bool:
 async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
     """Ta bort en egen mapp (Folders/…) eller etikett (Labels/…).
 
-    Mappen måste vara tom; annars avvisas anropet med fel och inget ändras.
-    Med force=True tas den bort ändå. Mejlen raderas inte, men:
+    Mappen måste vara tom och sakna undermappar; annars avvisas anropet med
+    fel och inget ändras. Med force=True tas den bort ändå. Mejlen raderas inte, men:
     - för en etikett försvinner etiketten från alla mejl som hade den,
-    - för en mapp ligger mejlen sedan inte kvar i mappen (de finns i All Mail).
+    - för en mapp ligger mejlen sedan inte kvar i mappen (de finns i All Mail),
+    - vad Proton gör med undermappar och deras mejl är inte känt.
     Systemmapparna (INBOX, Sent, Trash, All Mail …) kan inte tas bort.
 
     Args:

@@ -15,7 +15,8 @@ async def test_deletes_empty_folder_after_status(imap_and_bridge):
     imap, bridge = imap_and_bridge
     bridge.mailboxes["Folders/X"] = set()
     assert await imap.delete_folder("Folders/X") is True
-    assert bridge.names() == ["STATUS", "DELETE"]
+    # LIST "Folders/X/*": undermappar kontrolleras också (S3)
+    assert bridge.names() == ["STATUS", "LIST", "DELETE"]
     assert bridge.sent("STATUS") == [("STATUS", "Folders/X", "(MESSAGES)")]
 
 

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from protonmail_mcp.tools.folders import delete_folder
 from protonmail_mcp.tools.mailboxes import get_mailbox_status
 from protonmail_mcp.tools.messages import get_email, get_email_headers
 from tests.fix_flytta_bridge import make_client
@@ -52,6 +53,16 @@ def empty_folder(bridge, name):
 @when(parsers.parse('jag hämtar mejlet med UID "{uid}" i "{mailbox}"'))
 def fetch_mail(mock_ctx, bridge, uid, mailbox):
     run_tool(bridge, get_email(mock_ctx, uid=unescape(uid), mailbox=unescape(mailbox)))
+
+
+@when(parsers.parse('jag tar bort mappen "{name}"'))
+def delete(mock_ctx, bridge, name):
+    run_tool(bridge, delete_folder(mock_ctx, name=name))
+
+
+@when(parsers.parse('jag tar bort mappen "{name}" med force'))
+def delete_force(mock_ctx, bridge, name):
+    run_tool(bridge, delete_folder(mock_ctx, name=name, force=True))
 
 
 @when(parsers.parse('jag hämtar status för "{mailbox}"'))
