@@ -61,12 +61,31 @@ async def move_email(
 
 
 @mcp.tool()
-async def delete_email(ctx: Context, uid: str, mailbox: str = "INBOX") -> bool:
-    """Ta bort ett e-post (markerar som borttaget och expungerar).
+async def delete_email(
+    ctx: Context, uid: str, mailbox: str = "INBOX", permanent: bool = False
+) -> bool:
+    """Ta bort ett e-post genom att flytta det till papperskorgen (Trash).
+
+    Standard (permanent=False): mejlet flyttas till Trash, precis som "ta bort"
+    i Protons egna appar, och kan återställas därifrån. Fungerar från INBOX,
+    Archive, Sent, Spam, Drafts och Folders/…. Avvisas med fel om mejlet
+    redan ligger i Trash, om mailbox är All Mail (Bridge nekar), och om
+    mailbox är en etikett (Labels/…) eller Starred, eftersom mejlet då redan
+    kan ligga i Trash och Bridge i så fall raderar det permanent — ange
+    mappen där mejlet ligger i stället.
+
+    permanent=True: raderar mejlet permanent. Går bara när mailbox är Trash
+    (eller Drafts för utkast) och kan inte ångras. Har mejlet kvar en etikett
+    tar Bridge bara bort det ur Trash/Drafts. Bara det angivna mejlet påverkas.
 
     Args:
-        uid: E-postets UID
+        uid: E-postets UID i mailbox
         mailbox: Mappnamn (standard: INBOX)
+        permanent: Radera permanent i stället för att flytta till Trash (standard: False)
+
+    Returns:
+        True när mejlet är flyttat eller raderat. Annars kastas ett fel med förklaring,
+        t.ex. om UID:t inte finns i mailbox.
     """
     app = _get_app(ctx)
-    return await app.imap.delete_message(mailbox, uid)
+    return await app.imap.delete_message(mailbox, uid, permanent=permanent)

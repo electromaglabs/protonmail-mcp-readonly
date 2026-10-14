@@ -326,6 +326,9 @@ class IMAPClient:
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
         """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas."""
+        return await self._move(mailbox, uid, target)
+
+    async def _move(self, mailbox: str, uid: str, target: str) -> bool:
         safe_uid = _validate_uid(uid)
         _quote_mailbox(mailbox)
         quoted_target = _quote_mailbox(target)
@@ -338,12 +341,36 @@ class IMAPClient:
         return True
 
     @_serialized
-    async def delete_message(self, mailbox: str, uid: str) -> bool:
+    async def delete_message(self, mailbox: str, uid: str, permanent: bool = False) -> bool:
+        """Flyttar ett mejl till Trash, eller raderar det permanent ur Trash/Drafts.
+
+        Permanent radering görs med UID STORE \\Deleted + UID EXPUNGE på just
+        det UID:t, aldrig med EXPUNGE på hela mappen.
+        """
+        safe_uid = _validate_uid(uid)
+        key = _mailbox_key(mailbox)
+        if not permanent:
+            if key == "trash":
+                raise ValueError(
+                    "Mejlet ligger redan i Trash. Använd permanent=True för att radera det permanent."
+                )
+            return await self._move(mailbox, safe_uid, "Trash")
+
+        if key not in _READD_DELETES:
+            raise ValueError(
+                f"Permanent radering görs bara i Trash eller Drafts, inte i {mailbox}. "
+                "Ta bort mejlet utan permanent först, så hamnar det i Trash."
+            )
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
-        safe_uid = _validate_uid(uid)
-        await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
-        await self._client.expunge()
+        await self._require_uid(mailbox, safe_uid)
+        resp = await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
+        _require_ok(resp, f"Borttagningsmarkeringen av UID {safe_uid} i {mailbox}")
+        resp = await self._client.uid("expunge", safe_uid)
+        if resp.result != "OK":
+            # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlet
+            await self._client.uid("store", safe_uid, "-FLAGS", r"(\Deleted)")
+        _require_ok(resp, f"Den permanenta raderingen av UID {safe_uid} i {mailbox}")
         return True
 
     async def _require_uid(self, mailbox: str, uid: str) -> None:

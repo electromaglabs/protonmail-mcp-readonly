@@ -434,10 +434,14 @@ class TestDeleteMessage:
 
     @pytest.mark.asyncio
     async def test_successful_delete(self, client):
-        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        client._client.expunge = AsyncMock(return_value=SimpleNamespace(result="OK"))
+        # Standard är flytt till Trash; UID FETCH kontrollerar först att UID:t finns
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=[b"1 FETCH (UID 42)", b"done"]
+        ))
         result = await client.delete_message("INBOX", "42")
         assert result is True
+        client._client.uid.assert_awaited_with("move", "42", '"Trash"')
+        client._client.expunge.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

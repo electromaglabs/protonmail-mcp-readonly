@@ -30,8 +30,8 @@ def delete_succeeded(result):
     assert result is True
 
 
-@then(parsers.parse('IMAP-klienten ska ha anropat delete_message med UID "{uid}"'))
+@then(parsers.parse('IMAP-klienten ska ha anropat delete_message med UID "{uid}" utan permanent radering'))
 def imap_called_with_uid(mock_ctx, uid):
     mock_ctx.request_context.lifespan_context.imap.delete_message.assert_called_once_with(
-        "INBOX", uid
+        "INBOX", uid, permanent=False
     )
