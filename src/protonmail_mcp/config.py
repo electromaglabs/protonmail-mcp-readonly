@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # <repo>/src/protonmail_mcp/config.py → <repo>/.env. Läses även när servern
@@ -15,6 +16,9 @@ class Settings(BaseSettings):
     imap_port: int = 1143
     smtp_host: str = "127.0.0.1"
     smtp_port: int = 1026
+    # Sekunder per IMAP-kommando. aioimaplib har 10 s som standard, men en
+    # SEARCH i All Mail tar 5–9 s mot Bridge på ett konto med ~30 000 mejl.
+    imap_timeout: float = Field(default=30.0, gt=0)
     username: str
     password: str
     verify_ssl: bool = False
