@@ -24,6 +24,9 @@ _LIST_RE = re.compile(
 _QUOTED_ESCAPE_RE = re.compile(r'\\(.)')
 _UID_RE = re.compile(r'\bUID\s+(\d+)\b')
 _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
+# aioimaplib tar bort "* " före otaggade svar, men tål det om det står kvar
+_FETCH_START_RE = re.compile(r'^(?:\*\s+)?\d+\s+FETCH\s+\(', re.IGNORECASE)
+_LITERAL_END_RE = re.compile(r'\{\d+\}$')
 _STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
 _VALID_UID_RE = re.compile(r'^\d+$')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
@@ -645,38 +648,58 @@ def _sort_newest_first(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
-    """Parsar FETCH-svar med UID, FLAGS och header-fält."""
+    """Parsar FETCH-svar med UID, FLAGS och header-fält.
+
+    Bara svar som har header-literalen tas med: en oombedd flaggändring från
+    en annan klient (`* 1 FETCH (UID 999 FLAGS (\\Seen))`) hamnar i samma svar
+    men är inget brev. Samma UID tas bara med en gång. UID och FLAGS kan stå
+    både före och efter literalen — Bridge lägger UID efter vid UID FETCH.
+    """
     messages = []
+    seen_uids: set[str] = set()
     i = 0
     while i < len(lines):
-        line_s = _decode(lines[i]).strip()
+        head = lines[i]
+        i += 1
+        if isinstance(head, bytearray):
+            continue
+        head_s = _decode(head).strip()
+        if not _FETCH_START_RE.match(head_s) or not _LITERAL_END_RE.search(head_s):
+            continue
 
-        if "FETCH" in line_s and "UID" in line_s:
-            uid_m = _UID_RE.search(line_s)
-            flags_m = _FLAGS_RE.search(line_s)
-            uid = uid_m.group(1) if uid_m else ""
-            flags = flags_m.group(1).split() if flags_m else []
-
-            # Nästa rad kan vara header-data (bytearray)
-            headers_raw = b""
-            if i + 1 < len(lines) and isinstance(lines[i + 1], bytearray):
-                headers_raw = bytes(lines[i + 1])
+        headers_raw = b""
+        if i < len(lines) and isinstance(lines[i], bytearray):
+            headers_raw = bytes(lines[i])
+            i += 1
+        # Resten av svaret efter literalen, t.ex. ")" eller " UID 11319)"
+        tail_s = ""
+        if i < len(lines) and not isinstance(lines[i], bytearray):
+            candidate = _decode(lines[i]).strip()
+            if not _FETCH_START_RE.match(candidate):
+                tail_s = candidate
                 i += 1
 
-            # email-parsern hanterar vikta rader; decode_header_value avkodar
-            # RFC 2047-ord (åäö, emoji) och slår ihop radbrytningar
-            hdrs = BytesHeaderParser().parsebytes(headers_raw)
+        meta = f"{_LITERAL_END_RE.sub('', head_s)} {tail_s}"
+        uid_m = _UID_RE.search(meta)
+        if not uid_m or uid_m.group(1) in seen_uids:
+            continue
+        uid = uid_m.group(1)
+        seen_uids.add(uid)
+        flags_m = _FLAGS_RE.search(meta)
 
-            messages.append({
-                "uid": uid,
-                "flags": flags,
-                "subject": decode_header_value(hdrs.get("subject")),
-                "from": decode_header_value(hdrs.get("from")),
-                "to": decode_header_value(hdrs.get("to")),
-                "date": decode_header_value(hdrs.get("date")),
-                "message_id": decode_header_value(hdrs.get("message-id")),
-            })
-        i += 1
+        # email-parsern hanterar vikta rader; decode_header_value avkodar
+        # RFC 2047-ord (åäö, emoji) och slår ihop radbrytningar
+        hdrs = BytesHeaderParser().parsebytes(headers_raw)
+
+        messages.append({
+            "uid": uid,
+            "flags": flags_m.group(1).split() if flags_m else [],
+            "subject": decode_header_value(hdrs.get("subject")),
+            "from": decode_header_value(hdrs.get("from")),
+            "to": decode_header_value(hdrs.get("to")),
+            "date": decode_header_value(hdrs.get("date")),
+            "message_id": decode_header_value(hdrs.get("message-id")),
+        })
     return messages
 
 
