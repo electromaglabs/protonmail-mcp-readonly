@@ -41,7 +41,8 @@ async def get_email_headers(
     headers = await app.imap.get_message_headers(mailbox, uid)
     if headers is None:
         raise _not_found(uid, mailbox)
-    return {**headers, "mailbox": mailbox}
+    # Samma nyckelnamn som get_email: message-id → message_id, reply-to → reply_to
+    return {**{k.replace("-", "_"): v for k, v in headers.items()}, "mailbox": mailbox}
 
 
 @mcp.tool()

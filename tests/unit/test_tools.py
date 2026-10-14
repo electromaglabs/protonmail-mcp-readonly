@@ -244,7 +244,7 @@ class TestGetEmailHeaders:
         assert result == {
             "from": "alice@example.com",
             "subject": "Hello",
-            "message-id": "<abc@example.com>",
+            "message_id": "<abc@example.com>",
             "mailbox": "INBOX",
         }
 
