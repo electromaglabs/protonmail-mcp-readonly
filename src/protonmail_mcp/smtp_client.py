@@ -1,9 +1,9 @@
+import email.policy
 import logging
 import re
 import ssl
-from email.message import Message
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from email.headerregistry import Address
+from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from typing import Sequence
 
@@ -25,6 +25,23 @@ def _validate_email_addr(addr: str) -> str:
     if not parsed or not _EMAIL_RE.match(parsed):
         raise ValueError(f"Ogiltig e-postadress: {addr!r}")
     return addr
+
+
+def _to_address(addr: str) -> Address:
+    """Gör om en (validerad) adressträng till ett Address-objekt.
+
+    Display-namnet behålls som text så att policyn kan RFC 2047-koda just
+    namnet; själva adressen får aldrig kodas. En IDN-domän skrivs om till
+    punycode så att både header och RCPT TO blir ren ASCII.
+    """
+    name, spec = parseaddr(addr)
+    local, _, domain = spec.rpartition("@")
+    if not domain.isascii():
+        try:
+            domain = domain.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ValueError(f"Ogiltig e-postadress (domän): {addr!r}") from exc
+    return Address(display_name=name, addr_spec=f"{local}@{domain}")
 
 
 def _validate_subject(subject: str) -> str:
@@ -55,24 +72,26 @@ def _build_message(
     cc_list: list[str] | None = None,
     reply_to: str | None = None,
     additional_headers: dict[str, str] | None = None,
-) -> Message:
-    """Build a MIME message without requiring an SMTP connection."""
-    if body_html:
-        msg = MIMEMultipart("alternative")
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        msg.attach(MIMEText(body_html, "html", "utf-8"))
-    else:
-        msg = MIMEText(body, "plain", "utf-8")
+) -> EmailMessage:
+    """Build a MIME message without requiring an SMTP connection.
 
-    msg["From"] = from_addr
-    msg["To"] = ", ".join(to_list)
+    Byggs med den moderna policyn (email.policy.SMTP): den kodar bara
+    display-namn med icke-ASCII-tecken, aldrig hela adressheadern.
+    """
+    msg = EmailMessage(policy=email.policy.SMTP)
+    msg.set_content(body)
+    if body_html:
+        msg.add_alternative(body_html, subtype="html")
+
+    msg["From"] = _to_address(from_addr)
+    msg["To"] = [_to_address(a) for a in to_list]
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
     if cc_list:
-        msg["Cc"] = ", ".join(cc_list)
+        msg["Cc"] = [_to_address(a) for a in cc_list]
     if reply_to:
-        msg["Reply-To"] = reply_to
+        msg["Reply-To"] = _to_address(reply_to)
     if additional_headers:
         for key, value in additional_headers.items():
             msg[key] = value
@@ -129,7 +148,10 @@ class SMTPClient:
             additional_headers=additional_headers,
         )
 
-        all_recipients = to_list + cc_list + bcc_list
+        # RCPT TO får bara den nakna adressen (med punycode-domän)
+        all_recipients = [
+            _to_address(a).addr_spec for a in to_list + cc_list + bcc_list
+        ]
 
         logger.info(
             "Skickar e-post (%d mottagare) via SMTP %s:%d",

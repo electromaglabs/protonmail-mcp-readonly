@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosmtplib
@@ -70,7 +68,7 @@ def test_build_message_plain():
         subject="Test",
         body="Hello",
     )
-    assert isinstance(msg, MIMEText)
+    assert msg.get_content_type() == "text/plain"
     assert msg["From"] == "sender@test.com"
     assert msg["To"] == "alice@test.com"
     assert msg["Subject"] == "Test"
@@ -84,7 +82,7 @@ def test_build_message_html():
         body="Plain",
         body_html="<b>HTML</b>",
     )
-    assert isinstance(msg, MIMEMultipart)
+    assert msg.get_content_type() == "multipart/alternative"
     parts = msg.get_payload()
     assert len(parts) == 2
 
@@ -185,12 +183,12 @@ async def test_send_email_with_cc_and_bcc(settings: Settings, mock_smtp):
 
 
 # -------------------------------------------------------------------
-# body_html → MIMEMultipart/alternative
+# body_html → multipart/alternative
 # -------------------------------------------------------------------
 
 
 async def test_send_email_with_html(settings: Settings, mock_smtp):
-    """body_html should produce MIMEMultipart/alternative."""
+    """body_html should produce multipart/alternative."""
     smtp_cls, smtp_instance = mock_smtp
     client = SMTPClient(settings)
 
@@ -202,8 +200,7 @@ async def test_send_email_with_html(settings: Settings, mock_smtp):
     )
 
     msg = smtp_instance.send_message.call_args.args[0]
-    assert isinstance(msg, MIMEMultipart)
-    assert msg.get_content_subtype() == "alternative"
+    assert msg.get_content_type() == "multipart/alternative"
     parts = msg.get_payload()
     assert len(parts) == 2
     assert parts[0].get_content_type() == "text/plain"
@@ -211,7 +208,7 @@ async def test_send_email_with_html(settings: Settings, mock_smtp):
 
 
 async def test_send_email_plain_only(settings: Settings, mock_smtp):
-    """Without body_html, message should be plain MIMEText."""
+    """Without body_html, message should be a single text/plain part."""
     smtp_cls, smtp_instance = mock_smtp
     client = SMTPClient(settings)
 
@@ -222,7 +219,7 @@ async def test_send_email_plain_only(settings: Settings, mock_smtp):
     )
 
     msg = smtp_instance.send_message.call_args.args[0]
-    assert isinstance(msg, MIMEText)
+    assert not msg.is_multipart()
     assert msg.get_content_type() == "text/plain"
 
 
