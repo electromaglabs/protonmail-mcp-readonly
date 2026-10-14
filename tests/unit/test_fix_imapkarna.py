@@ -137,3 +137,53 @@ class TestLoginLifecycle:
             await client._ensure_connected()
         assert client._client is new
         old.protocol.transport.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# uid-no-timeout: UID STORE/COPY/EXPUNGE får inte hänga med låset taget
+# ---------------------------------------------------------------------------
+async def _never_answers(*_args, **_kwargs):
+    await asyncio.Event().wait()
+
+
+UID_WRITING_CALLS = [
+    ("set_flags", ("INBOX", "1", r"(\Seen)", True)),
+    ("move_message", ("INBOX", "1", "Archive")),
+    ("delete_message", ("INBOX", "1")),
+]
+
+
+class TestUidTimeout:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method,args", UID_WRITING_CALLS)
+    async def test_hanging_uid_command_times_out_and_discards_connection(self, client, method, args):
+        imap = client._client
+        imap.uid.side_effect = _never_answers
+        client.uid_timeout = 0.05
+
+        with pytest.raises((asyncio.TimeoutError, TimeoutError), match="UID"):
+            await asyncio.wait_for(getattr(client, method)(*args), 2)
+
+        assert not client._lock.locked()
+        assert client._client is None
+        imap.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_operation_discards_connection(self, client):
+        """aioimaplib rensar inte hängande kommandon vid avbrott; anslutningen är då oanvändbar."""
+        imap = client._client
+        imap.uid.side_effect = _never_answers
+        task = asyncio.ensure_future(client.set_flags("INBOX", "1", r"(\Seen)", True))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert client._client is None
+        imap.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_validation_error_keeps_connection(self, client):
+        imap = client._client
+        with pytest.raises(ValueError):
+            await client.delete_message("INBOX", "1:*")
+        assert client._client is imap

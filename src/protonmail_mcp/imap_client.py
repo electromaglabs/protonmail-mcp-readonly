@@ -146,7 +146,13 @@ def _serialized(method):
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):
         async with self._lock:
-            return await method(self, *args, **kwargs)
+            try:
+                return await method(self, *args, **kwargs)
+            except (asyncio.CancelledError, asyncio.TimeoutError, OSError, aioimaplib.AioImapException):
+                # Efter timeout eller avbrott har aioimaplib kvar hängande kommandon
+                # och protokollet är i okänt tillstånd — börja om med ny anslutning.
+                self._discard_connection()
+                raise
     return wrapper
 
 
@@ -157,6 +163,9 @@ class IMAPAuthenticationError(Exception):
 class IMAPClient:
     # aioimaplib:s timeout per kommando (hälsning, LOGIN, SELECT, SEARCH, ...)
     timeout: float = 10.0
+    # UID STORE/COPY/EXPUNGE, som aioimaplib 2.0.1 kör helt utan timeout.
+    # COPY till en etikett kräver ett anrop till Proton-API:t, därav längre tid.
+    uid_timeout: float = 30.0
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -219,6 +228,15 @@ class IMAPClient:
                 + (f" ({detail})" if detail else "")
             )
         return resp
+
+    async def _uid(self, command: str, *args: str):
+        """UID STORE/COPY/EXPUNGE med timeout. UID FETCH har redan aioimaplib:s egen."""
+        try:
+            return await asyncio.wait_for(self._client.uid(command, *args), self.uid_timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"ProtonMail Bridge svarade inte på UID {command.upper()} inom {self.uid_timeout:g} s"
+            ) from None
 
     async def _ensure_connected(self) -> None:
         if self._client is not None and self._client.get_state() not in ("AUTH", "SELECTED"):
@@ -372,7 +390,7 @@ class IMAPClient:
         await self._ensure_connected()
         await self._select(mailbox)
         action = "+FLAGS" if add else "-FLAGS"
-        resp = await self._client.uid("store", _validate_uid(uid), action, flags)
+        resp = await self._uid("store", _validate_uid(uid), action, flags)
         return resp.result == "OK"
 
     @_serialized
@@ -380,10 +398,10 @@ class IMAPClient:
         await self._ensure_connected()
         await self._select(mailbox)
         safe_uid = _validate_uid(uid)
-        copy_resp = await self._client.uid("copy", safe_uid, _quote_mailbox(target))
+        copy_resp = await self._uid("copy", safe_uid, _quote_mailbox(target))
         if copy_resp.result != "OK":
             return False
-        await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
+        await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         await self._client.expunge()
         return True
 
@@ -392,7 +410,7 @@ class IMAPClient:
         await self._ensure_connected()
         await self._select(mailbox)
         safe_uid = _validate_uid(uid)
-        await self._client.uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
+        await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
         await self._client.expunge()
         return True
 

@@ -21,6 +21,7 @@ def env():
     e = SimpleNamespace(loop=loop, bridge=bridge, client=IMAPClient(settings), result=None, error=None)
     # Korta timeouter så att scenarierna om uteblivna svar går snabbt
     e.client.timeout = 0.3
+    e.client.uid_timeout = 0.3
     e.run = loop.run_until_complete
     yield e
     loop.run_until_complete(e.client.disconnect())
@@ -28,9 +29,19 @@ def env():
     loop.close()
 
 
+async def _guarded(coro, limit=5.0):
+    """Kör coro men avbryt efter limit sekunder, så att ett hängande anrop blir ett testfel."""
+    task = asyncio.ensure_future(coro)
+    done, _ = await asyncio.wait({task}, timeout=limit)
+    if not done:
+        task.cancel()
+        raise RuntimeError(f"Anropet hängde i mer än {limit:g} s")
+    return task.result()
+
+
 def _attempt(env, coro):
     try:
-        env.result = env.run(coro)
+        env.result = env.run(_guarded(coro))
         env.error = None
     except Exception as exc:  # noqa: BLE001 — scenariot kontrollerar felet
         env.result = None
@@ -142,3 +153,13 @@ def error_timeout(env):
 def listing_shows(env, count):
     assert env.error is None, repr(env.error)
     assert env.result["total"] == count
+
+
+@given(parsers.parse('att Bridge aldrig svarar på "{command}"'))
+def bridge_never_answers(env, command):
+    env.bridge.hang.add(command)
+
+
+@when(parsers.parse('jag flyttar meddelande {uid:d} från "{mailbox}" till "{target}"'))
+def move_message(env, uid, mailbox, target):
+    _attempt(env, env.client.move_message(mailbox, str(uid), target))
