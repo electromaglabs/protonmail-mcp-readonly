@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# <repo>/src/protonmail_mcp/config.py → <repo>/.env. Läses även när servern
+# startas från en annan katalog (t.ex. uv run --project <repo>).
+PROJECT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
@@ -17,7 +22,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
-        env_file=".env",
+        # Senare filer vinner: en .env i arbetskatalogen går före projektrotens
+        env_file=(PROJECT_ENV_FILE, ".env"),
     )
 
 
