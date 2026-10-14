@@ -31,6 +31,7 @@ async def search_emails(
     answered: _Tristate = None,
     larger_than: _Size = None,
     smaller_than: _Size = None,
+    has_attachment: _Tristate = None,
 ) -> dict:
     """Sök e-post med filter. Alla angivna filter måste stämma (AND).
 
@@ -48,6 +49,12 @@ async def search_emails(
     stickprov missades ungefär 1 av 20 träffar — och inte heller ord i
     base64-kodade delar eller skrivna som HTML-entiteter (&ouml;).
 
+    has_attachment avgörs ur mejlens MIME-struktur (BODYSTRUCTURE): en del
+    märkt som bilaga (Content-Disposition: attachment) räknas. Inbäddade
+    bilder, t.ex. en logga i en signatur, räknas inte — get_email kan ändå
+    lista sådana bilder med filnamn under attachments. Kontrollen görs lokalt
+    för de 1000 nyaste kandidaterna, som för ämne och avsändare.
+
     Args:
         mailbox: Mappnamn att söka i (standard: INBOX)
         from_addr: Filtrera på avsändare (adress eller namn, delsträng)
@@ -64,6 +71,7 @@ async def search_emails(
         answered: True=bara besvarade, False=bara obesvarade, None=alla
         larger_than: Bara mejl större än så många byte (hela meddelandet med bilagor)
         smaller_than: Bara mejl mindre än så många byte
+        has_attachment: True=bara mejl med bilagor, False=bara utan, None=alla
 
     Returns:
         dict med nycklar: mailbox, messages, total, has_more, complete, note.
@@ -89,6 +97,7 @@ async def search_emails(
             "answered": answered,
             "larger_than": larger_than,
             "smaller_than": smaller_than,
+            "has_attachment": has_attachment,
         }.items()
         if value is not None
     }

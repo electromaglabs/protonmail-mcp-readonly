@@ -578,6 +578,7 @@ class IMAPClient:
         answered: bool | None = None,
         larger_than: int | None = None,
         smaller_than: int | None = None,
+        has_attachment: bool | None = None,
     ) -> dict[str, Any]:
         """Söker i mappen och returnerar de nyaste träffarna med metadata.
 
@@ -591,6 +592,12 @@ class IMAPClient:
 
         text (IMAP TEXT, hela meddelandet) och body (IMAP BODY, brödtexten)
         söks på servern; se _text_search_criteria för hur åäö hanteras.
+
+        has_attachment avgörs lokalt ur BODYSTRUCTURE: en del med
+        Content-Disposition attachment är en bilaga, en inbäddad (inline) bild
+        är det inte. Bridge bygger alla mejl med bilagor som multipart/mixed
+        (verifierat live), så BODYSTRUCTURE hämtas bara för multipart-mejl, och
+        med has_attachment=True söker servern bara bland dem.
 
         Returnerar dict med messages (nyaste först, högst max_results), total
         (antal hittade träffar; en undre gräns när complete är False),
@@ -629,33 +636,48 @@ class IMAPClient:
             criteria += _text_search_criteria("TEXT", text, "text")
         if body:
             criteria += _text_search_criteria("BODY", body, "body")
+        _flag_criteria(has_attachment, "", "")  # kastar ValueError om det inte är bool/None
+        if has_attachment is True:
+            criteria += ["HEADER", "Content-Type", '"multipart"']
         _quote_mailbox(mailbox)
 
         await self._ensure_connected()
         await self._select(mailbox)
 
         candidates = await self._search_seqnums(criteria)
-        if not terms:
+        if not terms and has_attachment is None:
             newest = candidates[-max_results:]
             msgs = _sort_newest_first(await self._fetch_metadata(newest))
             return _search_result(msgs, len(candidates), max_results, complete=True)
 
+        async def local_filter(seqnums: list[str]) -> list[dict[str, Any]]:
+            msgs = await self._fetch_metadata(seqnums, content_type=has_attachment is not None)
+            return await self._filter_attachments(_filter_messages(msgs, terms), has_attachment)
+
         window = candidates[-_LOCAL_SCAN_LIMIT:]
-        matches = _filter_messages(await self._fetch_metadata(window), terms)
+        matches = await local_filter(window)
         complete = len(candidates) <= len(window)
         ascii_terms = all(term.isascii() for _, term in terms)
         unchecked = 0
         if not complete and ascii_terms and len(matches) <= max_results:
-            raw_hits = await self._search_seqnums(criteria + text_criteria)
+            # Utan ämnes-/adressvillkor är kandidaterna själva de äldre träffarna
+            raw_hits = await self._search_seqnums(criteria + text_criteria) if text_criteria else candidates
             older = [n for n in raw_hits if int(n) < int(window[0])]
             # Nyaste först, tills det finns fler träffar än max_results
             while older and len(matches) <= max_results:
                 chunk, older = older[-_FETCH_CHUNK_SIZE:], older[:-_FETCH_CHUNK_SIZE]
-                matches += _filter_messages(await self._fetch_metadata(chunk), terms)
+                matches += await local_filter(chunk)
             unchecked = len(older)
+            if not terms:
+                complete = unchecked == 0
 
         note = None
-        if not complete:
+        if not complete and not terms:
+            note = (
+                f"Bilagorna kontrollerades inte för alla {len(candidates)} brev som matchar "
+                "övriga villkor, så total är en undre gräns. Begränsa med since eller before."
+            )
+        elif not complete:
             note = (
                 f"Bara de {len(window)} nyaste av {len(candidates)} brev som matchar övriga "
                 "villkor jämfördes mot avkodat ämne, avsändare och mottagare. "
@@ -684,21 +706,53 @@ class IMAPClient:
             raise ValueError(f"Sökningen misslyckades ({resp.result}): {_response_text(resp)}")
         return sorted(_parse_seqnums(resp), key=int)
 
-    async def _fetch_metadata(self, seqnums: list[str]) -> list[dict[str, Any]]:
-        """Hämtar UID, FLAGS och metadatarubriker i delar om högst _FETCH_CHUNK_SIZE."""
+    async def _fetch_metadata(self, seqnums: list[str], content_type: bool = False) -> list[dict[str, Any]]:
+        """Hämtar UID, FLAGS och sökheaders i delar om högst _FETCH_CHUNK_SIZE.
+
+        content_type: hämta även Content-Type (nyckeln "content_type"), som
+        _filter_attachments behöver och tar bort igen.
+        """
+        fields = "DATE FROM TO CC SUBJECT MESSAGE-ID" + (" CONTENT-TYPE" if content_type else "")
+        extra = ("cc", "content-type") if content_type else ("cc",)
         msgs: list[dict[str, Any]] = []
         for start in range(0, len(seqnums), _FETCH_CHUNK_SIZE):
             chunk = seqnums[start:start + _FETCH_CHUNK_SIZE]
             fetch_resp = await self._client.fetch(
                 ",".join(chunk),
-                "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID)])",
+                f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({fields})])",
             )
             if fetch_resp.result != "OK":
                 raise ValueError(
                     f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
                 )
-            msgs += _parse_fetch_metadata(fetch_resp.lines, extra_headers=("cc",))
+            msgs += _parse_fetch_metadata(fetch_resp.lines, extra_headers=extra)
         return msgs
+
+    async def _filter_attachments(
+        self, msgs: list[dict[str, Any]], has_attachment: bool | None
+    ) -> list[dict[str, Any]]:
+        """Behåller mejlen med (True) eller utan (False) bilaga; None behåller alla.
+
+        Bara multipart-mejl kan ha bilagor hos Bridge, så BODYSTRUCTURE hämtas
+        bara för dem. Nyckeln content_type tas bort ur metadata.
+        """
+        if has_attachment is not None:
+            multipart = [m["uid"] for m in msgs if "multipart" in m.get("content_type", "").lower()]
+            with_attachment = await self._fetch_attachment_uids(multipart)
+            msgs = [m for m in msgs if (m["uid"] in with_attachment) == has_attachment]
+        for m in msgs:
+            m.pop("content_type", None)
+        return msgs
+
+    async def _fetch_attachment_uids(self, uids: list[str]) -> set[str]:
+        """UID:n bland uids (i vald mapp) som har minst en bilaga enligt BODYSTRUCTURE."""
+        found: set[str] = set()
+        for start in range(0, len(uids), _FETCH_CHUNK_SIZE):
+            chunk = uids[start:start + _FETCH_CHUNK_SIZE]
+            resp = await self._uid("fetch", ",".join(chunk), "(UID BODYSTRUCTURE)")
+            _require_ok(resp, "Hämtningen av mejlens struktur (BODYSTRUCTURE)")
+            found |= _attachment_uids(resp.lines)
+        return found
 
     @_serialized
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
@@ -966,6 +1020,39 @@ def _text_search_criteria(key: str, value: str, field: str) -> list[str]:
 
 def _ascii_fold(text: str) -> str:
     return "".join(ch.lower() if ch.isascii() else ch for ch in text)
+
+
+# Content-Disposition i BODYSTRUCTURE: ("attachment" ("filename" "x.pdf")) eller ("attachment" NIL).
+# Kräver "(" före, så ett filnamn eller en parameter som heter "attachment" inte räknas.
+_ATTACHMENT_DISPOSITION_RE = re.compile(r'\(\s*"attachment"\s+(?:\(|NIL\b)', re.IGNORECASE)
+_QUOTED_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _attachment_uids(lines: list) -> set[str]:
+    """UID:n i ett FETCH (UID BODYSTRUCTURE)-svar som har en del med disposition attachment.
+
+    Ett FETCH-svar kan delas upp av literaler (t.ex. ett filnamn med
+    specialtecken); literalens innehåll ersätts med en tom sträng så att
+    strukturen runt den behålls.
+    """
+    responses: list[str] = []
+    for line in lines:
+        if isinstance(line, bytearray):
+            if responses:
+                responses[-1] += '""'
+            continue
+        text = _decode(line).strip()
+        if _FETCH_START_RE.match(text):
+            responses.append("")
+        elif not responses:
+            continue
+        responses[-1] += _LITERAL_END_RE.sub("", text)
+    found = set()
+    for response in responses:
+        uid = _UID_RE.search(_QUOTED_STRING_RE.sub('""', response))
+        if uid and _ATTACHMENT_DISPOSITION_RE.search(response):
+            found.add(uid.group(1))
+    return found
 
 
 def _filter_messages(msgs: list[dict[str, Any]], terms: list[tuple[str, str]]) -> list[dict[str, Any]]:
