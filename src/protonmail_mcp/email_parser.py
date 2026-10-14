@@ -174,14 +174,16 @@ def parse_addresses(header_value) -> list[tuple[str, str]]:
     """Parsa en adressrubrik till (namn, adress)-par med avkodade namn.
 
     Adresslistan delas upp FÖRE RFC 2047-avkodningen, så att ett kodat
-    kommatecken eller "<…>" i namnet inte kan skapa nya adresser.
+    kommatecken eller "<…>" i namnet inte kan skapa nya adresser. Bara
+    namnet avkodas: kodade ord är inte tillåtna i adressdelen (RFC 2047 §5),
+    och att avkoda dem där skulle låta avsändaren tillverka en annan adress.
     """
     if not header_value:
         return []
     text = _header_to_text(header_value)
     pairs = []
     for name, addr in email.utils.getaddresses([text]):
-        name, addr = decode_header_value(name), decode_header_value(addr)
+        name, addr = decode_header_value(name), "".join(addr.split())
         if name or addr:
             pairs.append((name, addr))
     return pairs
@@ -194,7 +196,13 @@ def format_address(name: str, addr: str) -> str:
         return addr
     if _ADDR_SPECIALS_RE.search(name):
         name = '"%s"' % _ADDR_ESCAPES_RE.sub(r"\\\g<0>", name)
-    return f"{name} <{addr}>" if addr else name
+    if not addr:
+        return name
+    formatted = f"{name} <{addr}>"
+    # Ingen tolkningsskillnad: den som parsar strängen ska få samma adress
+    if email.utils.parseaddr(formatted)[1] != addr:
+        return addr
+    return formatted
 
 
 def extract_addresses(header_value: str | None) -> list[str]:
@@ -386,7 +394,7 @@ def parse_email(
     }
     formatted = {key: [format_address(n, a) for n, a in pairs] for key, pairs in addresses.items()}
     # Utan parsbar adress (bara ett namn, trasig rubrik): visa den avkodade texten
-    if any(addr for _, addr in addresses["from"]):
+    if any("@" in addr for _, addr in addresses["from"]):
         from_ = ", ".join(formatted["from"])
     else:
         from_ = decode_header_value(_raw_header(msg, "From"))

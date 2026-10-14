@@ -69,3 +69,32 @@ class TestFromIsReplyable:
             "bcc": [],
             "reply_to": [],
         }
+
+
+class TestNoParserDifferential:
+    """Givet en adressrubrik där kodade ord försöker skapa en annan adress
+    När den parsas
+    Så avkodas bara visningsnamnet — aldrig adressdelen — och varje
+    formaterad adress parsas tillbaka till exakt det par som rapporteras."""
+
+    NASTY = [
+        "x <=?utf-8?q?evil=40a.com=3E_=3Creal?=@b.com>",
+        "x <a@b.se>, =?utf-8?q?evil=40a.com?=",
+        "=?utf-8?q?a=5C=22_=3Cevil=40x=3E?= <ok@b.se>",
+        '"a\\" <evil@x>" <ok@b.se>',
+        "=?utf-8?q?Gr=C3=B6n=0D=0ABcc=3A_evil=40x?= <g@x.se>",
+    ]
+
+    @pytest.mark.parametrize("value", NASTY)
+    def test_encoded_words_never_become_an_address(self, value):
+        r = parse_email(_mail(f"From: {value}\r\nTo: {value}"))
+        for _, addr in r["addresses"]["to"]:
+            assert addr != "evil@a.com" and not addr.startswith("evil@")
+
+    @pytest.mark.parametrize("value", NASTY)
+    def test_formatted_addresses_roundtrip(self, value):
+        r = parse_email(_mail(f"From: {value}\r\nTo: {value}"))
+        for formatted, (name, addr) in zip(r["to"], r["addresses"]["to"]):
+            assert "\r" not in formatted and "\n" not in formatted
+            if addr and "@" in addr:
+                assert parseaddr(formatted)[1] == addr
