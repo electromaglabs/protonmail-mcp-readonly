@@ -108,3 +108,30 @@ async def test_bcc_only_send_has_no_empty_to_on_the_wire():
         await make_client().send_email(to=[], bcc="h@x.se", subject="s", body="b")
     assert b"\r\nTo:" not in cap.raw and not cap.raw.startswith(b"To:")
     assert cap.recipients == ["h@x.se"]
+
+
+# -------------------------------------------------------------------
+# B9: Message-ID ska använda kontots domän, inte maskinens värdnamn
+# -------------------------------------------------------------------
+
+
+def test_message_id_uses_account_domain(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket, "getfqdn", lambda *a: "hemlig-dator.lan")
+    msg = _build_message(
+        from_addr="Anna <anna@proton.me>", to_list=["a@x.se"], subject="s", body="b"
+    )
+    msgid = str(msg["Message-ID"])
+    assert msgid.endswith("@proton.me>")
+    assert "hemlig-dator" not in msgid
+
+
+async def test_sent_message_id_uses_settings_username_domain(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket, "getfqdn", lambda *a: "hemlig-dator.lan")
+    with capture_smtp() as cap:
+        await make_client("me@pm.me").send_email(to="a@x.se", subject="s", body="b")
+    assert str(cap.parsed["Message-ID"]).endswith("@pm.me>")
+    assert b"hemlig-dator" not in cap.raw

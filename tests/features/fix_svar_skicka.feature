@@ -27,3 +27,8 @@ Feature: Skicka e-post med korrekta headers
     Then ska mejlet sakna headern "To"
     And ska mejlet sakna headern "Bcc"
     And SMTP-mottagarna ska vara "hemlig@example.se"
+
+  Scenario: Message-ID avslöjar inte datorns värdnamn
+    Given en SMTP-klient för kontot "anna@proton.me"
+    When jag skickar ett mail till "bob@example.com"
+    Then ska Message-ID sluta med "@proton.me>"

@@ -83,13 +83,16 @@ def _build_message(
     if body_html:
         msg.add_alternative(body_html, subtype="html")
 
-    msg["From"] = _to_address(from_addr)
+    sender = _to_address(from_addr)
+    msg["From"] = sender
     # To är valfri enligt RFC 5322, men får inte vara tom om den finns
     if to_list:
         msg["To"] = [_to_address(a) for a in to_list]
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid()
+    # Utan domain använder make_msgid() maskinens värdnamn (getfqdn), vilket
+    # läcker det lokala nätets namn till mottagarna
+    msg["Message-ID"] = make_msgid(domain=sender.domain or "localhost")
     if cc_list:
         msg["Cc"] = [_to_address(a) for a in cc_list]
     if reply_to:

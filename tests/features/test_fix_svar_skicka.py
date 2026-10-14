@@ -71,3 +71,8 @@ def send_bcc_only(client, captured, outcome, bcc):
 @then(parsers.parse('ska mejlet sakna headern "{name}"'))
 def header_missing(captured, name):
     assert name not in captured.parsed
+
+
+@then(parsers.parse('ska Message-ID sluta med "{suffix}"'))
+def message_id_suffix(captured, suffix):
+    assert str(captured.parsed["Message-ID"]).endswith(suffix)
