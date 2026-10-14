@@ -21,3 +21,29 @@ Feature: Robust IMAP-anslutning mot ProtonMail Bridge
     Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
     When jag listar mejlen i "Finns-inte"
     Then ska jag få ett fel som säger att mappen "Finns-inte" inte finns
+
+  Scenario: En nekad inloggning låser inte klienten
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att Bridge nekar inloggning
+    When jag listar mejlen i "INBOX"
+    Then ska jag få ett fel som säger att inloggningen misslyckades
+    When Bridge åter godtar inloggning
+    And jag listar mejlen i "INBOX"
+    Then ska listningen visa 2 meddelanden
+
+  Scenario: En inloggning som aldrig besvaras låser inte klienten
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att Bridge inte svarar på inloggning
+    When jag listar mejlen i "INBOX"
+    Then ska jag få ett timeoutfel
+    When Bridge åter svarar på inloggning
+    And jag listar mejlen i "INBOX"
+    Then ska listningen visa 2 meddelanden
+
+  Scenario: Ett anrop som avbryts mitt i inloggningen låser inte klienten
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att Bridge svarar på inloggning först efter en stund
+    When anropet avbryts under inloggningen
+    And Bridge har hunnit svara på inloggningen
+    And jag listar mejlen i "INBOX"
+    Then ska listningen visa 2 meddelanden

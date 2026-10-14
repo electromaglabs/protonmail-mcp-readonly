@@ -19,6 +19,8 @@ def env():
     loop.run_until_complete(bridge.start())
     settings = Settings(username="u@example.com", password="pw", imap_port=bridge.port, _env_file=None)
     e = SimpleNamespace(loop=loop, bridge=bridge, client=IMAPClient(settings), result=None, error=None)
+    # Korta timeouter så att scenarierna om uteblivna svar går snabbt
+    e.client.timeout = 0.3
     e.run = loop.run_until_complete
     yield e
     loop.run_until_complete(e.client.disconnect())
@@ -77,3 +79,66 @@ def relist_shows(env, mailbox, count):
     result = env.run(env.client.list_messages(mailbox))
     assert result["total"] == count
     assert len(result["messages"]) == count
+
+
+@given("att Bridge nekar inloggning")
+def bridge_refuses_login(env):
+    env.bridge.login_reply = "NO"
+
+
+@given("att Bridge inte svarar på inloggning")
+def bridge_ignores_login(env):
+    env.bridge.hang.add("LOGIN")
+
+
+@given("att Bridge svarar på inloggning först efter en stund")
+def bridge_slow_login(env):
+    env.bridge.login_delay = 0.2
+
+
+@when("Bridge har hunnit svara på inloggningen")
+def bridge_answered_login(env):
+    env.run(asyncio.sleep(0.3))
+    env.bridge.login_delay = 0.0
+
+
+@when("Bridge åter godtar inloggning")
+def bridge_accepts_login(env):
+    env.bridge.login_reply = "OK"
+
+
+@when("Bridge åter svarar på inloggning")
+def bridge_answers_login(env):
+    env.bridge.hang.discard("LOGIN")
+
+
+@when("anropet avbryts under inloggningen")
+def cancel_during_login(env):
+    async def go():
+        task = asyncio.ensure_future(env.client.list_messages("INBOX"))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    env.run(go())
+
+
+@then("ska jag få ett fel som säger att inloggningen misslyckades")
+def error_login_failed(env):
+    assert env.error is not None, f"Inget fel, resultat: {env.result!r}"
+    assert "Inloggningen" in str(env.error)
+
+
+@then("ska jag få ett timeoutfel")
+def error_timeout(env):
+    assert isinstance(env.error, (asyncio.TimeoutError, TimeoutError)), repr(env.error)
+    assert str(env.error), "Timeoutfelet ska ha ett begripligt meddelande"
+
+
+@then(parsers.parse("ska listningen visa {count:d} meddelanden"))
+def listing_shows(env, count):
+    assert env.error is None, repr(env.error)
+    assert env.result["total"] == count

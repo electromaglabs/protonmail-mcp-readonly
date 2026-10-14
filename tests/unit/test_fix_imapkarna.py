@@ -79,3 +79,61 @@ class TestSelectChecked:
         await client.delete_message("INBOX", "1")
         assert client._client is imap
         imap.select.assert_awaited_once_with('"INBOX"')
+
+
+# ---------------------------------------------------------------------------
+# lifecycle-nonauth: en misslyckad inloggning får inte låsa klienten
+# ---------------------------------------------------------------------------
+class TestLoginLifecycle:
+    @pytest.fixture
+    def fresh(self, settings):
+        return IMAPClient(settings)
+
+    @pytest.mark.asyncio
+    async def test_login_no_raises_and_leaves_no_client(self, fresh):
+        new = _mock_imap(state="NONAUTH")
+        new.login.return_value = SimpleNamespace(result="NO", lines=[b"[AUTHENTICATIONFAILED] no such user"])
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            with pytest.raises(Exception, match="Inloggningen.*misslyckades"):
+                await fresh.connect()
+        assert fresh._client is None
+        new.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_login_leaves_no_client(self, fresh):
+        new = _mock_imap(state="NONAUTH")
+        new.login.side_effect = asyncio.CancelledError
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            with pytest.raises(asyncio.CancelledError):
+                await fresh.connect()
+        assert fresh._client is None
+        new.protocol.transport.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_login_timeout_has_message_and_leaves_no_client(self, fresh):
+        new = _mock_imap(state="NONAUTH")
+        new.login.side_effect = asyncio.TimeoutError
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            with pytest.raises((asyncio.TimeoutError, TimeoutError), match="inloggning"):
+                await fresh.connect()
+        assert fresh._client is None
+
+    @pytest.mark.asyncio
+    async def test_successful_login_sets_client(self, fresh):
+        new = _mock_imap(state="AUTH")
+        new.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            await fresh.connect()
+        assert fresh._client is new
+
+    @pytest.mark.asyncio
+    async def test_ensure_connected_replaces_unauthenticated_client(self, client):
+        """NOOP är tillåtet i NONAUTH, så NOOP ensam kan inte avgöra att klienten är frisk."""
+        old = _mock_imap(state="NONAUTH")
+        client._client = old
+        new = _mock_imap(state="AUTH")
+        new.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            await client._ensure_connected()
+        assert client._client is new
+        old.protocol.transport.close.assert_called_once()

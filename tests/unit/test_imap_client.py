@@ -17,6 +17,16 @@ from protonmail_mcp.imap_client import (
 )
 
 
+def _imap_mock() -> AsyncMock:
+    """aioimaplib.IMAP4-attrapp: inloggad, SELECT/LOGIN svarar OK, get_state och transport är synkrona."""
+    m = AsyncMock()
+    m.select.return_value = SimpleNamespace(result="OK", lines=[])
+    m.login.return_value = SimpleNamespace(result="OK", lines=[])
+    m.get_state = MagicMock(return_value="SELECTED")
+    m.protocol = MagicMock()
+    return m
+
+
 # ---------------------------------------------------------------------------
 # _validate_uid
 # ---------------------------------------------------------------------------
@@ -243,8 +253,7 @@ class TestListMailboxes:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -336,8 +345,7 @@ class TestGetMessage:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -394,8 +402,7 @@ class TestSearchMessages:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -427,8 +434,7 @@ class TestDeleteMessage:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -461,7 +467,7 @@ class TestConnectErrors:
         """asyncio.TimeoutError från wait_hello_from_server ska bubbla upp."""
         import asyncio
 
-        mock_imap = AsyncMock()
+        mock_imap = _imap_mock()
         mock_imap.wait_hello_from_server = AsyncMock(side_effect=asyncio.TimeoutError)
 
         with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=mock_imap):
@@ -471,7 +477,7 @@ class TestConnectErrors:
     @pytest.mark.asyncio
     async def test_login_failure(self, client, monkeypatch):
         """Login som kastar exception ska bubbla upp."""
-        mock_imap = AsyncMock()
+        mock_imap = _imap_mock()
         mock_imap.wait_hello_from_server = AsyncMock()
         mock_imap.login = AsyncMock(side_effect=Exception("LOGIN failed"))
 
@@ -495,13 +501,12 @@ class TestEnsureConnectedReconnect:
     @pytest.mark.asyncio
     async def test_ensure_connected_reconnects_on_noop_failure(self, client):
         """Om NOOP misslyckas ska klienten återansluta."""
-        mock_old_client = AsyncMock()
+        mock_old_client = _imap_mock()
         mock_old_client.noop = AsyncMock(side_effect=Exception("Connection lost"))
         client._client = mock_old_client
 
-        mock_new_client = AsyncMock()
+        mock_new_client = _imap_mock()
         mock_new_client.wait_hello_from_server = AsyncMock()
-        mock_new_client.login = AsyncMock()
 
         with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=mock_new_client):
             await client._ensure_connected()
@@ -522,8 +527,7 @@ class TestListMailboxesBadResult:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -548,8 +552,7 @@ class TestSearchMessagesMetadata:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -602,8 +605,7 @@ class TestSearchMessagesEmpty:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -638,8 +640,7 @@ class TestGetMessageHeaders:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -680,8 +681,7 @@ class TestFolderManagement:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     @pytest.mark.asyncio
@@ -717,8 +717,7 @@ class TestListMessagesPagination:
         from protonmail_mcp.config import Settings
         settings = Settings()
         imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         return imap
 
     def _make_select_resp(self, exists: int):
@@ -799,8 +798,7 @@ class TestReadOnlyAndDecodedListing:
         monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
         from protonmail_mcp.config import Settings
         imap = IMAPClient(Settings())
-        imap._client = AsyncMock()
-        imap._client.select.return_value = SimpleNamespace(result="OK", lines=[])
+        imap._client = _imap_mock()
         imap._client.select = AsyncMock(
             return_value=SimpleNamespace(result="OK", lines=["5 EXISTS"])
         )
@@ -884,7 +882,7 @@ class TestConcurrentCalls:
     async def test_parallel_calls_login_once_and_do_not_interleave(self, client):
         in_flight = 0
         max_in_flight = 0
-        fake = AsyncMock()
+        fake = _imap_mock()
 
         async def slow_select(_mailbox):
             nonlocal in_flight, max_in_flight

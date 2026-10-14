@@ -150,21 +150,46 @@ def _serialized(method):
     return wrapper
 
 
+class IMAPAuthenticationError(Exception):
+    """Bridge nekade inloggningen (fel användarnamn/Bridge-lösenord, eller kontot inte laddat)."""
+
+
 class IMAPClient:
+    # aioimaplib:s timeout per kommando (hälsning, LOGIN, SELECT, SEARCH, ...)
+    timeout: float = 10.0
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: aioimaplib.IMAP4 | None = None
         self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
-        logger.info("Ansluter till IMAP %s:%d (plain)", self._settings.imap_host, self._settings.imap_port)
+        host, port = self._settings.imap_host, self._settings.imap_port
+        logger.info("Ansluter till IMAP %s:%d (plain)", host, port)
         # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
-        self._client = aioimaplib.IMAP4(
-            host=self._settings.imap_host,
-            port=self._settings.imap_port,
-        )
-        await self._client.wait_hello_from_server()
-        await self._client.login(self._settings.username, self._settings.password)
+        client = aioimaplib.IMAP4(host=host, port=port, timeout=self.timeout)
+        # self._client sätts först när inloggningen lyckats. Annars fastnar en
+        # klient i NONAUTH, där NOOP lyckas men allt annat avvisas, för alltid.
+        try:
+            await client.wait_hello_from_server()
+            try:
+                resp = await client.login(self._settings.username, self._settings.password)
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"ProtonMail Bridge på {host}:{port} svarade inte på inloggningen "
+                    f"inom {self.timeout:g} s"
+                ) from None
+            if resp.result != "OK":
+                detail = " ".join(_decode(line) for line in resp.lines).strip()
+                raise IMAPAuthenticationError(
+                    f"Inloggningen mot ProtonMail Bridge misslyckades ({resp.result} {detail}) — "
+                    "kontrollera PROTONMAIL_USERNAME och Bridge-lösenordet"
+                )
+        except BaseException:
+            # Även CancelledError: stäng socketen så att ingen halvinloggad session blir kvar
+            _close_transport(client)
+            raise
+        self._client = client
         logger.info("IMAP inloggad som %s", self._settings.username)
 
     async def disconnect(self) -> None:
@@ -196,6 +221,9 @@ class IMAPClient:
         return resp
 
     async def _ensure_connected(self) -> None:
+        if self._client is not None and self._client.get_state() not in ("AUTH", "SELECTED"):
+            logger.warning("IMAP-klienten är inte inloggad (%s) — återansluter", self._client.get_state())
+            self._discard_connection()
         if self._client is None:
             await self.connect()
             return

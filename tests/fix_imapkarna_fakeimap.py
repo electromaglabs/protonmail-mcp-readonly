@@ -16,6 +16,7 @@ class FakeBridge:
         # mapp -> {uid: {"subject": str, "flags": set[str]}}
         self.mailboxes: dict[str, dict[int, dict]] = {}
         self.login_reply = "OK"          # "OK" | "NO"
+        self.login_delay = 0.0           # sekunder innan LOGIN besvaras
         self.search_reply = "OK"         # "OK" | "BAD"
         self.hang: set[str] = set()      # kommandon som aldrig besvaras, t.ex. {"UID COPY"}
         self.total_connections = 0
@@ -60,6 +61,8 @@ class FakeBridge:
                 if not line:
                     break
                 tag, _, rest = line.decode().rstrip("\r\n").partition(" ")
+                if rest.upper().startswith("LOGIN") and self.login_delay:
+                    await asyncio.sleep(self.login_delay)
                 for out in self._reply(tag, rest, state):
                     writer.write(out.encode() if isinstance(out, str) else out)
                 await writer.drain()
