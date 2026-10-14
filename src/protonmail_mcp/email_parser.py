@@ -71,9 +71,12 @@ def _decode_bytes(data: bytes, charset: str | None) -> str:
     return data.decode("latin-1")
 
 
-# RFC 2047 encoded-word, lika tillåtande som email.header.ecre
+# RFC 2047 encoded-word. encoded-text får inte innehålla '?' (§4), så texten
+# slutar vid första '?' — annars letar varje oavslutat "=?" efter "?=" ända
+# till slutet av rubriken och avkodningen blir kvadratisk (S1). Ett okodat '?'
+# sist i ett Q-ord ("du??=") tillåts ändå, som i email.header.
 _ENCODED_WORD_RE = re.compile(
-    r"=\?(?P<charset>[^?]*?)\?(?P<encoding>[qQbB])\?(?P<text>.*?)\?=", re.DOTALL
+    r"=\?(?P<charset>[^?]*)\?(?P<encoding>[qQbB])\?(?P<text>[^?]*\??)\?="
 )
 
 
