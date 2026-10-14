@@ -11,6 +11,10 @@ async def mark_email_read(ctx: Context, uid: str, mailbox: str = "INBOX") -> boo
     Args:
         uid: E-postets UID
         mailbox: Mappnamn (standard: INBOX)
+
+    Returns:
+        True när markeringen är gjord. Kastar ett fel om UID:t inte finns i
+        mailbox (UID:n gäller per mapp) eller om Bridge nekar.
     """
     app = _get_app(ctx)
     return await app.imap.set_flags(mailbox, uid, r"(\Seen)", add=True)
@@ -23,6 +27,10 @@ async def mark_email_unread(ctx: Context, uid: str, mailbox: str = "INBOX") -> b
     Args:
         uid: E-postets UID
         mailbox: Mappnamn (standard: INBOX)
+
+    Returns:
+        True när markeringen är gjord. Kastar ett fel om UID:t inte finns i
+        mailbox (UID:n gäller per mapp) eller om Bridge nekar.
     """
     app = _get_app(ctx)
     return await app.imap.set_flags(mailbox, uid, r"(\Seen)", add=False)

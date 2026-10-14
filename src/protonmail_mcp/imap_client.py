@@ -319,9 +319,12 @@ class IMAPClient:
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
+        safe_uid = _validate_uid(uid)
+        await self._require_uid(mailbox, safe_uid)
         action = "+FLAGS" if add else "-FLAGS"
-        resp = await self._client.uid("store", _validate_uid(uid), action, flags)
-        return resp.result == "OK"
+        resp = await self._client.uid("store", safe_uid, action, flags)
+        _require_ok(resp, f"Ändringen av flaggorna på UID {safe_uid} i {mailbox}")
+        return True
 
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
