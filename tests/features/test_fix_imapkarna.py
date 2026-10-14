@@ -85,9 +85,10 @@ def error_mailbox_missing(env, mailbox):
     assert mailbox in str(env.error)
 
 
-@then("ska inga flaggor ha ändrats på servern")
-def no_flags_changed(env):
-    assert env.bridge.stores == []
+@then("ska Bridge inte ha fått något skrivkommando")
+def no_writes(env):
+    # Radering är UID MOVE till Trash, inte STORE: kontrollera alla skrivkommandon (T5)
+    assert env.bridge.writes == []
 
 
 @then(parsers.parse('ska en ny listning av "{mailbox}" visa {count:d} meddelanden'))

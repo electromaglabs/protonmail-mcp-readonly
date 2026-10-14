@@ -11,7 +11,9 @@ Feature: Flytta ett mejl utan att röra andra mejl
     And ska Bridge inte ha fått "EXPUNGE"
     And ska Bridge inte ha fått "UID STORE"
 
-  Scenario: Flytt till en etikett görs också med UID MOVE så att mejlet ligger kvar i Inkorgen
+  # Att mejlet då ligger kvar i Inkorgen bygger på Bridges källkod (rapport-proton N2);
+  # låtsas-Bridgen modellerar inte det, så scenariot kontrollerar bara kommandot.
+  Scenario: Flytt till en etikett görs med UID MOVE och utan EXPUNGE
     Given att mejlet med UID "42" ligger i "INBOX"
     When jag flyttar mejlet med UID "42" från "INBOX" till "Labels/Kvitton"
     Then ska verktyget svara att det lyckades

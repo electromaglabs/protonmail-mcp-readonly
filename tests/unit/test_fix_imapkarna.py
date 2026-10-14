@@ -148,22 +148,38 @@ async def _never_answers(*_args, **_kwargs):
     await asyncio.Event().wait()
 
 
+# (metod, argument, kommandot som hänger, kommandot felet ska nämna). UID-kontrollen
+# (UID FETCH) svarar, så att det verkligen är skrivkommandot som hänger (T2).
 UID_WRITING_CALLS = [
-    ("set_flags", ("INBOX", "1", r"(\Seen)", True)),
-    ("move_message", ("INBOX", "1", "Archive")),
-    ("delete_message", ("INBOX", "1")),
+    ("set_flags", ("INBOX", "1", r"(\Seen)", True), "store", "UID STORE"),
+    ("move_message", ("INBOX", "1", "Archive"), "move", "UID MOVE"),
+    ("delete_message", ("INBOX", "1"), "move", "UID MOVE"),
+    ("delete_message", ("Trash", "1", True), "store", "UID STORE"),
+    ("delete_message", ("Trash", "1", True), "expunge", "UID EXPUNGE"),
 ]
+
+
+def _hangs_on(command):
+    async def uid(cmd, *args):
+        if cmd.lower() == command:
+            await asyncio.Event().wait()
+        if cmd.lower() == "fetch":
+            return SimpleNamespace(result="OK", lines=[b"1 FETCH (UID 1)", b"FETCH completed"])
+        return SimpleNamespace(result="OK", lines=[])
+    return uid
 
 
 class TestUidTimeout:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("method,args", UID_WRITING_CALLS)
-    async def test_hanging_uid_command_times_out_and_discards_connection(self, client, method, args):
+    @pytest.mark.parametrize("method,args,hang,expected", UID_WRITING_CALLS)
+    async def test_hanging_uid_command_times_out_and_discards_connection(
+        self, client, method, args, hang, expected
+    ):
         imap = client._client
-        imap.uid.side_effect = _never_answers
+        imap.uid.side_effect = _hangs_on(hang)
         client.uid_timeout = 0.05
 
-        with pytest.raises((asyncio.TimeoutError, TimeoutError), match="UID"):
+        with pytest.raises((asyncio.TimeoutError, TimeoutError), match=expected):
             await asyncio.wait_for(getattr(client, method)(*args), 2)
 
         assert not client._lock.locked()

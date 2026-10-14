@@ -5,10 +5,11 @@ Feature: Robust IMAP-anslutning mot ProtonMail Bridge
 
   Scenario: Radering i en felstavad mapp rör inte meddelandet i den förra mappen
     Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And en Bridge med mappen "Trash" som innehåller 0 meddelanden
     And att jag nyss har listat mejlen i "INBOX"
     When jag raderar meddelande 1 i mappen "Inkorgen-felstavad"
     Then ska jag få ett fel som säger att mappen "Inkorgen-felstavad" inte finns
-    And ska inga flaggor ha ändrats på servern
+    And ska Bridge inte ha fått något skrivkommando
     And ska en ny listning av "INBOX" visa 2 meddelanden
 
   Scenario: Sökning i en mapp som inte finns ger fel i stället för träffar från förra mappen

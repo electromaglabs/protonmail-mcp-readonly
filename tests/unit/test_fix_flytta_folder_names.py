@@ -38,7 +38,8 @@ class TestCreateFolder:
     async def test_nested_folder_error_mentions_parent(self, imap_and_bridge):
         imap, bridge = imap_and_bridge
         bridge.refuse["CREATE"] = "operation not allowed"
-        with pytest.raises(ValueError, match="Folders/A"):
+        # "Folders/A" ensamt matchar redan namnet Folders/A/B i felet (G2)
+        with pytest.raises(ValueError, match="måste Folders/A redan finnas"):
             await imap.create_folder("Folders/A/B")
 
 

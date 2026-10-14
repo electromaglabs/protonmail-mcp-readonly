@@ -22,6 +22,8 @@ class FakeBridge:
         self.total_connections = 0
         self.open_connections = 0
         self.stores: list[tuple[str | None, str, str]] = []  # (vald mapp, uid, flaggor)
+        # Alla skrivkommandon (UID STORE/COPY/MOVE/EXPUNGE, EXPUNGE): (vald mapp, kommandorad)
+        self.writes: list[tuple[str | None, str]] = []
         self.port: int | None = None
         self._server: asyncio.AbstractServer | None = None
         self._writers: set[asyncio.StreamWriter] = set()
@@ -79,6 +81,8 @@ class FakeBridge:
         words = rest.split(" ")
         cmd = words[0].upper()
         key = f"{cmd} {words[1].upper()}" if cmd == "UID" and len(words) > 1 else cmd
+        if key in ("UID STORE", "UID COPY", "UID MOVE", "UID EXPUNGE", "EXPUNGE"):
+            self.writes.append((state["selected"], rest))
         if key in self.hang:
             return []
 
