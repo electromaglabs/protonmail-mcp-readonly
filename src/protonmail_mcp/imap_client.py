@@ -28,7 +28,9 @@ _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
 # aioimaplib tar bort "* " före otaggade svar, men tål det om det står kvar
 _FETCH_START_RE = re.compile(r'^(?:\*\s+)?\d+\s+FETCH\s+\(', re.IGNORECASE)
 _LITERAL_END_RE = re.compile(r'\{\d+\}$')
-_STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
+# Statuslistan sist på STATUS-raden: '"namn" (MESSAGES 5 UNSEEN 1)'. Bara den
+# tolkas — mappnamnet före kan själv innehålla t.ex. "Messages 0".
+_STATUS_ITEMS_RE = re.compile(r'\(([^()]*)\)\s*$')
 # aioimaplib tolkar svaret rekursivt, en stackram per rad; ~3000 brev i ett
 # FETCH-svar ger RecursionError och en låst anslutning
 _FETCH_CHUNK_SIZE = 200
@@ -711,14 +713,8 @@ class IMAPClient:
             raise ValueError(
                 f"Mappen finns inte eller kan inte läsas: {mailbox!r} ({_response_text(resp)})"
             )
-        status: dict[str, int] = {}
-        for line in resp.lines:
-            text = _decode(line)
-            for m in _STATUS_NUM_RE.finditer(text):
-                key = m.group(1).lower()
-                if key in ("messages", "unseen"):
-                    status[key] = int(m.group(2))
-        return status
+        items = _status_items(resp)
+        return {key: items[key] for key in ("messages", "unseen") if key in items}
 
 
 def _header_matches(value: str, term: str) -> bool:
@@ -896,10 +892,26 @@ def _parent_hint(name: str) -> str:
     return ""
 
 
+def _status_items(resp) -> dict[str, int]:
+    """Statuslistan ur ett STATUS-svar, t.ex. {"messages": 5, "unseen": 1}.
+
+    Bara den avslutande parentesen på raden tolkas, aldrig mappnamnet före
+    den, och aldrig en literal (bytearray), som också bara kan vara namnet.
+    """
+    items: dict[str, int] = {}
+    for line in resp.lines:
+        if isinstance(line, bytearray):
+            continue
+        m = _STATUS_ITEMS_RE.search(_decode(line))
+        if not m:
+            continue
+        tokens = m.group(1).split()
+        for key, value in zip(tokens[::2], tokens[1::2]):
+            if value.isascii() and value.isdigit():
+                items.setdefault(key.lower(), int(value))
+    return items
+
+
 def _status_messages(resp) -> int | None:
     """MESSAGES ur ett STATUS-svar, eller None om det saknas."""
-    for line in resp.lines:
-        for m in _STATUS_NUM_RE.finditer(_decode(line)):
-            if m.group(1).upper() == "MESSAGES":
-                return int(m.group(2))
-    return None
+    return _status_items(resp).get("messages")
