@@ -26,3 +26,19 @@ def read_settings(monkeypatch):
 @then(parsers.parse("ska IMAP-timeouten vara {seconds:d} sekunder"))
 def timeout_is(settings, seconds):
     assert settings.imap_timeout == seconds
+
+
+@when("IMAP-klienten skapas", target_fixture="client")
+def create_client(monkeypatch):
+    from protonmail_mcp.imap_client import IMAPClient
+    return IMAPClient(read_settings(monkeypatch))
+
+
+@then(parsers.parse("ska klientens kommandotimeout vara {seconds:d} sekunder"))
+def client_timeout(client, seconds):
+    assert client.timeout == seconds
+
+
+@then(parsers.parse("ska klientens timeout för UID-kommandon vara {seconds:d} sekunder"))
+def client_uid_timeout(client, seconds):
+    assert client.uid_timeout == seconds

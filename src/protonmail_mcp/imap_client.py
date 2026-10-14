@@ -209,16 +209,18 @@ class IMAPAuthenticationError(Exception):
 
 
 class IMAPClient:
-    # aioimaplib:s timeout per kommando (hälsning, LOGIN, SELECT, SEARCH, ...)
-    timeout: float = 10.0
+    # aioimaplib:s timeout per kommando (hälsning, LOGIN, SELECT, SEARCH, ...).
+    # Sätts från PROTONMAIL_IMAP_TIMEOUT: SEARCH i All Mail tar 5–9 s mot Bridge.
+    timeout: float = 30.0
     # UID STORE/COPY/EXPUNGE, som aioimaplib 2.0.1 kör helt utan timeout.
-    # COPY till en etikett kräver ett anrop till Proton-API:t, därav längre tid.
+    # COPY till en etikett kräver ett anrop till Proton-API:t, därav lika lång tid.
     uid_timeout: float = 30.0
     # Hälsokontrollen före varje anrop; svarar inte NOOP ansluter vi på nytt
     noop_timeout: float = 5.0
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self.timeout = self.uid_timeout = settings.imap_timeout
         self._client: aioimaplib.IMAP4 | None = None
         self._lock = asyncio.Lock()
 

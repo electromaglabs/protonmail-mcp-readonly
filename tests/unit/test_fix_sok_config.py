@@ -26,3 +26,16 @@ def test_rejects_non_positive_or_garbage(monkeypatch, bad):
     monkeypatch.setenv("PROTONMAIL_IMAP_TIMEOUT", bad)
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_client_uses_configured_timeout(monkeypatch):
+    from protonmail_mcp.imap_client import IMAPClient
+    monkeypatch.setenv("PROTONMAIL_IMAP_TIMEOUT", "45")
+    client = IMAPClient(Settings(_env_file=None))
+    assert (client.timeout, client.uid_timeout) == (45, 45)
+
+
+def test_client_default_timeout_is_30(monkeypatch):
+    from protonmail_mcp.imap_client import IMAPClient
+    client = IMAPClient(Settings(_env_file=None))
+    assert (client.timeout, client.uid_timeout) == (30, 30)
