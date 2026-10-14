@@ -410,21 +410,36 @@ class IMAPClient:
 
     @_serialized
     async def create_folder(self, name: str) -> bool:
+        kind = _check_user_folder(name)
+        quoted = _quote_mailbox(name)
         await self._ensure_connected()
-        resp = await self._client.create(_quote_mailbox(name))
-        return resp.result == "OK"
+        resp = await self._client.create(quoted)
+        _require_ok(resp, f"Att skapa {kind}en {name}" + _parent_hint(name))
+        return True
 
     @_serialized
     async def delete_folder(self, name: str) -> bool:
+        kind = _check_user_folder(name)
+        quoted = _quote_mailbox(name)
         await self._ensure_connected()
-        resp = await self._client.delete(_quote_mailbox(name))
-        return resp.result == "OK"
+        resp = await self._client.delete(quoted)
+        _require_ok(resp, f"Att ta bort {kind}en {name}")
+        return True
 
     @_serialized
     async def rename_folder(self, old_name: str, new_name: str) -> bool:
+        old_kind = _check_user_folder(old_name)
+        new_kind = _check_user_folder(new_name)
+        if old_kind != new_kind:
+            raise ValueError(
+                f"Proton kan inte byta mellan mapp och etikett ({old_name} → {new_name}). "
+                "Behåll prefixet: Folders/ → Folders/ eller Labels/ → Labels/."
+            )
+        quoted_old, quoted_new = _quote_mailbox(old_name), _quote_mailbox(new_name)
         await self._ensure_connected()
-        resp = await self._client.rename(_quote_mailbox(old_name), _quote_mailbox(new_name))
-        return resp.result == "OK"
+        resp = await self._client.rename(quoted_old, quoted_new)
+        _require_ok(resp, f"Namnbytet {old_name} → {new_name}" + _parent_hint(new_name))
+        return True
 
     @_serialized
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
@@ -523,3 +538,37 @@ def _check_move(source: str, target: str) -> None:
             "och då raderar Bridge det permanent. Ange mappen där mejlet ligger "
             "(t.ex. INBOX, Archive eller Folders/…) som källa."
         )
+
+
+# Ett "/" som inte är escapat med backslash skiljer nivåer åt i namnet
+_LEVEL_SEP_RE = re.compile(r'(?<!\\)/')
+
+
+def _check_user_folder(name: str) -> str:
+    """Kontrollerar att namnet är en egen mapp eller etikett hos Proton.
+
+    Returnerar "mapp" för Folders/… och "etikett" för Labels/…. Bridge nekar
+    CREATE/RENAME/DELETE för allt annat, utan förklaring.
+    """
+    for prefix, kind in (("Folders/", "mapp"), ("Labels/", "etikett")):
+        if name.startswith(prefix) and name[len(prefix):]:
+            if kind == "etikett" and _LEVEL_SEP_RE.search(name[len(prefix):]):
+                raise ValueError(
+                    f"Underetiketter finns inte i Proton: {name!r}. Etiketter ligger bara "
+                    "direkt under Labels/ (t.ex. Labels/Kunder). Använd Folders/… för en "
+                    "mapphierarki."
+                )
+            return kind
+    raise ValueError(
+        f"Ogiltigt namn {name!r}: egna mappar måste börja med 'Folders/' (t.ex. "
+        "'Folders/Projekt') och etiketter med 'Labels/' (t.ex. 'Labels/Kvitton'). "
+        "Systemmapparna (INBOX, Trash, All Mail …) kan inte skapas, döpas om eller tas bort."
+    )
+
+
+def _parent_hint(name: str) -> str:
+    """Förklaring när en undermapp inte kunde skapas: föräldern måste finnas."""
+    parts = _LEVEL_SEP_RE.split(name)
+    if name.startswith("Folders/") and len(parts) > 2:
+        return f" (för en undermapp måste {'/'.join(parts[:-1])} redan finnas)"
+    return ""
