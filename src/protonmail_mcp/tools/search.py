@@ -2,6 +2,7 @@ from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from . import _get_app
+from ._types import OptionalStr
 from .messages import _with_mailbox
 
 
@@ -9,10 +10,10 @@ from .messages import _with_mailbox
 async def search_emails(
     ctx: Context,
     mailbox: str = "INBOX",
-    from_addr: str | None = None,
-    subject: str | None = None,
-    since: str | None = None,
-    before: str | None = None,
+    from_addr: OptionalStr = None,
+    subject: OptionalStr = None,
+    since: OptionalStr = None,
+    before: OptionalStr = None,
     unseen: bool | None = None,
 ) -> list[dict]:
     """Sök e-post med filter.
