@@ -11,6 +11,7 @@ import aioimaplib
 
 from .config import Settings
 from .email_parser import decode_header_value
+from .mailbox_names import decode_modified_utf7, encode_modified_utf7
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,8 @@ _VALID_UID_RE = re.compile(r'^\d+$')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
 # Backslash och citattecken escapas av _quote_mailbox; "%", "*" och ".." är
 # giltiga namn hos Proton och har ingen särskild betydelse utanför LIST-mönster.
-_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F]{1,255}$')
+# Ensamma surrogater går inte att koda till modified UTF-7.
+_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F\uD800-\uDFFF]{1,255}$')
 
 
 def _validate_mailbox(name: str) -> str:
@@ -59,14 +61,17 @@ def _escape_imap_string(value: str) -> str:
 
 
 def _quote_mailbox(name: str) -> str:
-    """Validerar och citerar ett mailbox-namn som IMAP quoted-string (RFC 3501).
+    """Validerar, kodar och citerar ett läsbart mailbox-namn för IMAP.
+
+    Namnet kodas till modified UTF-7 (RFC 3501 §5.1.3), så att "Labels/Näs"
+    skickas som "Labels/N&AOQ-s", och citeras som quoted-string.
 
     Mailbox-namn som innehaller tecken utanfor IMAP:s "atom"-syntax (t.ex.
     hakparenteser eller mellanslag) maste skickas citerade, annars misslyckas
     SELECT/STATUS/CREATE/COPY/RENAME tyst eller med fel mot vissa IMAP-servrar.
     """
     _validate_mailbox(name)
-    return f'"{_escape_imap_string(name)}"'
+    return f'"{_escape_imap_string(encode_modified_utf7(name))}"'
 
 
 def _decode(b: bytes | bytearray | str) -> str:
@@ -83,7 +88,11 @@ def _parse_seqnums(resp) -> list[str]:
 
 
 def _parse_list_line(line: str) -> str | None:
-    """Extraherar mappnamn ur en IMAP LIST-rad. Returnerar None om raden inte matchar."""
+    """Extraherar det läsbara mappnamnet ur en IMAP LIST-rad.
+
+    Namnet avescapas och avkodas från modified UTF-7, så att _quote_mailbox
+    ger tillbaka exakt samma namn. Returnerar None om raden inte matchar.
+    """
     line = line.strip()
     if not line or line.startswith("command"):
         return None
@@ -91,8 +100,14 @@ def _parse_list_line(line: str) -> str | None:
     if not m:
         return None
     if m.group(2) is not None:
-        return _QUOTED_ESCAPE_RE.sub(r"\1", m.group(2))
-    return m.group(3)
+        wire = _QUOTED_ESCAPE_RE.sub(r"\1", m.group(2))
+    else:
+        wire = m.group(3)
+    try:
+        return decode_modified_utf7(wire)
+    except ValueError:
+        logger.warning("Mappnamnet är inte giltig modified UTF-7, behålls oavkodat: %r", wire)
+        return wire
 
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
