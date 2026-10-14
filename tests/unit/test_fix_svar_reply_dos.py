@@ -45,3 +45,32 @@ async def test_html_only_original_is_handled_in_linear_time(pattern, tool):
         else:
             await forward_email(_ctx(raw), uid="1", to="b@x.se")
         assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.parametrize("tool", ["reply", "forward"])
+async def test_huge_headers_spread_over_mime_parts_are_rejected_fast(tool):
+    """Headerparsern i email.policy är superlinjär; varje MIME-del har egna
+    headers (Content-Type m.fl.) som också styrs av avsändaren."""
+    import time
+
+    from protonmail_mcp.tools.reply import forward_email
+
+    param = "a" * 45_000
+    parts = "".join(
+        f'--B\r\nContent-Type: application/octet-stream; x="{param}"\r\n\r\nx\r\n'
+        for _ in range(60)
+    )
+    raw = (
+        f"From: a@x.se\r\nTo: {KONTO}\r\nSubject: s\r\n"
+        'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+        f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
+    ).encode()
+    with capture_smtp() as cap:
+        start = time.perf_counter()
+        with pytest.raises(ValueError, match="orimligt"):
+            if tool == "reply":
+                await reply_to_email(_ctx(raw), uid="1", body="ok")
+            else:
+                await forward_email(_ctx(raw), uid="1", to="b@x.se")
+        assert time.perf_counter() - start < 1.0
+    assert cap.sent == []

@@ -4,7 +4,7 @@ import html
 import re
 from collections.abc import Sequence
 from email.headerregistry import Address
-from email.message import EmailMessage
+from email.message import EmailMessage, Message
 from email.utils import getaddresses, parsedate_to_datetime
 
 from mcp.server.fastmcp import Context
@@ -45,13 +45,50 @@ _MAX_HEADER_CHARS = 50_000
 _MAX_REFERENCES = 50
 
 
+# MIME-headers som parsas för varje del (typ, disposition, kodning) är normalt
+# under ett par hundra tecken; summan av alla headers i alla delar begränsas
+# också, eftersom varje del har egna headers som avsändaren styr.
+_MAX_MIME_HEADER_CHARS = 10_000
+_MAX_TOTAL_HEADER_CHARS = 1_000_000
+_MIME_HEADERS = frozenset(
+    ("content-type", "content-disposition", "content-transfer-encoding")
+)
+
+
 def _parse_original(raw: bytes) -> EmailMessage:
     """Parsa originalet med den moderna policyn.
 
     Headers läses då skiftlägesokänsligt och avkodas korrekt, även råa
     UTF-8-headers (RFC 6532) och RFC 2047-kodade namn.
     """
+    # Storlekskontrollen görs på en compat32-parsning, som är billig: redan
+    # parsningen med email.policy.default läser varje dels Content-Type med
+    # den superlinjära headerparsern (60 delar à 45 000 tecken: 0,7–1,2 s).
+    _check_header_sizes(email.message_from_bytes(raw, policy=email.policy.compat32))
     return email.message_from_bytes(raw, policy=email.policy.default)
+
+
+def _check_header_sizes(msg: Message) -> None:
+    """Avvisa orimligt stora headers innan något av dem parsas (linjär tid)."""
+    total = 0
+    stack = [msg]
+    while stack:
+        part = stack.pop()
+        for name, value in part.raw_items():
+            size = len(str(value))
+            total += size
+            if name.lower() in _MIME_HEADERS and size > _MAX_MIME_HEADER_CHARS:
+                raise ValueError(
+                    f"Originalet har en orimligt stor {name}-header ({size} tecken)"
+                )
+        if total > _MAX_TOTAL_HEADER_CHARS:
+            raise ValueError(
+                f"Originalets headers är orimligt stora ({total} tecken totalt)"
+            )
+        # get_payload() i stället för iter_parts(): det senare parsar Content-Type
+        payload = part.get_payload() if part.is_multipart() else None
+        if isinstance(payload, list):
+            stack.extend(payload)
 
 
 def _decode_8bit(value: str) -> str:
