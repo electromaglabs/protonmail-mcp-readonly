@@ -68,8 +68,12 @@ class TestBodyCharset:
         assert result["body_plain"] == "hej"
 
     def test_utf16_without_bom_falls_back(self):
-        result = parse_email(_mail("text/plain; charset=utf-16", "hej då".encode()))
-        assert result["body_plain"] == "hej då"
+        # Jämnt antal byte, annars misslyckas utf-16 ändå och testet går
+        # igenom utan BOM-kontrollen (G1)
+        data = "hej då!".encode()
+        assert len(data) % 2 == 0
+        result = parse_email(_mail("text/plain; charset=utf-16", data))
+        assert result["body_plain"] == "hej då!"
 
     def test_us_ascii_label_with_utf8_bytes(self):
         result = parse_email(_mail("text/plain; charset=us-ascii", "smörgås".encode()))

@@ -96,3 +96,18 @@ def fetch_mail_as_text(mock_ctx, raw):
 @then(parsers.parse("ska brödtexten vara '{body}'"))
 def body_is(result, body):
     assert result["body_plain"] == body
+
+
+@given(
+    parsers.parse('ett mejl märkt "{charset}" med brödtexten "{text}" kodad som utf-8'),
+    target_fixture="raw",
+)
+def mail_with_mislabelled_charset(mock_ctx, charset, text):
+    body = text.encode()
+    assert len(body) % 2 == 0  # udda längd kan aldrig avkodas som utf-16
+    raw = (
+        f"From: a@b.se\r\nSubject: s\r\nContent-Type: text/plain; charset={charset}\r\n"
+        "Content-Transfer-Encoding: 8bit\r\n\r\n"
+    ).encode() + body
+    mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
+    return raw

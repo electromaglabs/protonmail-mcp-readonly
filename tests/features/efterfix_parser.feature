@@ -43,3 +43,8 @@ Feature: Efter granskningen — rubriker, adresser och HTML-text i inkommande me
     Given ett HTML-brev med innehållet '<head><title>Nyhetsbrev</title><style>p{}</style><div>Innehåll</div>'
     When jag hämtar mejlet som text med get_email
     Then ska brödtexten vara 'Innehåll'
+
+  Scenario: Brödtext märkt utf-16 men utan BOM blir inte mojibake
+    Given ett mejl märkt "utf-16" med brödtexten "hej då!" kodad som utf-8
+    When jag hämtar mejlet som text med get_email
+    Then ska brödtexten vara 'hej då!'
