@@ -43,9 +43,14 @@ class TestMailboxField:
         assert result["messages"] == []
 
     async def test_search_emails_tags_each_hit(self, mock_ctx):
-        _imap(mock_ctx).search_messages.return_value = [{"uid": "5"}, {"uid": "3"}]
+        _imap(mock_ctx).search_messages.return_value = {
+            "messages": [{"uid": "5"}, {"uid": "3"}],
+            "total": 2, "has_more": False, "complete": True, "note": None,
+        }
         result = await search_emails(mock_ctx, mailbox="All Mail")
-        assert result == [{"uid": "5", "mailbox": "All Mail"}, {"uid": "3", "mailbox": "All Mail"}]
+        assert result["mailbox"] == "All Mail"
+        assert result["messages"] == [
+            {"uid": "5", "mailbox": "All Mail"}, {"uid": "3", "mailbox": "All Mail"}]
 
     async def test_get_email_includes_mailbox(self, mock_ctx, sample_raw_email):
         _imap(mock_ctx).get_message.return_value = sample_raw_email
@@ -60,6 +65,8 @@ class TestMailboxField:
 
     async def test_does_not_mutate_imap_result(self, mock_ctx):
         hits = [{"uid": "5"}]
-        _imap(mock_ctx).search_messages.return_value = hits
+        _imap(mock_ctx).search_messages.return_value = {
+            "messages": hits, "total": 1, "has_more": False, "complete": True, "note": None,
+        }
         await search_emails(mock_ctx, mailbox="Starred")
         assert hits == [{"uid": "5"}]

@@ -11,7 +11,7 @@ scenarios("fix_verktyg_null_string.feature")
 
 @given("att jag är ansluten till brevlådan")
 def connected(mock_ctx):
-    mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = []
+    mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = {"messages": [], "total": 0, "has_more": False, "complete": True, "note": None}
 
 
 @when(parsers.parse('jag söker i INBOX med {field} "{value}"'))

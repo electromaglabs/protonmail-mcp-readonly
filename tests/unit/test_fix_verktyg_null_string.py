@@ -17,7 +17,7 @@ STRING_PARAMS = ["from_addr", "subject", "since", "before"]
 def mock_ctx():
     ctx = MagicMock()
     ctx.request_context.lifespan_context.imap = AsyncMock()
-    ctx.request_context.lifespan_context.imap.search_messages.return_value = []
+    ctx.request_context.lifespan_context.imap.search_messages.return_value = {"messages": [], "total": 0, "has_more": False, "complete": True, "note": None}
     return ctx
 
 

@@ -3,8 +3,9 @@ import functools
 import logging
 import math
 import re
+import unicodedata
 from datetime import date
-from email.parser import BytesHeaderParser
+from email.parser import BytesHeaderParser, HeaderParser
 from typing import Any
 
 import aioimaplib
@@ -31,6 +32,9 @@ _STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
 # aioimaplib tolkar svaret rekursivt, en stackram per rad; ~3000 brev i ett
 # FETCH-svar ger RecursionError och en låst anslutning
 _FETCH_CHUNK_SIZE = 200
+# Så många av de nyaste kandidaterna jämförs lokalt mot avkodat ämne och
+# avsändare (Bridge söker bara i okodade headers). 1000 brev tar ~4 s.
+_LOCAL_SCAN_LIMIT = 1000
 _VALID_UID_RE = re.compile(r'^\d+$')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
 # Backslash och citattecken escapas av _quote_mailbox; "%", "*" och ".." är
@@ -440,15 +444,32 @@ class IMAPClient:
         before: str | None = None,
         unseen: bool | None = None,
         max_results: int = 50,
-    ) -> list[dict]:
+    ) -> dict[str, Any]:
+        """Söker i mappen och returnerar de nyaste träffarna med metadata.
+
+        Bridge jämför SUBJECT och FROM mot de okodade headervärdena, så "ä"
+        eller ett ord i ett B-kodat ämne ger aldrig träff på servern. Servern
+        söker därför bara på datum och flaggor, och ämne/avsändare jämförs
+        lokalt mot avkodade värden för de _LOCAL_SCAN_LIMIT nyaste kandidaterna.
+        Är alla termer ASCII får servern dessutom leta bland äldre brev, där
+        den åtminstone hittar träffar i okodade headers.
+
+        Returnerar dict med messages (nyaste först, högst max_results), total
+        (antal hittade träffar; en undre gräns när complete är False),
+        has_more, complete (alla kandidater kontrollerades) och note.
+        """
         # Validera allt innan något skickas till servern
         if max_results < 1:
             raise ValueError(f"max_results måste vara >= 1 (fick {max_results})")
-        criteria: list[str] = []
+        terms: list[tuple[str, str]] = []  # (fält i metadata, sökterm)
+        text_criteria: list[str] = []
         if from_addr:
-            criteria += ["FROM", _imap_quoted(from_addr, "from_addr")]
+            text_criteria += ["FROM", _imap_quoted(from_addr, "from_addr")]
+            terms.append(("from", from_addr))
         if subject:
-            criteria += ["SUBJECT", _imap_quoted(subject, "subject")]
+            text_criteria += ["SUBJECT", _imap_quoted(subject, "subject")]
+            terms.append(("subject", subject))
+        criteria: list[str] = []
         if since:
             criteria += ["SINCE", _to_imap_date(since, "since")]
         if before:
@@ -457,24 +478,59 @@ class IMAPClient:
             criteria.append("UNSEEN")
         elif unseen is False:
             criteria.append("SEEN")
-        if not criteria:
-            criteria = ["ALL"]
 
         await self._ensure_connected()
         await self._select(mailbox)
 
-        # search() returnerar sekvensnummer — vi hämtar sedan metadata
-        resp = await self._client.search(" ".join(criteria))
+        candidates = await self._search_seqnums(criteria)
+        if not terms:
+            newest = candidates[-max_results:]
+            msgs = _sort_newest_first(await self._fetch_metadata(newest))
+            return _search_result(msgs, len(candidates), max_results, complete=True)
+
+        window = candidates[-_LOCAL_SCAN_LIMIT:]
+        matches = _filter_messages(await self._fetch_metadata(window), terms)
+        complete = len(candidates) <= len(window)
+        ascii_terms = all(term.isascii() for _, term in terms)
+        unchecked = 0
+        if not complete and ascii_terms and len(matches) <= max_results:
+            raw_hits = await self._search_seqnums(criteria + text_criteria)
+            older = [n for n in raw_hits if int(n) < int(window[0])]
+            # Nyaste först, tills det finns fler träffar än max_results
+            while older and len(matches) <= max_results:
+                chunk, older = older[-_FETCH_CHUNK_SIZE:], older[:-_FETCH_CHUNK_SIZE]
+                matches += _filter_messages(await self._fetch_metadata(chunk), terms)
+            unchecked = len(older)
+
+        note = None
+        if not complete:
+            note = (
+                f"Bara de {len(window)} nyaste av {len(candidates)} brev som matchar övriga "
+                "villkor jämfördes mot avkodat ämne och avsändare. "
+            )
+            if ascii_terms:
+                note += (
+                    "Äldre brev söktes på servern, som bara jämför mot okodade headers, "
+                    "så äldre träffar i kodade headers kan saknas. "
+                )
+            note += "Begränsa med since eller before för att söka bland äldre brev."
+        return _search_result(
+            _sort_newest_first(matches), len(matches), max_results,
+            complete=complete, note=note, more=unchecked > 0,
+        )
+
+    async def _search_seqnums(self, criteria: list[str]) -> list[str]:
+        """Kör SEARCH och returnerar sekvensnumren i stigande ordning (äldst först)."""
+        command = " ".join(criteria) or "ALL"
+        # Skyddsnät: värdena är redan validerade, men ett kontrolltecken här
+        # skulle avsluta kommandot i förtid och göra resten till ett nytt
+        if _CONTROL_CHAR_RE.search(command):
+            raise ValueError(f"Otillåtet tecken i IMAP-sökkommandot: {command!r}")
+        resp = await self._client.search(command)
         if resp.result != "OK":
             # Annars ser t.ex. ett ogiltigt datum ut som "inga träffar"
             raise ValueError(f"Sökningen misslyckades ({resp.result}): {_response_text(resp)}")
-        seqnums = _parse_seqnums(resp)
-        if not seqnums:
-            return []
-
-        # Nyaste max_results; sekvensnummer växer med ankomstordningen
-        seqnums = sorted(seqnums, key=int)[-max_results:]
-        return _sort_newest_first(await self._fetch_metadata(seqnums))
+        return sorted(_parse_seqnums(resp), key=int)
 
     async def _fetch_metadata(self, seqnums: list[str]) -> list[dict[str, Any]]:
         """Hämtar UID, FLAGS och sökheaders i delar om högst _FETCH_CHUNK_SIZE."""
@@ -653,10 +709,46 @@ class IMAPClient:
         return status
 
 
+def _header_matches(value: str, term: str) -> bool:
+    """Skiftlägesoberoende delsträngsmatchning, som IMAP SEARCH, på avkodad text.
+
+    NFC-normalisering gör att ett "ä" skrivet som a + kombinerande trema
+    (vanligt från macOS) hittar ett förkomponerat "ä" och tvärtom.
+    """
+    def fold(text: str) -> str:
+        return unicodedata.normalize("NFC", text).casefold()
+    return fold(term) in fold(value)
+
+
+def _filter_messages(msgs: list[dict[str, Any]], terms: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    return [m for m in msgs if all(_header_matches(m[field], term) for field, term in terms)]
+
+
+def _search_result(
+    msgs: list[dict[str, Any]], total: int, max_results: int,
+    complete: bool, note: str | None = None, more: bool = False,
+) -> dict[str, Any]:
+    return {
+        "messages": msgs[:max_results],
+        "total": total,
+        "has_more": total > max_results or more,
+        "complete": complete,
+        "note": note,
+    }
+
+
 def _sort_newest_first(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sorterar på UID fallande. UID speglar ankomstordning i mappen, till
     skillnad från Date-headern som avsändaren själv sätter."""
     return sorted(msgs, key=lambda m: int(m["uid"]) if m["uid"].isdigit() else -1, reverse=True)
+
+
+def _decode_header_bytes(raw: bytes) -> str:
+    """Headerblock som text: UTF-8 om det går, annars latin-1 (förlorar inget)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
 
 
 def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
@@ -700,8 +792,9 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
         flags_m = _FLAGS_RE.search(meta)
 
         # email-parsern hanterar vikta rader; decode_header_value avkodar
-        # RFC 2047-ord (åäö, emoji) och slår ihop radbrytningar
-        hdrs = BytesHeaderParser().parsebytes(headers_raw)
+        # RFC 2047-ord (åäö, emoji) och slår ihop radbrytningar. Rå 8-bitars
+        # headers (RFC 6532) avkodas först, annars blir "ö" till "��"
+        hdrs = HeaderParser().parsestr(_decode_header_bytes(headers_raw))
 
         messages.append({
             "uid": uid,

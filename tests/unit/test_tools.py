@@ -99,9 +99,10 @@ class TestGetEmail:
 
 class TestSearchEmails:
     async def test_delegates_all_filter_params(self, mock_ctx):
-        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = [
-            {"uid": "1"}, {"uid": "2"}, {"uid": "3"}
-        ]
+        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = {
+            "messages": [{"uid": "1"}, {"uid": "2"}, {"uid": "3"}],
+            "total": 3, "has_more": False, "complete": True, "note": None,
+        }
         result = await search_emails(
             mock_ctx,
             mailbox="INBOX",
@@ -120,14 +121,16 @@ class TestSearchEmails:
             unseen=True,
             max_results=50,
         )
-        assert result == [
+        assert result["messages"] == [
             {"uid": "1", "mailbox": "INBOX"},
             {"uid": "2", "mailbox": "INBOX"},
             {"uid": "3", "mailbox": "INBOX"},
         ]
+        assert result["mailbox"] == "INBOX"
+        assert result["total"] == 3
 
     async def test_defaults_none_filters(self, mock_ctx):
-        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = []
+        mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = {"messages": [], "total": 0, "has_more": False, "complete": True, "note": None}
         await search_emails(mock_ctx)
         mock_ctx.request_context.lifespan_context.imap.search_messages.assert_called_once_with(
             "INBOX",

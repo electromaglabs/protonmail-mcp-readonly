@@ -19,9 +19,10 @@ def connected_imap(mock_ctx):
 )
 def inbox_has_unseen(mock_ctx, uid1, uid2):
     uids = [uid1, uid2]
-    mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = [
-        {"uid": uid} for uid in uids
-    ]
+    mock_ctx.request_context.lifespan_context.imap.search_messages.return_value = {
+        "messages": [{"uid": uid} for uid in uids],
+        "total": len(uids), "has_more": False, "complete": True, "note": None,
+    }
     return uids
 
 
@@ -32,15 +33,15 @@ def call_search_unseen(mock_ctx):
 
 @then("ska resultatet vara en lista med UID:n")
 def result_is_uid_list(result):
-    assert isinstance(result, list)
-    assert len(result) > 0
-    for msg in result:
+    assert isinstance(result["messages"], list)
+    assert len(result["messages"]) > 0
+    for msg in result["messages"]:
         assert isinstance(msg["uid"], str)
         assert msg["uid"].isdigit()
 
 
 @then(parsers.parse('listan ska innehålla "{uid1}" och "{uid2}"'))
 def list_contains_uids(result, uid1, uid2):
-    uids = [msg["uid"] for msg in result]
+    uids = [msg["uid"] for msg in result["messages"]]
     assert uid1 in uids
     assert uid2 in uids

@@ -23,7 +23,10 @@ def label_contains(mock_ctx, mailbox, uid):
 
 @given(parsers.parse('att sökning i "{mailbox}" ger brevet med UID "{uid}"'))
 def search_hits(mock_ctx, mailbox, uid):
-    _imap(mock_ctx).search_messages.return_value = [{"uid": uid, "subject": "Viktigt"}]
+    _imap(mock_ctx).search_messages.return_value = {
+        "messages": [{"uid": uid, "subject": "Viktigt"}],
+        "total": 1, "has_more": False, "complete": True, "note": None,
+    }
 
 
 @given(parsers.parse('att brevet med UID "{uid}" finns i "{mailbox}"'))
@@ -59,8 +62,8 @@ def envelope_mailbox(result, mailbox):
 
 @then(parsers.parse('ska varje sökträff ha mailbox "{mailbox}"'))
 def each_hit(result, mailbox):
-    assert result
-    assert all(m["mailbox"] == mailbox for m in result)
+    assert result["messages"]
+    assert all(m["mailbox"] == mailbox for m in result["messages"])
 
 
 @then(parsers.parse('ska brevet ha mailbox "{mailbox}"'))

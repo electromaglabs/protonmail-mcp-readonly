@@ -406,11 +406,15 @@ class TestSearchMessages:
         return imap
 
     @pytest.mark.asyncio
-    async def test_escapes_from_addr_with_quote(self, client):
+    async def test_escapes_from_addr_with_quote(self, client, monkeypatch):
         """from_addr med " ska escapas korrekt i IMAP-sökkriterierna."""
+        # FROM skickas bara till servern för brev äldre än de som filtreras
+        # lokalt (fix-sok, N4), så låt bara det nyaste brevet filtreras lokalt
+        from protonmail_mcp import imap_client as imap_module
+        monkeypatch.setattr(imap_module, "_LOCAL_SCAN_LIMIT", 1)
         client._client.search = AsyncMock(return_value=SimpleNamespace(
             result="OK",
-            lines=[b"1"],
+            lines=[b"1 2"],
         ))
         client._client.fetch = AsyncMock(return_value=SimpleNamespace(
             result="OK",
@@ -577,7 +581,7 @@ class TestSearchMessagesMetadata:
                 ")",
             ],
         ))
-        result = await client.search_messages("INBOX")
+        result = (await client.search_messages("INBOX"))["messages"]
         assert isinstance(result, list)
         assert len(result) == 2
         # Nyaste först (reverserad)
@@ -595,7 +599,7 @@ class TestSearchMessagesMetadata:
             lines=[b""],
         ))
         result = await client.search_messages("INBOX")
-        assert result == []
+        assert result["messages"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +624,7 @@ class TestSearchMessagesEmpty:
             lines=[b""],
         ))
         result = await client.search_messages("INBOX")
-        assert result == []
+        assert result["messages"] == []
 
     @pytest.mark.asyncio
     async def test_search_no_result_raises(self, client):

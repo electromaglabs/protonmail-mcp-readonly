@@ -35,7 +35,7 @@ async def test_list_messages(imap_client):
 
 async def test_search_unseen(imap_client):
     """search_messages med unseen=True returnerar metadata-dicts utan \\Seen."""
-    messages = await imap_client.search_messages("INBOX", unseen=True)
+    messages = (await imap_client.search_messages("INBOX", unseen=True))["messages"]
     assert isinstance(messages, list)
     for msg in messages:
         assert msg["uid"].isdigit()
