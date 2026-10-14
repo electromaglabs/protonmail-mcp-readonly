@@ -76,6 +76,8 @@ class TestSelectChecked:
     @pytest.mark.asyncio
     async def test_successful_select_keeps_connection(self, client):
         imap = client._client
+        # delete_message kontrollerar att UID:t finns innan UID MOVE
+        imap.uid.return_value = SimpleNamespace(result="OK", lines=[b"1 FETCH (UID 1)"])
         await client.delete_message("INBOX", "1")
         assert client._client is imap
         imap.select.assert_awaited_once_with('"INBOX"')

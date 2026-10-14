@@ -507,7 +507,7 @@ class IMAPClient:
         Bridge svarar OK på UID STORE/MOVE/EXPUNGE även för UID:n som inte
         finns, så utan kontrollen skulle verktygen rapportera lyckat för ingenting.
         """
-        resp = await self._client.uid("fetch", uid, "(UID)")
+        resp = await self._uid("fetch", uid, "(UID)")
         _require_ok(resp, f"Kontrollen av UID {uid} i {mailbox}")
         for line in resp.lines:
             m = _UID_RE.search(_decode(line))

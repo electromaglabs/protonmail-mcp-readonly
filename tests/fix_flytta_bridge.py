@@ -44,6 +44,9 @@ class FakeBridge:
         client.delete.side_effect = self._simple("DELETE")
         client.rename.side_effect = self._simple("RENAME")
         client.has_capability = MagicMock(return_value=True)
+        # IMAPClient återansluter om klienten inte ser inloggad ut
+        client.protocol = MagicMock()
+        client.protocol.state = "SELECTED"
         self.client = client
 
     # --- hjälpare för testerna -------------------------------------------

@@ -149,6 +149,14 @@ class FakeBridge:
                 dest = self.mailboxes[target]
                 dest[max(dest, default=0) + 1] = {"subject": msgs[uid]["subject"], "flags": set()}
                 return [f"{tag} OK copy\r\n"]
+            if sub == "MOVE":
+                target = _arg_mailbox(rest.split(" ", 3)[3])
+                if target not in self.mailboxes or uid not in msgs:
+                    return [f"{tag} NO move failed\r\n"]
+                dest = self.mailboxes[target]
+                dest[max(dest, default=0) + 1] = {"subject": msgs[uid]["subject"], "flags": set()}
+                del msgs[uid]
+                return [f"{tag} OK move\r\n"]
             if sub == "EXPUNGE":
                 return self._expunge(tag, selected)
         return [f"{tag} BAD unknown command\r\n"]
