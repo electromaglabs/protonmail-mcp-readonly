@@ -218,3 +218,55 @@ class TestNoLeakedConnections:
         await client.disconnect()
         old.logout.assert_awaited_once()
         old.protocol.transport.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# bridge-down-ux: tydligt fel direkt, och död anslutning upptäcks utan NOOP
+# ---------------------------------------------------------------------------
+class TestBridgeDown:
+    @pytest.mark.asyncio
+    async def test_refused_connection_gives_clear_error(self, settings):
+        fresh = IMAPClient(settings)
+        new = _mock_imap(state="STARTED")
+        failed = asyncio.get_running_loop().create_future()
+        failed.set_exception(ConnectionRefusedError(61, "Connection refused"))
+        new._client_task = failed
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            with pytest.raises(ConnectionError, match=r"Kan inte nå ProtonMail Bridge på 127\.0\.0\.1:1143"):
+                await fresh.connect()
+        new.wait_hello_from_server.assert_not_awaited()
+        assert fresh._client is None
+
+    @pytest.mark.asyncio
+    async def test_missing_greeting_gives_message(self, settings):
+        fresh = IMAPClient(settings)
+        new = _mock_imap(state="CONNECTED")
+        new.wait_hello_from_server.side_effect = asyncio.TimeoutError
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new):
+            with pytest.raises(asyncio.TimeoutError, match="127.0.0.1:1143"):
+                await fresh.connect()
+
+    @pytest.mark.asyncio
+    async def test_lost_connection_is_forgotten(self, settings):
+        fresh = IMAPClient(settings)
+        new = _mock_imap(state="AUTH")
+        new.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=new) as ctor:
+            await fresh.connect()
+        conn_lost_cb = ctor.call_args.kwargs["conn_lost_cb"]
+
+        conn_lost_cb(ConnectionResetError())
+        assert fresh._client is None
+
+    @pytest.mark.asyncio
+    async def test_old_connection_loss_does_not_drop_new_client(self, settings, client):
+        first = _mock_imap(state="AUTH")
+        first.login.return_value = OK
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=first) as ctor:
+            await client.connect()
+        stale_cb = ctor.call_args.kwargs["conn_lost_cb"]
+        replacement = _mock_imap()
+        client._client = replacement
+
+        stale_cb(None)
+        assert client._client is replacement

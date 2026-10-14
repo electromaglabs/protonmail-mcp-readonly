@@ -1,5 +1,6 @@
 """BDD-tester för IMAP-anslutningens livscykel, mot en fejkad Bridge."""
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -41,12 +42,15 @@ async def _guarded(coro, limit=5.0):
 
 
 def _attempt(env, coro):
+    started = time.monotonic()
     try:
         env.result = env.run(_guarded(coro))
         env.error = None
     except Exception as exc:  # noqa: BLE001 — scenariot kontrollerar felet
         env.result = None
         env.error = exc
+    finally:
+        env.elapsed = time.monotonic() - started
 
 
 @given(parsers.parse('en Bridge med mappen "{mailbox}" som innehåller {count:d} meddelanden'))
@@ -178,3 +182,26 @@ def bridge_open_connections(env, count):
     assert env.bridge.open_connections <= count, (
         f"{env.bridge.open_connections} öppna av {env.bridge.total_connections} totalt"
     )
+
+
+@given("att Bridge inte körs")
+def bridge_not_running(env):
+    env.run(env.bridge.stop())
+
+
+@when("Bridge startas om")
+def bridge_restarts(env):
+    env.bridge.drop_connections()
+    env.run(asyncio.sleep(0.05))  # låt klienten se att anslutningen stängts
+
+
+@then("ska jag få ett fel som säger att Bridge inte går att nå")
+def error_bridge_unreachable(env):
+    assert isinstance(env.error, ConnectionError), repr(env.error)
+    assert "Kan inte nå ProtonMail Bridge" in str(env.error)
+    assert str(env.bridge.port) in str(env.error)
+
+
+@then(parsers.parse("ska anropet ha tagit under {ms:d} ms"))
+def call_was_fast(env, ms):
+    assert env.elapsed * 1000 < ms, f"tog {env.elapsed * 1000:.0f} ms"

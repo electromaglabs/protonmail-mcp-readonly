@@ -64,3 +64,18 @@ Feature: Robust IMAP-anslutning mot ProtonMail Bridge
     When jag listar mejlen i "INBOX" 3 gånger
     Then ska listningen visa 2 meddelanden
     And ska Bridge ha högst 1 öppen anslutning
+
+  Scenario: Bridge som inte körs ger ett tydligt fel direkt
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att Bridge inte körs
+    When jag listar mejlen i "INBOX"
+    Then ska jag få ett fel som säger att Bridge inte går att nå
+    And ska anropet ha tagit under 150 ms
+
+  Scenario: Efter en omstart av Bridge återansluter nästa anrop direkt
+    Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
+    And att jag nyss har listat mejlen i "INBOX"
+    When Bridge startas om
+    And jag listar mejlen i "INBOX"
+    Then ska listningen visa 2 meddelanden
+    And ska anropet ha tagit under 150 ms

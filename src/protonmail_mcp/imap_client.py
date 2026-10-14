@@ -178,15 +178,32 @@ class IMAPClient:
         host, port = self._settings.imap_host, self._settings.imap_port
         logger.info("Ansluter till IMAP %s:%d (plain)", host, port)
         # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
-        client = aioimaplib.IMAP4(host=host, port=port, timeout=self.timeout)
+
+        def forget_on_connection_lost(_exc: Exception | None) -> None:
+            # Bridge omstartad eller nere: släpp klienten så att nästa anrop
+            # ansluter direkt i stället för att vänta ut NOOP-timeouten
+            if self._client is client:
+                logger.warning("Anslutningen till ProtonMail Bridge bröts")
+                self._client = None
+
+        client = aioimaplib.IMAP4(
+            host=host, port=port, timeout=self.timeout, conn_lost_cb=forget_on_connection_lost
+        )
         # self._client sätts först när inloggningen lyckats. Annars fastnar en
         # klient i NONAUTH, där NOOP lyckas men allt annat avvisas, för alltid.
         try:
-            await client.wait_hello_from_server()
+            await self._wait_for_socket(client, host, port)
+            try:
+                await client.wait_hello_from_server()
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"ProtonMail Bridge på {host}:{port} skickade ingen hälsning "
+                    f"inom {self.timeout:g} s — körs Bridge?"
+                ) from None
             try:
                 resp = await client.login(self._settings.username, self._settings.password)
             except asyncio.TimeoutError:
-                raise TimeoutError(
+                raise asyncio.TimeoutError(
                     f"ProtonMail Bridge på {host}:{port} svarade inte på inloggningen "
                     f"inom {self.timeout:g} s"
                 ) from None
@@ -202,6 +219,24 @@ class IMAPClient:
             raise
         self._client = client
         logger.info("IMAP inloggad som %s", self._settings.username)
+
+    async def _wait_for_socket(self, client: aioimaplib.IMAP4, host: str, port: int) -> None:
+        """Väntar in TCP-anslutningen så att "connection refused" syns direkt.
+
+        Annars väntar wait_hello_from_server ut hela timeouten och felet från
+        aioimaplib:s anslutningstask hämtas aldrig. _client_task är privat i
+        aioimaplib, därav den försiktiga åtkomsten.
+        """
+        task = getattr(client, "_client_task", None)
+        if not isinstance(task, asyncio.Future):
+            return
+        try:
+            await asyncio.wait_for(task, self.timeout)
+        except (OSError, asyncio.TimeoutError) as exc:
+            reason = str(exc) or type(exc).__name__
+            raise ConnectionError(
+                f"Kan inte nå ProtonMail Bridge på {host}:{port} — körs Bridge? ({reason})"
+            ) from exc
 
     async def disconnect(self) -> None:
         client, self._client = self._client, None
@@ -238,7 +273,7 @@ class IMAPClient:
         try:
             return await asyncio.wait_for(self._client.uid(command, *args), self.uid_timeout)
         except asyncio.TimeoutError:
-            raise TimeoutError(
+            raise asyncio.TimeoutError(
                 f"ProtonMail Bridge svarade inte på UID {command.upper()} inom {self.uid_timeout:g} s"
             ) from None
 
