@@ -45,7 +45,7 @@ mcp = FastMCP("protonmail", lifespan=lifespan)
 
 def main() -> None:
     # Importera tools här för att undvika cirkulär import vid modulnivå
-    from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts  # noqa: F401
+    from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts, attachments  # noqa: F401
 
     mcp.run(transport="stdio")
 
