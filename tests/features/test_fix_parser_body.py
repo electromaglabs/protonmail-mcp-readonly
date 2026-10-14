@@ -213,3 +213,26 @@ def alternative_mail(mock_ctx, plain, html):
         f"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n--b--\r\n"
     ).encode()
     return _serve(mock_ctx, raw)
+
+
+def _try(coro):
+    try:
+        return asyncio.run(coro)
+    except ValueError as exc:
+        return exc
+
+
+@when(parsers.parse('jag försöker hämta mejlet med body_format "{fmt}"'), target_fixture="result")
+def try_format(mock_ctx, raw, fmt):
+    return _try(get_email(mock_ctx, uid="1", body_format=fmt))
+
+
+@when(parsers.parse("jag försöker hämta mejlet med max_length {n:d}"), target_fixture="result")
+def try_max_length(mock_ctx, raw, n):
+    return _try(get_email(mock_ctx, uid="1", max_length=n))
+
+
+@then(parsers.parse('ska anropet avvisas med ett fel som nämner "{word}"'))
+def rejected(result, word):
+    assert isinstance(result, ValueError)
+    assert word in str(result)

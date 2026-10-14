@@ -346,6 +346,9 @@ def _truncate(text: str, max_length: int | None) -> str:
     return text[:max_length] + f"\n[...{remaining} characters remaining]"
 
 
+_BODY_FORMATS = ("text", "full", "stripped")
+
+
 def _raw_header(msg: Message, name: str) -> str | None:
     """Första förekomsten av en rubrik, rå (före compat32:s Header-omvandling)."""
     wanted = name.lower()
@@ -360,6 +363,12 @@ def parse_email(
     body_format: str = "text",
     max_length: int | None = 500,
 ) -> dict[str, Any]:
+    if body_format not in _BODY_FORMATS:
+        raise ValueError(
+            f"Okänt body_format {body_format!r} — giltiga värden: {', '.join(_BODY_FORMATS)}"
+        )
+    if max_length is not None and max_length < 0:
+        raise ValueError(f"max_length måste vara 0 eller större (eller None), fick {max_length}")
     msg = email.message_from_bytes(raw)
     parts = _parts(msg)
 

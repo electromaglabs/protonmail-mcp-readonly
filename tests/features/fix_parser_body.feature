@@ -64,3 +64,13 @@ Feature: Brödtext och bilagor i hämtade mejl
     Given ett multipart/alternative-mejl med textdelen " " och HTML-delen "<p>Riktigt innehåll</p>"
     When jag hämtar mejlet med get_email med förvalda parametrar
     Then body_plain ska innehålla "Riktigt innehåll"
+
+  Scenario: Okänt body_format ger ett tydligt fel
+    Given ett multipart/alternative-mejl med 2000 tecken HTML
+    When jag försöker hämta mejlet med body_format "html"
+    Then ska anropet avvisas med ett fel som nämner "body_format"
+
+  Scenario: Negativ max_length ger ett tydligt fel
+    Given ett multipart/alternative-mejl med 2000 tecken HTML
+    When jag försöker hämta mejlet med max_length -5
+    Then ska anropet avvisas med ett fel som nämner "max_length"

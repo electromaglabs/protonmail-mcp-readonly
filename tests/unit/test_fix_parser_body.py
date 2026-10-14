@@ -178,3 +178,21 @@ class TestWhitespaceOnlyPlainFallsBackToHtml:
     def test_full_mode_keeps_raw_plain(self):
         result = parse_email(_alternative(" ", "<p>H</p>"), body_format="full")
         assert result["body_plain"].strip() == ""
+
+
+class TestArgumentValidation:
+    """PE13: ogiltiga argument ger ValueError i stället för tyst felbeteende."""
+
+    @pytest.mark.parametrize("fmt", ["html", "TEXT", "", "Full"])
+    def test_unknown_body_format(self, fmt):
+        with pytest.raises(ValueError, match="body_format"):
+            parse_email(_alternative("hej", "<p>hej</p>"), body_format=fmt)
+
+    @pytest.mark.parametrize("fmt", ["text", "stripped", "full"])
+    def test_negative_max_length(self, fmt):
+        with pytest.raises(ValueError, match="max_length"):
+            parse_email(_alternative("hej", "<p>hej</p>"), body_format=fmt, max_length=-5)
+
+    def test_zero_max_length_is_allowed(self):
+        result = parse_email(_alternative("hej", "<p>hej</p>"), max_length=0)
+        assert result["body_plain"].startswith("\n[...")
