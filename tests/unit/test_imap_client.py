@@ -157,6 +157,20 @@ class TestParseHeaders:
         result = _parse_headers(raw)
         assert result["subject"] == "Re: Hello"
 
+    def test_folded_header_keeps_continuation(self):
+        """En vikt From-rad får inte tappa adressen på fortsättningsraden."""
+        raw = (
+            b'From: "Microsoft account team"\r\n'
+            b" <account-security-noreply@accountprotection.microsoft.com>\r\n"
+            b"Subject: Hej\r\n"
+        )
+        result = _parse_headers(raw)
+        assert result["from"] == (
+            '"Microsoft account team" '
+            "<account-security-noreply@accountprotection.microsoft.com>"
+        )
+        assert result["subject"] == "Hej"
+
 
 # ---------------------------------------------------------------------------
 # _parse_fetch_metadata
@@ -752,3 +766,131 @@ class TestListMessagesPagination:
         assert result["pages"] == 0
         assert result["has_more"] is False
         assert result["messages"] == []
+
+
+# ---------------------------------------------------------------------------
+# Läsning ska inte sätta \Seen, mappnamn citeras, metadata avkodas och sorteras
+#
+# Givet en inkorg med mejl vars ämnen är RFC 2047-kodade
+# När Claude listar eller öppnar mejl
+# Så markeras inget som läst, ämnen och avsändare visas avkodade
+# och listan är sorterad nyast först (högst UID först)
+# ---------------------------------------------------------------------------
+class TestReadOnlyAndDecodedListing:
+    @pytest.fixture
+    def client(self, monkeypatch):
+        monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
+        monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
+        from protonmail_mcp.config import Settings
+        imap = IMAPClient(Settings())
+        imap._client = AsyncMock()
+        imap._client.select = AsyncMock(
+            return_value=SimpleNamespace(result="OK", lines=["5 EXISTS"])
+        )
+        return imap
+
+    @staticmethod
+    def _fetch_resp(uids: list[int]):
+        lines = []
+        for uid in uids:
+            lines.append(f'1 FETCH (UID {uid} FLAGS () BODY[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)] {{50}}')
+            lines.append(bytearray(f"Subject: Mail {uid}\r\nFrom: a@b.com\r\n".encode()))
+            lines.append(")")
+        return SimpleNamespace(result="OK", lines=lines)
+
+    @pytest.mark.asyncio
+    async def test_list_messages_quotes_mailbox_with_brackets(self, client):
+        client._client.fetch = AsyncMock(return_value=self._fetch_resp([1]))
+        await client.list_messages("Folders/[X]")
+        client._client.select.assert_awaited_with('"Folders/[X]"')
+
+    @pytest.mark.asyncio
+    async def test_list_messages_uses_body_peek(self, client):
+        client._client.fetch = AsyncMock(return_value=self._fetch_resp([1]))
+        await client.list_messages("INBOX")
+        fetch_items = client._client.fetch.await_args.args[1]
+        assert "BODY.PEEK[HEADER.FIELDS" in fetch_items
+
+    @pytest.mark.asyncio
+    async def test_get_message_uses_body_peek(self, client):
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=["1 FETCH (BODY[] {5}", bytearray(b"x: y\r\n"), ")"],
+        ))
+        await client.get_message("INBOX", "42")
+        assert client._client.uid.await_args.args[2] == "BODY.PEEK[]"
+
+    @pytest.mark.asyncio
+    async def test_list_messages_sorted_newest_uid_first(self, client):
+        client._client.fetch = AsyncMock(return_value=self._fetch_resp([3, 5, 1, 4, 2]))
+        result = await client.list_messages("INBOX")
+        assert [m["uid"] for m in result["messages"]] == ["5", "4", "3", "2", "1"]
+
+    def test_metadata_decodes_encoded_words(self):
+        lines = [
+            '1 FETCH (UID 7 FLAGS () BODY[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)] {90}',
+            bytearray(
+                b"Subject: =?utf-8?q?Bli_h=C3=A5llen?=\r\n"
+                b"From: =?utf-8?q?Ta=C3=AFme_Smit?= <info@e.wemove.eu>\r\n"
+            ),
+            ")",
+        ]
+        msg = _parse_fetch_metadata(lines)[0]
+        assert msg["subject"] == "Bli hållen"
+        assert msg["from"] == "Taïme Smit <info@e.wemove.eu>"
+
+    def test_metadata_handles_folded_subject(self):
+        lines = [
+            '1 FETCH (UID 8 FLAGS () BODY[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)] {90}',
+            bytearray(b"Subject: Ett langt\r\n amne\r\nFrom: a@b.com\r\n"),
+            ")",
+        ]
+        assert _parse_fetch_metadata(lines)[0]["subject"] == "Ett langt amne"
+
+
+# ---------------------------------------------------------------------------
+# Samtidiga verktygsanrop
+#
+# Givet att Claude anropar två verktyg parallellt mot samma IMAP-anslutning
+# När båda startar innan någon anslutning finns
+# Så loggar klienten in en gång och kommandona körs ett i taget
+# (annars: "LOGIN illegal in state SELECTED" och SELECT som byter mapp mitt i)
+# ---------------------------------------------------------------------------
+class TestConcurrentCalls:
+    @pytest.fixture
+    def client(self, monkeypatch):
+        monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
+        monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
+        from protonmail_mcp.config import Settings
+        return IMAPClient(Settings())
+
+    @pytest.mark.asyncio
+    async def test_parallel_calls_login_once_and_do_not_interleave(self, client):
+        in_flight = 0
+        max_in_flight = 0
+        fake = AsyncMock()
+
+        async def slow_select(_mailbox):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return SimpleNamespace(result="OK", lines=["0 EXISTS"])
+
+        async def slow_hello():
+            await asyncio.sleep(0.01)
+
+        fake.select = slow_select
+        fake.wait_hello_from_server = slow_hello
+        fake.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=fake) as ctor:
+            await asyncio.gather(
+                client.list_messages("INBOX"),
+                client.get_message_headers("Sent", "1"),
+                client.list_messages("Archive"),
+            )
+
+        assert ctor.call_count == 1
+        assert fake.login.await_count == 1
+        assert max_in_flight == 1

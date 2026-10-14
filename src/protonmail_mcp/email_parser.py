@@ -6,6 +6,11 @@ from email.message import Message
 from typing import Any
 
 
+# Alla tecken str.splitlines() räknar som radgräns, inkl. omgivande blanksteg
+# (så att en vikt rad "a\r\n b" blir "a b" och inte "a  b")
+_LINE_BREAKS_RE = re.compile(r"\s*[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+\s*")
+
+
 def decode_header_value(value) -> str:
     if not value:
         return ""
@@ -20,7 +25,7 @@ def decode_header_value(value) -> str:
     # Avkodade ord kan dölja radbrytningar (CR/LF men även \v, \f, \x1c-\x1e,
     # \x85, U+2028/2029 som str.splitlines() räknar) — slå ihop till en rad så
     # värdet inte kan injicera headers
-    return " ".join("".join(decoded).splitlines())
+    return _LINE_BREAKS_RE.sub(" ", "".join(decoded))
 
 
 def extract_addresses(header_value: str | None) -> list[str]:

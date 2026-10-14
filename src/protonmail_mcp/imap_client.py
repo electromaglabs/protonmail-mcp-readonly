@@ -1,13 +1,16 @@
 import asyncio
+import functools
 import logging
 import math
 import re
 from datetime import datetime
+from email.parser import BytesHeaderParser
 from typing import Any
 
 import aioimaplib
 
 from .config import Settings
+from .email_parser import decode_header_value
 
 logger = logging.getLogger(__name__)
 
@@ -84,18 +87,33 @@ def _parse_list_line(line: str) -> str | None:
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
     """Parsar raw RFC822-headers till en dict med lowercase-nycklar."""
+    # BytesHeaderParser vecklar ut vikta rader (RFC 5322 §2.2.3); värdena
+    # lämnas annars råa, eftersom get_email_headers används för analys
     result: dict[str, str] = {}
-    for hline in raw.decode("utf-8", errors="replace").splitlines():
-        if ": " in hline:
-            k, _, v = hline.partition(": ")
-            result[k.lower()] = v.strip()
+    for k, v in BytesHeaderParser().parsebytes(raw).items():
+        result[k.lower()] = re.sub(r"\s*\r?\n\s*", " ", str(v)).strip()
     return result
+
+
+def _serialized(method):
+    """Kör IMAP-operationen under klientens lås.
+
+    MCP-servern kan ta emot flera verktygsanrop samtidigt, men en IMAP-session
+    har ett tillstånd (inloggad, vald mapp). Utan lås kan två anrop logga in
+    samtidigt eller byta mapp åt varandra mitt i en FETCH.
+    """
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        async with self._lock:
+            return await method(self, *args, **kwargs)
+    return wrapper
 
 
 class IMAPClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: aioimaplib.IMAP4 | None = None
+        self._lock = asyncio.Lock()
 
     async def connect(self) -> None:
         logger.info("Ansluter till IMAP %s:%d (plain)", self._settings.imap_host, self._settings.imap_port)
@@ -127,6 +145,7 @@ class IMAPClient:
             self._client = None
             await self.connect()
 
+    @_serialized
     async def list_mailboxes(self) -> list[dict[str, str]]:
         await self._ensure_connected()
         resp = await self._client.list('""', "*")
@@ -139,6 +158,7 @@ class IMAPClient:
                     mailboxes.append({"name": name, "type": mb_type})
         return mailboxes
 
+    @_serialized
     async def list_messages(
         self, mailbox: str, page: int = 1, page_size: int = 20
     ) -> dict[str, Any]:
@@ -183,8 +203,7 @@ class IMAPClient:
                 "has_more": page < total_pages,
             }
 
-        msgs = _parse_fetch_metadata(fetch_resp.lines)
-        msgs.reverse()  # nyaste överst
+        msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
         return {
             "messages": msgs,
             "total": exists,
@@ -193,10 +212,11 @@ class IMAPClient:
             "has_more": page < total_pages,
         }
 
+    @_serialized
     async def get_message(self, mailbox: str, uid: str) -> bytes | None:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
-        resp = await self._client.uid("fetch", _validate_uid(uid), "BODY[]")
+        resp = await self._client.uid("fetch", _validate_uid(uid), "BODY.PEEK[]")
         if resp.result != "OK":
             return None
         # lines[0] = "SEQNUM FETCH (BODY[] {SIZE}"
@@ -206,6 +226,7 @@ class IMAPClient:
                 return bytes(line)
         return None
 
+    @_serialized
     async def search_messages(
         self,
         mailbox: str,
@@ -251,10 +272,10 @@ class IMAPClient:
         if fetch_resp.result != "OK":
             return []
 
-        msgs = _parse_fetch_metadata(fetch_resp.lines)
-        msgs.reverse()  # nyaste först
+        msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
         return msgs
 
+    @_serialized
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
@@ -262,6 +283,7 @@ class IMAPClient:
         resp = await self._client.uid("store", _validate_uid(uid), action, flags)
         return resp.result == "OK"
 
+    @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
@@ -273,6 +295,7 @@ class IMAPClient:
         await self._client.expunge()
         return True
 
+    @_serialized
     async def delete_message(self, mailbox: str, uid: str) -> bool:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
@@ -281,6 +304,7 @@ class IMAPClient:
         await self._client.expunge()
         return True
 
+    @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
         await self._ensure_connected()
         await self._client.select(_quote_mailbox(mailbox))
@@ -295,21 +319,25 @@ class IMAPClient:
                 return _parse_headers(bytes(line))
         return None
 
+    @_serialized
     async def create_folder(self, name: str) -> bool:
         await self._ensure_connected()
         resp = await self._client.create(_quote_mailbox(name))
         return resp.result == "OK"
 
+    @_serialized
     async def delete_folder(self, name: str) -> bool:
         await self._ensure_connected()
         resp = await self._client.delete(_quote_mailbox(name))
         return resp.result == "OK"
 
+    @_serialized
     async def rename_folder(self, old_name: str, new_name: str) -> bool:
         await self._ensure_connected()
         resp = await self._client.rename(_quote_mailbox(old_name), _quote_mailbox(new_name))
         return resp.result == "OK"
 
+    @_serialized
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
         await self._ensure_connected()
         resp = await self._client.status(_quote_mailbox(mailbox), "(MESSAGES UNSEEN)")
@@ -322,6 +350,12 @@ class IMAPClient:
                     if key in ("messages", "unseen"):
                         status[key] = int(m.group(2))
         return status
+
+
+def _sort_newest_first(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sorterar på UID fallande. UID speglar ankomstordning i mappen, till
+    skillnad från Date-headern som avsändaren själv sätter."""
+    return sorted(msgs, key=lambda m: int(m["uid"]) if m["uid"].isdigit() else -1, reverse=True)
 
 
 def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
@@ -343,16 +377,18 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
                 headers_raw = bytes(lines[i + 1])
                 i += 1
 
-            header_dict = _parse_headers(headers_raw)
+            # email-parsern hanterar vikta rader; decode_header_value avkodar
+            # RFC 2047-ord (åäö, emoji) och slår ihop radbrytningar
+            hdrs = BytesHeaderParser().parsebytes(headers_raw)
 
             messages.append({
                 "uid": uid,
                 "flags": flags,
-                "subject": header_dict.get("subject", ""),
-                "from": header_dict.get("from", ""),
-                "to": header_dict.get("to", ""),
-                "date": header_dict.get("date", ""),
-                "message_id": header_dict.get("message-id", ""),
+                "subject": decode_header_value(hdrs.get("subject")),
+                "from": decode_header_value(hdrs.get("from")),
+                "to": decode_header_value(hdrs.get("to")),
+                "date": decode_header_value(hdrs.get("date")),
+                "message_id": decode_header_value(hdrs.get("message-id")),
             })
         i += 1
     return messages
