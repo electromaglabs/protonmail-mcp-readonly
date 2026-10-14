@@ -125,10 +125,32 @@ def _decode_rfc2047(text: str) -> str:
     return "".join(out)
 
 
+def _header_to_text(value) -> str:
+    """Gör om ett rått rubrikvärde till str utan att tappa 8-bitars tecken.
+
+    Både compat32-parsern och IMAP-metadata lämnar rå UTF-8 (RFC 6532) som
+    surrogateescape-str eller som Header-objekt med unknown-8bit; str() på
+    dem ger U+FFFD. Bytesen avkodas i stället som utf-8 → cp1252 → latin-1.
+    """
+    if isinstance(value, email.header.Header):
+        try:
+            return "".join(
+                part if isinstance(part, str)
+                else _decode_bytes(part, None if charset in (None, "unknown-8bit") else charset)
+                for part, charset in email.header.decode_header(value)
+            )
+        except Exception:
+            return str(value)
+    text = str(value)
+    if any("\udc80" <= ch <= "\udcff" for ch in text):
+        text = _decode_bytes(text.encode("utf-8", "surrogateescape"), None)
+    return text
+
+
 def decode_header_value(value) -> str:
     if not value:
         return ""
-    value = str(value)
+    value = _header_to_text(value)
     # Avkodade ord kan dölja radbrytningar (CR/LF men även \v, \f, \x1c-\x1e,
     # \x85, U+2028/2029 som str.splitlines() räknar) — slå ihop till en rad så
     # värdet inte kan injicera headers
@@ -144,7 +166,7 @@ def decode_header_value(value) -> str:
 def extract_addresses(header_value: str | None) -> list[str]:
     if not header_value:
         return []
-    addresses = email.utils.getaddresses([header_value])
+    addresses = email.utils.getaddresses([_header_to_text(header_value)])
     return [f"{name} <{addr}>" if name else addr for name, addr in addresses]
 
 
@@ -230,6 +252,15 @@ def _truncate(text: str, max_length: int | None) -> str:
     return text[:max_length] + f"\n[...{remaining} characters remaining]"
 
 
+def _raw_header(msg: Message, name: str) -> str | None:
+    """Första förekomsten av en rubrik, rå (före compat32:s Header-omvandling)."""
+    wanted = name.lower()
+    for key, value in msg.raw_items():
+        if key.lower() == wanted:
+            return value
+    return None
+
+
 def parse_email(
     raw: bytes,
     body_format: str = "text",
@@ -262,18 +293,18 @@ def parse_email(
         body_html = _truncate(body_html, max_length)
 
     return {
-        "message_id": msg.get("Message-ID", ""),
-        "subject": decode_header_value(msg.get("Subject")),
-        "from": decode_header_value(msg.get("From")),
-        "to": extract_addresses(msg.get("To")),
-        "cc": extract_addresses(msg.get("Cc")),
-        "bcc": extract_addresses(msg.get("Bcc")),
-        "reply_to": extract_addresses(msg.get("Reply-To")),
-        "date": msg.get("Date", ""),
+        "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
+        "subject": decode_header_value(_raw_header(msg, "Subject")),
+        "from": decode_header_value(_raw_header(msg, "From")),
+        "to": extract_addresses(_raw_header(msg, "To")),
+        "cc": extract_addresses(_raw_header(msg, "Cc")),
+        "bcc": extract_addresses(_raw_header(msg, "Bcc")),
+        "reply_to": extract_addresses(_raw_header(msg, "Reply-To")),
+        "date": decode_header_value(_raw_header(msg, "Date")),
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": get_attachments(msg),
-        "headers": {k: decode_header_value(v) for k, v in msg.items()},
+        "headers": {k: decode_header_value(v) for k, v in msg.raw_items()},
     }
 
 

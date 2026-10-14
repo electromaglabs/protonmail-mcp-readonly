@@ -51,3 +51,29 @@ def listed_count(listing, count):
 @then(parsers.parse('det mittersta mejlets ämne ska vara "{subject}"'))
 def middle_subject(listing, subject):
     assert listing[1]["subject"] == subject
+
+
+@given(
+    parsers.parse('ett mejl med råa UTF-8-rubriker från "{sender}" med ämnet "{subject}"'),
+    target_fixture="raw",
+)
+def mail_with_raw_utf8(mock_ctx, sender, subject):
+    raw = (
+        f"From: {sender}\r\nTo: Örjan <o@x.se>\r\nSubject: {subject}\r\n"
+        "Date: Mån, 1 Jan 2024 10:00:00 +0100\r\nMessage-ID: <å@x.se>\r\n"
+        "Sender: Göran <g@x.se>\r\n\r\nhej\r\n"
+    ).encode()
+    mock_ctx.request_context.lifespan_context.imap.get_message.return_value = raw
+    return raw
+
+
+@then(parsers.parse('avsändaren ska vara "{sender}"'))
+def sender_is(result, sender):
+    assert result["from"] == sender
+
+
+@then("alla fält ska gå att serialisera som JSON")
+def json_serializable(result):
+    import json
+
+    json.dumps(result, ensure_ascii=False).encode("utf-8")
