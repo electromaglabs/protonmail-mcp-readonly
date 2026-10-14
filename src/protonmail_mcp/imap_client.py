@@ -225,6 +225,51 @@ def _serialized(method):
     return wrapper
 
 
+class _BridgeProtocol(aioimaplib.IMAP4ClientProtocol):
+    """aioimaplib:s protokoll, rättat för mappnamn som innehåller "* ".
+
+    aioimaplib 2.0.1 gör line.replace(b'* ', b'') på hela den otaggade raden,
+    så LIST-raden för "Folders/* Viktigt" blev "Folders/Viktigt" och namnet
+    gick sedan inte att öppna. Här tas bara det inledande "* " bort; resten
+    av metoden är densamma som i aioimaplib.
+    """
+
+    def _untagged_response(self, line: bytes):
+        if line.startswith(b"* "):
+            line = line[2:]
+        if self.pending_sync_command is not None:
+            self.pending_sync_command.append_to_resp(line)
+            return self.pending_sync_command
+        match = aioimaplib.aioimaplib.message_data_re.match(line)
+        if match:
+            cmd_name, text = match.group(1), match.string
+        else:
+            cmd_name, _, text = line.partition(b" ")
+        command = self.pending_async_commands.get(cmd_name.decode().upper())
+        if command is not None:
+            command.append_to_resp(text)
+            return command
+        # NOOP är asynkront, och servern kan skicka oombedda otaggade svar
+        command = self.pending_async_commands.get("NOOP")
+        if command is not None:
+            command.append_to_resp(line)
+        else:
+            logger.debug("Ignorerat otaggat svar: %r", line)
+        return command
+
+
+def _use_bridge_protocol(client) -> None:
+    """Låter en nyskapad aioimaplib.IMAP4 använda _BridgeProtocol.
+
+    IMAP4 skapar protokollet själv, och anslutningen tar det via
+    `lambda: self.protocol`, så klassbytet på instansen gäller hela vägen.
+    Testattrapper (MagicMock) lämnas orörda.
+    """
+    protocol = getattr(client, "protocol", None)
+    if type(protocol) is aioimaplib.IMAP4ClientProtocol:
+        protocol.__class__ = _BridgeProtocol
+
+
 # aioimaplib:s tillstånd före inloggning och efter utloggning (övriga: AUTH, SELECTED)
 _NOT_LOGGED_IN_STATES = (aioimaplib.STARTED, aioimaplib.CONNECTED, aioimaplib.NONAUTH, aioimaplib.LOGOUT)
 
@@ -264,6 +309,7 @@ class IMAPClient:
         client = aioimaplib.IMAP4(
             host=host, port=port, timeout=self.timeout, conn_lost_cb=forget_on_connection_lost
         )
+        _use_bridge_protocol(client)
         # self._client sätts först när inloggningen lyckats. Annars fastnar en
         # klient i NONAUTH, där NOOP lyckas men allt annat avvisas, för alltid.
         try:
