@@ -51,7 +51,7 @@ Feature: Robust IMAP-anslutning mot ProtonMail Bridge
   Scenario: En flytt som Bridge aldrig besvarar låser inte servern
     Given en Bridge med mappen "INBOX" som innehåller 2 meddelanden
     And en Bridge med mappen "Archive" som innehåller 0 meddelanden
-    And att Bridge aldrig svarar på "UID COPY"
+    And att Bridge aldrig svarar på "UID MOVE"
     When jag flyttar meddelande 1 från "INBOX" till "Archive"
     Then ska jag få ett timeoutfel
     When jag listar mejlen i "INBOX"

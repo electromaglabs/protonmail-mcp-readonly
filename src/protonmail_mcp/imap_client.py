@@ -444,30 +444,79 @@ class IMAPClient:
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         await self._ensure_connected()
         await self._select(mailbox)
+        safe_uid = _validate_uid(uid)
+        await self._require_uid(mailbox, safe_uid)
         action = "+FLAGS" if add else "-FLAGS"
-        resp = await self._uid("store", _validate_uid(uid), action, flags)
-        return resp.result == "OK"
+        resp = await self._uid("store", safe_uid, action, flags)
+        _require_ok(resp, f"Ändringen av flaggorna på UID {safe_uid} i {mailbox}")
+        return True
 
     @_serialized
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
+        """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas."""
+        return await self._move(mailbox, uid, target)
+
+    async def _move(self, mailbox: str, uid: str, target: str) -> bool:
+        safe_uid = _validate_uid(uid)
+        _quote_mailbox(mailbox)
+        quoted_target = _quote_mailbox(target)
+        _check_move(mailbox, target)
         await self._ensure_connected()
         await self._select(mailbox)
-        safe_uid = _validate_uid(uid)
-        copy_resp = await self._uid("copy", safe_uid, _quote_mailbox(target))
-        if copy_resp.result != "OK":
-            return False
-        await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
-        await self._client.expunge()
+        await self._require_uid(mailbox, safe_uid)
+        resp = await self._uid("move", safe_uid, quoted_target)
+        _require_ok(resp, f"Flytten av UID {safe_uid} från {mailbox} till {target}")
         return True
 
     @_serialized
-    async def delete_message(self, mailbox: str, uid: str) -> bool:
+    async def delete_message(self, mailbox: str, uid: str, permanent: bool = False) -> bool:
+        """Flyttar ett mejl till Trash, eller raderar det permanent ur Trash/Drafts.
+
+        Permanent radering görs med UID STORE \\Deleted + UID EXPUNGE på just
+        det UID:t, aldrig med EXPUNGE på hela mappen.
+        """
+        safe_uid = _validate_uid(uid)
+        key = _mailbox_key(mailbox)
+        if not permanent:
+            if key == "trash":
+                raise ValueError(
+                    "Mejlet ligger redan i Trash. Använd permanent=True för att radera det permanent."
+                )
+            return await self._move(mailbox, safe_uid, "Trash")
+
+        if key not in _READD_DELETES:
+            raise ValueError(
+                f"Permanent radering görs bara i Trash eller Drafts, inte i {mailbox}. "
+                "Ta bort mejlet utan permanent först, så hamnar det i Trash."
+            )
         await self._ensure_connected()
         await self._select(mailbox)
-        safe_uid = _validate_uid(uid)
-        await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
-        await self._client.expunge()
+        await self._require_uid(mailbox, safe_uid)
+        resp = await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
+        _require_ok(resp, f"Borttagningsmarkeringen av UID {safe_uid} i {mailbox}")
+        resp = await self._uid("expunge", safe_uid)
+        if resp.result != "OK":
+            # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlet
+            await self._uid("store", safe_uid, "-FLAGS", r"(\Deleted)")
+        _require_ok(resp, f"Den permanenta raderingen av UID {safe_uid} i {mailbox}")
         return True
+
+    async def _require_uid(self, mailbox: str, uid: str) -> None:
+        """Kontrollerar att UID:t finns i den valda mappen.
+
+        Bridge svarar OK på UID STORE/MOVE/EXPUNGE även för UID:n som inte
+        finns, så utan kontrollen skulle verktygen rapportera lyckat för ingenting.
+        """
+        resp = await self._uid("fetch", uid, "(UID)")
+        _require_ok(resp, f"Kontrollen av UID {uid} i {mailbox}")
+        for line in resp.lines:
+            m = _UID_RE.search(_decode(line))
+            if m and int(m.group(1)) == int(uid):
+                return
+        raise ValueError(
+            f"Inget meddelande med UID {uid} i {mailbox}. "
+            "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
+        )
 
     @_serialized
     async def get_message_headers(self, mailbox: str, uid: str) -> dict | None:
@@ -486,21 +535,53 @@ class IMAPClient:
 
     @_serialized
     async def create_folder(self, name: str) -> bool:
+        kind = _check_user_folder(name)
+        quoted = _quote_mailbox(name)
         await self._ensure_connected()
-        resp = await self._client.create(_quote_mailbox(name))
-        return resp.result == "OK"
+        resp = await self._client.create(quoted)
+        _require_ok(resp, f"Att skapa {kind}en {name}" + _parent_hint(name))
+        return True
 
     @_serialized
-    async def delete_folder(self, name: str) -> bool:
+    async def delete_folder(self, name: str, force: bool = False) -> bool:
+        """Tar bort en mapp eller etikett; vägrar om den inte är tom, utom med force.
+
+        Bridge tar bort mappen även när den innehåller mejl, och för en etikett
+        försvinner den då från alla mejl — därför kontrolleras STATUS först.
+        """
+        kind = _check_user_folder(name)
+        quoted = _quote_mailbox(name)
         await self._ensure_connected()
-        resp = await self._client.delete(_quote_mailbox(name))
-        return resp.result == "OK"
+        status = await self._client.status(quoted, "(MESSAGES)")
+        _require_ok(status, f"Kontrollen av {kind}en {name}")
+        count = _status_messages(status)
+        if count is None:
+            raise ValueError(f"Kunde inte läsa antal mejl i {name}: {_response_text(status)}")
+        if count and not force:
+            raise ValueError(
+                f"{kind.capitalize()}en {name} är inte tom ({count} mejl) och tas inte bort. "
+                f"Med force=True tas den bort ändå: mejlen raderas inte, men för en etikett "
+                f"försvinner etiketten från alla {count} mejl, och för en mapp ligger mejlen "
+                "sedan inte kvar i mappen (de finns i All Mail)."
+            )
+        resp = await self._client.delete(quoted)
+        _require_ok(resp, f"Att ta bort {kind}en {name}")
+        return True
 
     @_serialized
     async def rename_folder(self, old_name: str, new_name: str) -> bool:
+        old_kind = _check_user_folder(old_name)
+        new_kind = _check_user_folder(new_name)
+        if old_kind != new_kind:
+            raise ValueError(
+                f"Proton kan inte byta mellan mapp och etikett ({old_name} → {new_name}). "
+                "Behåll prefixet: Folders/ → Folders/ eller Labels/ → Labels/."
+            )
+        quoted_old, quoted_new = _quote_mailbox(old_name), _quote_mailbox(new_name)
         await self._ensure_connected()
-        resp = await self._client.rename(_quote_mailbox(old_name), _quote_mailbox(new_name))
-        return resp.result == "OK"
+        resp = await self._client.rename(quoted_old, quoted_new)
+        _require_ok(resp, f"Namnbytet {old_name} → {new_name}" + _parent_hint(new_name))
+        return True
 
     @_serialized
     async def get_mailbox_status(self, mailbox: str) -> dict[str, int]:
@@ -560,3 +641,88 @@ def _parse_fetch_metadata(lines: list) -> list[dict[str, Any]]:
             })
         i += 1
     return messages
+
+
+def _require_ok(resp, what: str) -> None:
+    if resp.result != "OK":
+        raise ValueError(f"{what} misslyckades ({resp.result}): {_response_text(resp)}")
+
+
+def _mailbox_key(name: str) -> str:
+    return name.casefold()
+
+
+def _is_label_view(name: str) -> bool:
+    """Etiketter (Labels/…) och Starred: ett mejl där ligger också i någon mapp."""
+    key = _mailbox_key(name)
+    return key == "starred" or key.startswith("labels/")
+
+
+# Mappar där Bridge raderar permanent när ett mejl som redan finns där läggs dit igen
+_READD_DELETES = ("trash", "drafts")
+
+
+def _check_move(source: str, target: str) -> None:
+    """Avvisar flyttar som Bridge nekar eller som kan radera mejlet permanent."""
+    src, dst = _mailbox_key(source), _mailbox_key(target)
+    if src == dst:
+        raise ValueError(
+            f"Källa och mål är samma mapp ({source}). Bridge tar då först bort mejlet ur "
+            "mappen och lägger sedan tillbaka det — i Trash och Drafts raderas det permanent."
+        )
+    if "all mail" in (src, dst):
+        raise ValueError(
+            "Bridge tillåter inte flytt till eller från All Mail. Ange mappen där mejlet "
+            "ligger (t.ex. INBOX, Archive eller Folders/…) som källa."
+        )
+    if {src, dst} == {"inbox", "sent"}:
+        raise ValueError("Bridge tillåter inte flytt mellan INBOX och Sent.")
+    if dst in _READD_DELETES and _is_label_view(source):
+        raise ValueError(
+            f"Flytt till {target} från {source} avvisas: mejlet kan redan ligga i {target}, "
+            "och då raderar Bridge det permanent. Ange mappen där mejlet ligger "
+            "(t.ex. INBOX, Archive eller Folders/…) som källa."
+        )
+
+
+# Ett "/" som inte är escapat med backslash skiljer nivåer åt i namnet
+_LEVEL_SEP_RE = re.compile(r'(?<!\\)/')
+
+
+def _check_user_folder(name: str) -> str:
+    """Kontrollerar att namnet är en egen mapp eller etikett hos Proton.
+
+    Returnerar "mapp" för Folders/… och "etikett" för Labels/…. Bridge nekar
+    CREATE/RENAME/DELETE för allt annat, utan förklaring.
+    """
+    for prefix, kind in (("Folders/", "mapp"), ("Labels/", "etikett")):
+        if name.startswith(prefix) and name[len(prefix):]:
+            if kind == "etikett" and _LEVEL_SEP_RE.search(name[len(prefix):]):
+                raise ValueError(
+                    f"Underetiketter finns inte i Proton: {name!r}. Etiketter ligger bara "
+                    "direkt under Labels/ (t.ex. Labels/Kunder). Använd Folders/… för en "
+                    "mapphierarki."
+                )
+            return kind
+    raise ValueError(
+        f"Ogiltigt namn {name!r}: egna mappar måste börja med 'Folders/' (t.ex. "
+        "'Folders/Projekt') och etiketter med 'Labels/' (t.ex. 'Labels/Kvitton'). "
+        "Systemmapparna (INBOX, Trash, All Mail …) kan inte skapas, döpas om eller tas bort."
+    )
+
+
+def _parent_hint(name: str) -> str:
+    """Förklaring när en undermapp inte kunde skapas: föräldern måste finnas."""
+    parts = _LEVEL_SEP_RE.split(name)
+    if name.startswith("Folders/") and len(parts) > 2:
+        return f" (för en undermapp måste {'/'.join(parts[:-1])} redan finnas)"
+    return ""
+
+
+def _status_messages(resp) -> int | None:
+    """MESSAGES ur ett STATUS-svar, eller None om det saknas."""
+    for line in resp.lines:
+        for m in _STATUS_NUM_RE.finditer(_decode(line)):
+            if m.group(1).upper() == "MESSAGES":
+                return int(m.group(2))
+    return None

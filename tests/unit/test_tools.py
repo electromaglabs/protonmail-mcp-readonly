@@ -175,7 +175,9 @@ class TestDeleteEmail:
     async def test_delegates_to_delete_message(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.delete_message.return_value = True
         result = await delete_email(mock_ctx, uid="99", mailbox="Trash")
-        mock_ctx.request_context.lifespan_context.imap.delete_message.assert_called_once_with("Trash", "99")
+        mock_ctx.request_context.lifespan_context.imap.delete_message.assert_called_once_with(
+            "Trash", "99", permanent=False
+        )
         assert result is True
 
 
@@ -262,7 +264,7 @@ class TestDeleteFolder:
     async def test_delete_folder_delegates(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.delete_folder.return_value = True
         result = await delete_folder(mock_ctx, name="OldFolder")
-        mock_ctx.request_context.lifespan_context.imap.delete_folder.assert_called_once_with("OldFolder")
+        mock_ctx.request_context.lifespan_context.imap.delete_folder.assert_called_once_with("OldFolder", force=False)
         assert result is True
 
 

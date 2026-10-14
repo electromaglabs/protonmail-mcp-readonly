@@ -444,10 +444,14 @@ class TestDeleteMessage:
 
     @pytest.mark.asyncio
     async def test_successful_delete(self, client):
-        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        client._client.expunge = AsyncMock(return_value=SimpleNamespace(result="OK"))
+        # Standard är flytt till Trash; UID FETCH kontrollerar först att UID:t finns
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=[b"1 FETCH (UID 42)", b"done"]
+        ))
         result = await client.delete_message("INBOX", "42")
         assert result is True
+        client._client.uid.assert_awaited_with("move", "42", '"Trash"')
+        client._client.expunge.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -687,23 +691,27 @@ class TestFolderManagement:
     @pytest.mark.asyncio
     async def test_create_folder_ok(self, client):
         client._client.create = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.create_folder("NewFolder")
+        result = await client.create_folder("Folders/NewFolder")
         assert result is True
-        client._client.create.assert_awaited_once_with('"NewFolder"')
+        client._client.create.assert_awaited_once_with('"Folders/NewFolder"')
 
     @pytest.mark.asyncio
     async def test_delete_folder_ok(self, client):
+        # delete_folder kontrollerar först att mappen är tom
+        client._client.status = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=[b'"Folders/OldFolder" (MESSAGES 0)', b"STATUS completed"]
+        ))
         client._client.delete = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.delete_folder("OldFolder")
+        result = await client.delete_folder("Folders/OldFolder")
         assert result is True
-        client._client.delete.assert_awaited_once_with('"OldFolder"')
+        client._client.delete.assert_awaited_once_with('"Folders/OldFolder"')
 
     @pytest.mark.asyncio
     async def test_rename_folder_ok(self, client):
         client._client.rename = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.rename_folder("OldName", "NewName")
+        result = await client.rename_folder("Folders/OldName", "Folders/NewName")
         assert result is True
-        client._client.rename.assert_awaited_once_with('"OldName"', '"NewName"')
+        client._client.rename.assert_awaited_once_with('"Folders/OldName"', '"Folders/NewName"')
 
 
 # ---------------------------------------------------------------------------
