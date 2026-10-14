@@ -91,3 +91,19 @@ def bridge_received_all(bridge):
     assert bridge.errors == []
     sent = [c.args[0] for c in bridge.imap._client.status.call_args_list]
     assert sent == [f'"{w}"' for w in bridge.wire_names]
+
+
+@when("jag hämtar status för en mapp vars namn innehåller en radbrytning")
+def status_for_crlf(mock_ctx, bridge):
+    status_for(mock_ctx, bridge, "INBOX\r\nA1 DELETE INBOX")
+
+
+@then("ska anropet avvisas som ogiltigt mailbox-namn")
+def call_rejected(bridge):
+    assert len(bridge.errors) == 1
+    assert "Ogiltigt mailbox-namn" in bridge.errors[0]
+
+
+@then("ska Bridge inte ha fått något kommando")
+def bridge_untouched(bridge):
+    bridge.imap._client.status.assert_not_called()

@@ -50,13 +50,13 @@ class TestValidateMailbox:
         assert _validate_mailbox("Folders/Sub") == "Folders/Sub"
         assert _validate_mailbox("Labels/Arbete") == "Labels/Arbete"
 
-    def test_validate_mailbox_rejects_wildcard(self):
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
-            _validate_mailbox("INBOX*")
+    def test_validate_mailbox_allows_wildcard(self):
+        # Proton tillåter "*" och "%" i namn; de betyder bara något i LIST-mönster
+        assert _validate_mailbox("INBOX*") == "INBOX*"
 
-    def test_validate_mailbox_rejects_dotdot(self):
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
-            _validate_mailbox("../etc/passwd")
+    def test_validate_mailbox_allows_dotdot(self):
+        # Inget filsystem bakom Bridge, så ".." är ett vanligt namn
+        assert _validate_mailbox("../etc/passwd") == "../etc/passwd"
 
     def test_validate_mailbox_rejects_control_chars(self):
         with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):

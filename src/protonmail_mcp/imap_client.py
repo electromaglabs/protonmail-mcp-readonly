@@ -25,12 +25,14 @@ _UID_RE = re.compile(r'\bUID\s+(\d+)\b')
 _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
 _STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
 _VALID_UID_RE = re.compile(r'^\d+$')
-# Backslash och citattecken är tillåtna: _quote_mailbox escapar dem
-_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F%*]{1,255}$')
+# Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
+# Backslash och citattecken escapas av _quote_mailbox; "%", "*" och ".." är
+# giltiga namn hos Proton och har ingen särskild betydelse utanför LIST-mönster.
+_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F]{1,255}$')
 
 
 def _validate_mailbox(name: str) -> str:
-    if not _VALID_MAILBOX_RE.match(name) or ".." in name:
+    if not _VALID_MAILBOX_RE.match(name):
         raise ValueError(f"Ogiltigt mailbox-namn: {name!r}")
     return name
 
