@@ -61,16 +61,19 @@ def _decode_8bit(value: str) -> str:
 
 
 def _raw_values(msg: EmailMessage, name: str, limit: int | None = _MAX_HEADER_CHARS) -> list[str]:
-    """Råa (oparsade) värden för en header, skiftlägesokänsligt."""
+    """Råa (oparsade) värden för en header, skiftlägesokänsligt.
+
+    Gränsen gäller summan av alla förekomster — annars kan avsändaren dela
+    upp en enorm header på många rader med samma namn.
+    """
     key = name.lower()
-    values = [_decode_8bit(str(v)) for k, v in msg.raw_items() if k.lower() == key]
-    if limit is not None:
-        for value in values:
-            if len(value) > limit:
-                raise ValueError(
-                    f"Originalets {name}-header är orimligt stor ({len(value)} tecken)"
-                )
-    return values
+    values = [str(v) for k, v in msg.raw_items() if k.lower() == key]
+    total = sum(len(v) for v in values)
+    if limit is not None and total > limit:
+        raise ValueError(
+            f"Originalets {name}-header är orimligt stor ({total} tecken)"
+        )
+    return [_decode_8bit(v) for v in values]
 
 
 def _header_text(msg: EmailMessage, name: str) -> str:
