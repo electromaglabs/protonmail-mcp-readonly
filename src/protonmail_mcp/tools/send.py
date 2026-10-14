@@ -27,7 +27,9 @@ async def send_email(
         reply_to: Svarsadress
 
     Returns:
-        True om e-posten skickades utan fel
+        True om e-posten skickades utan fel. Vägrar servern bara några av
+        mottagarna kastas ett fel som anger vilka som vägrades och vilka som
+        ändå fick mejlet — skicka då inte om till alla.
     """
     app = _get_app(ctx)
     return await app.smtp.send_email(

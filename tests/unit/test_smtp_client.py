@@ -29,7 +29,8 @@ def mock_smtp():
     """Mock aiosmtplib.SMTP as async context manager."""
     smtp_instance = AsyncMock()
     smtp_instance.login = AsyncMock()
-    smtp_instance.send_message = AsyncMock()
+    # aiosmtplib returnerar (fel per mottagare, serversvar)
+    smtp_instance.send_message = AsyncMock(return_value=({}, "OK"))
 
     smtp_cm = MagicMock()
     smtp_cm.__aenter__ = AsyncMock(return_value=smtp_instance)

@@ -186,3 +186,54 @@ async def test_long_non_ascii_subject_keeps_its_spaces(subject):
     with capture_smtp() as cap:
         await make_client().send_email(to="a@x.se", subject=subject, body="b")
     assert str(cap.parsed["Subject"]) == subject
+
+
+# -------------------------------------------------------------------
+# smtp-partial-refusal: delvis vägrade mottagare får inte sväljas
+# -------------------------------------------------------------------
+
+
+async def test_partial_refusal_raises_with_refused_and_delivered():
+    from protonmail_mcp.smtp_client import SMTPPartialDeliveryError
+
+    with capture_smtp() as cap:
+        cap.refused["bad@x.se"] = (550, "No such user")
+        with pytest.raises(SMTPPartialDeliveryError) as excinfo:
+            await make_client().send_email(
+                to=["ok@x.se", "bad@x.se"], cc="ok2@x.se", subject="s", body="b"
+            )
+    err = excinfo.value
+    assert err.refused == {"bad@x.se": (550, "No such user")}
+    assert err.delivered == ["ok@x.se", "ok2@x.se"]
+    assert "bad@x.se" in str(err) and "550" in str(err)
+    # Mejlet har faktiskt skickats till de andra — det ska felet säga
+    assert len(cap.sent) == 1
+
+
+async def test_partial_refusal_is_an_smtp_exception():
+    import aiosmtplib
+
+    from protonmail_mcp.smtp_client import SMTPPartialDeliveryError
+
+    assert issubclass(SMTPPartialDeliveryError, aiosmtplib.SMTPException)
+
+
+async def test_partial_refusal_does_not_log_addresses(caplog):
+    import logging
+
+    with capture_smtp() as cap:
+        cap.refused["bad@x.se"] = (550, "No such user")
+        with caplog.at_level(logging.DEBUG, logger="protonmail_mcp.smtp_client"):
+            with pytest.raises(Exception):
+                await make_client().send_email(
+                    to=["ok@x.se", "bad@x.se"], subject="s", body="b"
+                )
+    assert "bad@x.se" not in caplog.text
+    assert "ok@x.se" not in caplog.text
+
+
+async def test_full_acceptance_returns_true():
+    with capture_smtp():
+        assert await make_client().send_email(
+            to=["ok@x.se", "ok2@x.se"], subject="s", body="b"
+        ) is True

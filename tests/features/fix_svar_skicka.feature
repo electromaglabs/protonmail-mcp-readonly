@@ -51,3 +51,16 @@ Feature: Skicka e-post med korrekta headers
     When jag skickar ett mail till "bob@example.com" med ämnet "Hej\nBcc: evil@example.com"
     Then ska sändningen avvisas med ett fel som nämner "radbrytningar"
     And inget mejl ska ha skickats
+
+  Scenario: Servern vägrar en av flera mottagare
+    Given en SMTP-klient för kontot "me@proton.me"
+    And att servern vägrar mottagaren "fel@example.se" med 550 "No such user"
+    When jag skickar ett mail till "ok@example.se" och "fel@example.se"
+    Then ska felet nämna "fel@example.se"
+    And ska felet nämna "550 No such user"
+    And ska felet tala om att mejlet gick fram till "ok@example.se"
+
+  Scenario: Servern godtar alla mottagare
+    Given en SMTP-klient för kontot "me@proton.me"
+    When jag skickar ett mail till "ok@example.se" och "ok2@example.se"
+    Then ska mejlet ha skickats

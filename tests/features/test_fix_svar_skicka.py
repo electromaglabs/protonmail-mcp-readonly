@@ -34,7 +34,7 @@ def _send(client, outcome, **kwargs):
         outcome["error"] = exc
 
 
-@when(parsers.parse('jag skickar ett mail till "{to}"'))
+@when(parsers.re(r'jag skickar ett mail till "(?P<to>[^"]+)"'))
 def send_to(client, captured, outcome, to):
     _send(client, outcome, to=to)
 
@@ -115,3 +115,26 @@ def rejected_with(outcome, text):
 @then("inget mejl ska ha skickats")
 def nothing_sent(captured):
     assert captured.sent == []
+
+
+@given(parsers.parse('att servern vägrar mottagaren "{addr}" med {code:d} "{text}"'))
+def server_refuses(captured, addr, code, text):
+    captured.refused[addr] = (code, text)
+
+
+@when(parsers.parse('jag skickar ett mail till "{first}" och "{second}"'))
+def send_to_two(client, captured, outcome, first, second):
+    _send(client, outcome, to=[first, second])
+
+
+@then(parsers.parse('ska felet nämna "{text}"'))
+def error_mentions(outcome, text):
+    assert "error" in outcome, "inget fel kastades"
+    assert text in str(outcome["error"])
+
+
+@then(parsers.parse('ska felet tala om att mejlet gick fram till "{addr}"'))
+def error_lists_delivered(outcome, addr):
+    err = outcome["error"]
+    assert err.delivered == [addr]
+    assert addr in str(err)

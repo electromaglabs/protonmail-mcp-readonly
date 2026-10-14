@@ -33,6 +33,28 @@ def _validate_email_addr(addr: str) -> str:
     return addr
 
 
+class SMTPPartialDeliveryError(aiosmtplib.SMTPException):
+    """Servern tog emot mejlet för några mottagare men vägrade andra.
+
+    aiosmtplib kastar bara när alla mottagare vägras; vägras bara några
+    returneras felen tyst. Mejlet HAR då gått iväg till ``delivered``, så den
+    som anropar ska inte skicka om till alla.
+    """
+
+    def __init__(self, refused: dict[str, tuple[int, str]], delivered: list[str]) -> None:
+        self.refused = refused
+        self.delivered = delivered
+        details = "; ".join(
+            f"{addr} ({code} {text})" for addr, (code, text) in refused.items()
+        )
+        super().__init__(
+            f"E-posten skickades till {len(delivered)} mottagare "
+            f"({', '.join(delivered)}), men servern vägrade {len(refused)}: "
+            f"{details}. Skicka inte om till alla — de som redan fått mejlet "
+            f"får det då två gånger."
+        )
+
+
 def _to_address(addr: str) -> Address:
     """Gör om en (validerad) adressträng till ett Address-objekt.
 
@@ -195,7 +217,21 @@ class SMTPClient:
             tls_context=self._ssl_ctx,
         ) as client:
             await client.login(self._settings.username, self._settings.password)
-            await client.send_message(msg, recipients=all_recipients)
+            errors, _ = await client.send_message(msg, recipients=all_recipients)
+
+        if errors:
+            # Logga bara antal — adresserna får inte hamna i loggen (Bcc)
+            logger.warning(
+                "E-post skickad men %d av %d mottagare vägrades",
+                len(errors),
+                len(all_recipients),
+            )
+            raise SMTPPartialDeliveryError(
+                refused={
+                    addr: (resp.code, resp.message) for addr, resp in errors.items()
+                },
+                delivered=[a for a in all_recipients if a not in errors],
+            )
 
         logger.info("E-post skickad")
         return True
