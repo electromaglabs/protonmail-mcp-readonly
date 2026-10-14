@@ -28,6 +28,9 @@ _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
 _FETCH_START_RE = re.compile(r'^(?:\*\s+)?\d+\s+FETCH\s+\(', re.IGNORECASE)
 _LITERAL_END_RE = re.compile(r'\{\d+\}$')
 _STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
+# aioimaplib tolkar svaret rekursivt, en stackram per rad; ~3000 brev i ett
+# FETCH-svar ger RecursionError och en låst anslutning
+_FETCH_CHUNK_SIZE = 200
 _VALID_UID_RE = re.compile(r'^\d+$')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
 # Backslash och citattecken escapas av _quote_mailbox; "%", "*" och ".." är
@@ -436,9 +439,11 @@ class IMAPClient:
         since: str | None = None,
         before: str | None = None,
         unseen: bool | None = None,
-        max_results: int = 200,
+        max_results: int = 50,
     ) -> list[dict]:
         # Validera allt innan något skickas till servern
+        if max_results < 1:
+            raise ValueError(f"max_results måste vara >= 1 (fick {max_results})")
         criteria: list[str] = []
         if from_addr:
             criteria += ["FROM", _imap_quoted(from_addr, "from_addr")]
@@ -467,19 +472,24 @@ class IMAPClient:
         if not seqnums:
             return []
 
-        # Begränsa till nyaste max_results för att undvika rekursionsproblem
-        seqnums = seqnums[-max_results:]
+        # Nyaste max_results; sekvensnummer växer med ankomstordningen
+        seqnums = sorted(seqnums, key=int)[-max_results:]
+        return _sort_newest_first(await self._fetch_metadata(seqnums))
 
-        fetch_resp = await self._client.fetch(
-            ",".join(seqnums),
-            "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])",
-        )
-        if fetch_resp.result != "OK":
-            raise ValueError(
-                f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
+    async def _fetch_metadata(self, seqnums: list[str]) -> list[dict[str, Any]]:
+        """Hämtar UID, FLAGS och sökheaders i delar om högst _FETCH_CHUNK_SIZE."""
+        msgs: list[dict[str, Any]] = []
+        for start in range(0, len(seqnums), _FETCH_CHUNK_SIZE):
+            chunk = seqnums[start:start + _FETCH_CHUNK_SIZE]
+            fetch_resp = await self._client.fetch(
+                ",".join(chunk),
+                "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])",
             )
-
-        msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
+            if fetch_resp.result != "OK":
+                raise ValueError(
+                    f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"
+                )
+            msgs += _parse_fetch_metadata(fetch_resp.lines)
         return msgs
 
     @_serialized

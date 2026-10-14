@@ -118,6 +118,7 @@ class TestSearchEmails:
             since="01-Jan-2024",
             before="01-Feb-2024",
             unseen=True,
+            max_results=50,
         )
         assert result == [
             {"uid": "1", "mailbox": "INBOX"},
@@ -135,6 +136,7 @@ class TestSearchEmails:
             since=None,
             before=None,
             unseen=None,
+            max_results=50,
         )
 
 

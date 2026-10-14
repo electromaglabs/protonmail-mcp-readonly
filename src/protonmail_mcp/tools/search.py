@@ -1,4 +1,7 @@
+from typing import Annotated
+
 from mcp.server.fastmcp import Context
+from pydantic import Field
 
 from ..server import mcp
 from . import _get_app
@@ -15,6 +18,7 @@ async def search_emails(
     since: OptionalStr = None,
     before: OptionalStr = None,
     unseen: bool | None = None,
+    max_results: Annotated[int, Field(ge=1, le=200)] = 50,
 ) -> list[dict]:
     """Sök e-post med filter.
 
@@ -25,6 +29,7 @@ async def search_emails(
         since: Filtrera e-post efter datum (format: YYYY-MM-DD eller DD-Mon-YYYY)
         before: Filtrera e-post före datum (format: YYYY-MM-DD eller DD-Mon-YYYY)
         unseen: True=bara olästa, False=bara lästa, None=alla
+        max_results: Högsta antal träffar, 1–200 (standard: 50). De nyaste returneras.
 
     Returns:
         Lista med metadata-dicts (uid, mailbox, subject, from, date, flags) för matchande
@@ -38,5 +43,6 @@ async def search_emails(
         since=since,
         before=before,
         unseen=unseen,
+        max_results=max_results,
     )
     return _with_mailbox(hits, mailbox)
