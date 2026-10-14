@@ -9,10 +9,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from protonmail_mcp.tools.reply import reply_to_email
+from email.message import EmailMessage
+
+from protonmail_mcp.tools.reply import forward_email, reply_to_email
 from tests.fix_svar_support import capture_smtp, header_addresses, make_client
 
-scenarios("fix_svar_svar.feature")
+scenarios("fix_svar_svar.feature", "fix_svar_vidarebefordra.feature")
+
+PDF_BYTES = b"%PDF-1.4 fejkad faktura \x00\x01\x02"
 
 
 def _split(value: str) -> list[str]:
@@ -184,3 +188,75 @@ def reply_subject(captured, outcome, subject):
 def reply_header(captured, outcome, header, value):
     assert "error" not in outcome, outcome.get("error")
     assert " ".join(str(captured.parsed[header]).split()) == value
+
+
+# --- Vidarebefordran ---------------------------------------------------
+
+
+def _original(uid: str, subject: str) -> EmailMessage:
+    msg = EmailMessage()
+    msg["From"] = "Anna <anna@example.se>"
+    msg["To"] = "me@proton.me"
+    msg["Subject"] = subject
+    msg["Date"] = "Mon, 12 Oct 2026 09:30:00 +0200"
+    msg["Message-ID"] = f"<orig-{uid}@example.se>"
+    return msg
+
+
+@given(parsers.parse('ett nyhetsbrev med UID "{uid}" som bara har HTML-innehållet "{html}"'))
+def html_only_message(mailbox, uid, html):
+    msg = _original(uid, "Nyhetsbrev")
+    msg.set_content(f"<html><body>{html}</body></html>", subtype="html")
+    mailbox[("INBOX", uid)] = msg.as_bytes()
+
+
+@given(parsers.parse('ett mejl med UID "{uid}" med bilagan "{filename}" av typen "{ctype}"'))
+def message_with_attachment(mailbox, uid, filename, ctype):
+    msg = _original(uid, "Faktura")
+    msg.set_content("Fakturan bifogas.")
+    maintype, subtype = ctype.split("/")
+    msg.add_attachment(PDF_BYTES, maintype=maintype, subtype=subtype, filename=filename)
+    mailbox[("INBOX", uid)] = msg.as_bytes()
+
+
+@when(
+    parsers.re(
+        r'jag vidarebefordrar mejlet med UID "(?P<uid>[^"]+)" till "(?P<to>[^"]+)" '
+        r'med texten "(?P<text>[^"]*)"'
+    )
+)
+def forward(ctx, captured, outcome, uid, to, text):
+    _run(outcome, forward_email(ctx, uid=uid, to=to, body=text))
+
+
+@when(
+    parsers.parse(
+        'jag vidarebefordrar mejlet med UID "{uid}" till "{to}" med kopia till "{cc}" '
+        'och hemlig kopia till "{bcc}"'
+    )
+)
+def forward_cc_bcc(ctx, captured, outcome, uid, to, cc, bcc):
+    _run(outcome, forward_email(ctx, uid=uid, to=to, cc=cc, bcc=bcc))
+
+
+@then(parsers.parse('ska den vidarebefordrade texten innehålla "{text}"'))
+def forwarded_text(captured, outcome, text):
+    assert text in _plain_body(captured, outcome)
+
+
+@then(parsers.parse('ska den vidarebefordrade HTML-versionen innehålla "{text}"'))
+def forwarded_html(captured, outcome, text):
+    html_part = _sent(captured, outcome).get_body(("html",))
+    assert html_part is not None, "ingen HTML-del"
+    assert text in html_part.get_content()
+
+
+@then(
+    parsers.parse(
+        'ska det vidarebefordrade mejlet ha bilagan "{filename}" av typen "{ctype}" med samma innehåll'
+    )
+)
+def forwarded_attachment(captured, outcome, filename, ctype):
+    attachments = list(_sent(captured, outcome).iter_attachments())
+    found = [(a.get_filename(), a.get_content_type(), a.get_content()) for a in attachments]
+    assert (filename, ctype, PDF_BYTES) in found

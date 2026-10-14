@@ -4,7 +4,7 @@ import re
 import ssl
 from email.header import Header
 from email.headerregistry import Address
-from email.message import EmailMessage
+from email.message import EmailMessage, Message
 from email.utils import formatdate, make_msgid, parseaddr
 from typing import Sequence
 
@@ -120,16 +120,35 @@ def _build_message(
     cc_list: list[str] | None = None,
     reply_to: str | None = None,
     additional_headers: dict[str, str] | None = None,
+    attachments: Sequence[Message] | None = None,
+    inline_parts: Sequence[Message] | None = None,
 ) -> EmailMessage:
     """Build a MIME message without requiring an SMTP connection.
 
     Byggs med den moderna policyn (email.policy.SMTP): den kodar bara
     display-namn med icke-ASCII-tecken, aldrig hela adressheadern.
+
+    ``attachments`` och ``inline_parts`` är färdiga MIME-delar (t.ex. ur ett
+    mejl som vidarebefordras) och bifogas oförändrade. Inline-delar, som
+    bilder som HTML-versionen pekar på med cid:, läggs i en multipart/related
+    tillsammans med HTML-delen; utan HTML-version blir de vanliga bilagor.
     """
     msg = EmailMessage(policy=email.policy.SMTP)
     msg.set_content(body)
+    attached = list(attachments or [])
     if body_html:
         msg.add_alternative(body_html, subtype="html")
+        if inline_parts:
+            html_part = msg.get_body(("html",))
+            html_part.make_related()
+            for part in inline_parts:
+                html_part.attach(part)
+    else:
+        attached = list(inline_parts or []) + attached
+    if attached:
+        msg.make_mixed()
+        for part in attached:
+            msg.attach(part)
 
     sender = _to_address(from_addr)
     msg["From"] = sender
@@ -183,6 +202,8 @@ class SMTPClient:
         bcc: str | Sequence[str] | None = None,
         reply_to: str | None = None,
         additional_headers: dict[str, str] | None = None,
+        attachments: Sequence[Message] | None = None,
+        inline_parts: Sequence[Message] | None = None,
     ) -> bool:
         _validate_subject(subject)
 
@@ -204,6 +225,8 @@ class SMTPClient:
             cc_list=cc_list,
             reply_to=reply_to,
             additional_headers=additional_headers,
+            attachments=attachments,
+            inline_parts=inline_parts,
         )
 
         # RCPT TO får bara den nakna adressen (med punycode-domän)

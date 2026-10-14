@@ -399,3 +399,155 @@ async def test_non_ascii_message_id_is_skipped_instead_of_crashing():
         cap.raw  # serialiseringen får inte krascha
     assert cap.parsed["In-Reply-To"] is None
     assert cap.parsed["References"] is None
+
+
+# -------------------------------------------------------------------
+# K4, B4: vidarebefordran med bilagor, HTML och cc/bcc
+# -------------------------------------------------------------------
+
+
+def _orig_msg(subject="s"):
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = "Anna <a@x.se>"
+    msg["To"] = KONTO
+    msg["Subject"] = subject
+    msg["Message-ID"] = "<m@x>"
+    return msg
+
+
+async def test_forward_html_only_includes_html_and_text_version():
+    msg = _orig_msg()
+    msg.set_content("<html><body><p>Viktigt <b>innehåll</b></p></body></html>", subtype="html")
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se", body="FYI")
+    sent = cap.parsed
+    plain = sent.get_body(("plain",)).get_content()
+    html = sent.get_body(("html",)).get_content()
+    assert "FYI" in plain and "Viktigt innehåll" in plain
+    assert "<p>Viktigt <b>innehåll</b></p>" in html
+    # Användarens text och rubrikblocket hamnar inne i originalets <body>
+    assert html.index("FYI") > html.lower().index("<body")
+    assert "Forwarded message" in html
+
+
+async def test_forward_user_text_is_escaped_in_html():
+    msg = _orig_msg()
+    msg.set_content("<p>x</p>", subtype="html")
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se", body="<script>1</script>")
+    html = cap.parsed.get_body(("html",)).get_content()
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+
+async def test_forward_plain_only_original_has_no_html_part():
+    msg = _orig_msg()
+    msg.set_content("Bara text")
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+    assert cap.parsed.get_body(("html",)) is None
+    assert "Bara text" in cap.parsed.get_body(("plain",)).get_content()
+
+
+async def test_forward_keeps_all_attachments_byte_for_byte():
+    msg = _orig_msg()
+    msg.set_content("Se bilagor")
+    msg.add_alternative("<p>Se bilagor</p>", subtype="html")
+    msg.add_attachment(b"\x00\x01binar", maintype="application", subtype="octet-stream", filename="data.bin")
+    msg.add_attachment("rad 1\nrad 2\n", filename="anteckning.txt")
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+    found = {a.get_filename(): a for a in cap.parsed.iter_attachments()}
+    assert found["data.bin"].get_content() == b"\x00\x01binar"
+    assert found["anteckning.txt"].get_content().replace("\r\n", "\n") == "rad 1\nrad 2\n"
+    assert cap.parsed.get_body(("html",)) is not None
+
+
+async def test_forward_keeps_attached_message():
+    inner = _orig_msg("Inre mejl")
+    inner.set_content("inre text")
+    msg = _orig_msg()
+    msg.set_content("Se bifogat mejl")
+    msg.add_attachment(inner)
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+    attached = [a for a in cap.parsed.iter_attachments() if a.get_content_type() == "message/rfc822"]
+    assert len(attached) == 1
+    assert str(attached[0].get_content()["Subject"]) == "Inre mejl"
+    # Det bifogade mejlets text ska inte bli brödtext i vidarebefordran
+    assert "inre text" not in cap.parsed.get_body(("plain",)).get_content()
+
+
+async def test_forward_keeps_inline_image_related_to_html():
+    msg = _orig_msg()
+    msg.set_content("text")
+    msg.add_alternative('<p><img src="cid:logo@x"></p>', subtype="html")
+    msg.get_body(("html",)).add_related(
+        b"\x89PNGfejk", maintype="image", subtype="png", cid="<logo@x>"
+    )
+    with capture_smtp() as cap:
+        await forward_email(_ctx(msg.as_bytes()), uid="1", to="b@x.se")
+    sent = cap.parsed
+    html_part = sent.get_body(("html",))
+    assert 'src="cid:logo@x"' in html_part.get_content()
+    images = [p for p in sent.walk() if p.get_content_type() == "image/png"]
+    assert len(images) == 1 and images[0]["Content-ID"] == "<logo@x>"
+    assert images[0].get_content() == b"\x89PNGfejk"
+    # Bilden ska ligga i samma multipart/related som HTML-delen
+    related = [p for p in sent.walk() if p.get_content_type() == "multipart/related"]
+    assert related and any(p is images[0] for p in related[0].iter_parts())
+
+
+async def test_forward_with_cc_and_bcc():
+    msg = _orig_msg()
+    msg.set_content("x")
+    with capture_smtp() as cap:
+        await forward_email(
+            _ctx(msg.as_bytes()), uid="1", to=["b@x.se"], cc="c@x.se", bcc=["h@x.se"]
+        )
+    assert [a for _, a in _cc(cap)] == ["c@x.se"]
+    assert cap.recipients == ["b@x.se", "c@x.se", "h@x.se"]
+    assert cap.parsed["Bcc"] is None
+
+
+async def test_forward_header_block_is_decoded():
+    raw = (
+        "From: =?utf-8?q?Svensson=2C_=C3=85sa?= <asa@x.se>\r\nTo: me@proton.me\r\n"
+        "Subject: SV: möte\r\nDate: Mon, 12 Oct 2026 09:30:00 +0200\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n\r\nhej\r\n"
+    ).encode("utf-8")
+    with capture_smtp() as cap:
+        await forward_email(_ctx(raw), uid="1", to="b@x.se")
+    plain = cap.parsed.get_body(("plain",)).get_content()
+    assert 'From: "Svensson, Åsa" <asa@x.se>' in plain
+    assert "Subject: SV: möte" in plain
+    assert "To: me@proton.me" in plain
+
+
+async def test_forward_with_mocked_smtp_passes_attachments_keyword():
+    """Befintliga verktygstester använder en AsyncMock som SMTP-klient."""
+    ctx = MagicMock()
+    app = ctx.request_context.lifespan_context
+    app.imap = AsyncMock()
+    app.imap.get_message.return_value = _raw("From: a@x.se\nTo: b@x.se\nSubject: s")
+    app.smtp = AsyncMock()
+    app.smtp.send_email.return_value = True
+    assert await forward_email(ctx, uid="1", to="c@x.se") is True
+
+
+
+@pytest.mark.parametrize(
+    "markup, expected",
+    [
+        ("<p>Hej</p><p>Ses &amp; hörs</p>", "Hej\nSes & hörs"),
+        ("rad 1<br>rad 2<br/>rad 3", "rad 1\nrad 2\nrad 3"),
+        ("<style>p{color:red}</style><script>alert(1)</script><div>Text</div>", "Text"),
+        ("<html><head><title>T</title></head><body>  A  </body></html>", "T\nA"),
+        ("1 < 2 och 3 > 2", "1 < 2 och 3 > 2"),
+    ],
+)
+def test_html_to_text(markup, expected):
+    from protonmail_mcp.tools.reply import _html_to_text
+
+    assert _html_to_text(markup) == expected

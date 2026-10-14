@@ -10,7 +10,6 @@ from email.utils import getaddresses, parsedate_to_datetime
 from mcp.server.fastmcp import Context
 
 from ..server import mcp
-from ..email_parser import parse_email
 from . import _get_app
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
@@ -26,6 +25,16 @@ _WS_RE = re.compile(r"\s*")
 
 _MSGID_RE = re.compile(r"<[^<>\s]+>")
 _ANGLE_ADDR_RE = re.compile(r"<([^<>\s@]+@[^<>\s@]+)>")
+# [^<>]* i stället för [^>]*: annars blir sökningen kvadratisk på "<body<body…"
+_BODY_OPEN_RE = re.compile(r"<body\b[^<>]*>", re.IGNORECASE)
+_CID_REF_RE = re.compile(r"cid:([^\s\"'<>()]+)", re.IGNORECASE)
+# En tagg börjar med bokstav, / ! eller ? ("1 < 2" är text). [^<>]* gör att
+# varje försök stannar vid nästa "<", så genomsökningen blir linjär.
+_TAG_RE = re.compile(r"<[/!?a-zA-Z][^<>]*>")
+_TAG_NAME_RE = re.compile(r"</?([a-zA-Z0-9]+)")
+_BLOCK_TAGS = frozenset(
+    "br p div tr li h1 h2 h3 h4 h5 h6 table ul ol blockquote title hr".split()
+)
 
 # Hur stor en header i originalet får vara innan den parsas. Headerparsern i
 # email.policy är superlinjär (ett ämne på 1 MB tog över 20 s), och originalet
@@ -233,9 +242,54 @@ def _attribution(msg: EmailMessage) -> str:
     return f"Den {date} skrev {name}:" if date else f"{name} skrev:"
 
 
-def _original_text(raw: bytes) -> str:
+def _part_text(part: EmailMessage | None) -> str:
+    """Textinnehållet i en MIME-del, tålig mot okända teckenkodningar."""
+    if part is None:
+        return ""
+    try:
+        return part.get_content()
+    except (LookupError, UnicodeError, KeyError, AssertionError):
+        payload = part.get_payload(decode=True) or b""
+        return payload.decode("utf-8", errors="replace")
+
+
+def _html_to_text(markup: str) -> str:
+    """Enkel textversion av HTML i linjär tid.
+
+    Taggar tas bort, block (p, div, br …) blir radbrytningar, script och
+    style hoppas över och entiteter avkodas. Görs här i stället för med
+    email_parser._strip_html, vars <[^>]+> är kvadratisk på t.ex.
+    "<body<body…" — och HTML:en styrs av avsändaren.
+    """
+    pieces: list[str] = []
+    pos = 0
+    skip = ""
+    for tag in _TAG_RE.finditer(markup):
+        if not skip:
+            pieces.append(markup[pos:tag.start()])
+        pos = tag.end()
+        text = tag.group()
+        named = _TAG_NAME_RE.match(text)
+        name = named.group(1).lower() if named else ""
+        closing = text.startswith("</")
+        if skip:
+            if closing and name == skip:
+                skip = ""
+        elif name in ("script", "style") and not closing:
+            skip = name
+        elif name in _BLOCK_TAGS:
+            pieces.append("\n")
+    if not skip:
+        pieces.append(markup[pos:])
+    lines = (" ".join(line.split()) for line in html.unescape("".join(pieces)).splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _original_text(msg: EmailMessage) -> str:
     """Originalets brödtext som ren text (HTML-brev görs om till text)."""
-    text = parse_email(raw, body_format="text", max_length=None)["body_plain"]
+    text = _part_text(msg.get_body(("plain",)))
+    if not text.strip():
+        text = _html_to_text(_part_text(msg.get_body(("html",))))
     return text.replace("\r\n", "\n").rstrip()
 
 
@@ -299,7 +353,7 @@ async def reply_to_email(
 
     if quote_original:
         attribution = _attribution(msg)
-        original_text = _original_text(raw)
+        original_text = _original_text(msg)
         body = f"{body}\n\n{attribution}\n{_quote(original_text)}\n"
         if body_html:
             quoted_html = html.escape(original_text).replace("\n", "<br>\n")
@@ -322,6 +376,38 @@ async def reply_to_email(
     )
 
 
+def _content_id(part: EmailMessage) -> str:
+    raw = next((str(v) for k, v in part.raw_items() if k.lower() == "content-id"), "")
+    return raw.strip().strip("<>").strip()
+
+
+def _forward_parts(
+    msg: EmailMessage, body_parts: list[EmailMessage], html: str
+) -> tuple[list[EmailMessage], list[EmailMessage]]:
+    """(inline-delar, bilagor) ur originalet, utom brödtextdelarna.
+
+    Alla lövdelar följer med oförändrade; ett bifogat mejl (message/rfc822)
+    följer med som helhet. Delar som HTML-versionen pekar på med cid: blir
+    inline-delar, så att bilderna fortsätter att visas.
+    """
+    referenced = {cid.lower() for cid in _CID_REF_RE.findall(html)}
+    inline: list[EmailMessage] = []
+    attached: list[EmailMessage] = []
+    stack = [msg]
+    while stack:  # iterativt — djupt nästlade multipart ska inte ge RecursionError
+        part = stack.pop()
+        if part.get_content_maintype() == "multipart":
+            stack.extend(reversed(list(part.iter_parts())))
+        elif not any(part is body for body in body_parts):
+            cid = _content_id(part)
+            (inline if cid and cid.lower() in referenced else attached).append(part)
+    return inline, attached
+
+
+def _escape_lines(text: str) -> str:
+    return html.escape(text).replace("\n", "<br>\n")
+
+
 @mcp.tool()
 async def forward_email(
     ctx: Context,
@@ -329,38 +415,69 @@ async def forward_email(
     to: str | list[str],
     body: str = "",
     mailbox: str = "INBOX",
+    cc: str | list[str] | None = None,
+    bcc: str | list[str] | None = None,
 ) -> bool:
-    """Vidarebefordra ett e-post. Sätter Fwd:-prefix och citerar originalet.
+    """Vidarebefordra ett e-post med originalets text, HTML-version och bilagor.
+
+    Sätter Fwd:-prefix. Originalet följer med inline under ett rubrikblock
+    ("Forwarded message"), både som text och — om originalet har en sådan —
+    som HTML. Alla bilagor, bifogade mejl och inbäddade bilder följer med.
 
     Args:
         uid: UID för e-posten att vidarebefordra
         to: Mottagaradress(er)
         body: Valfri text att lägga till ovanför det vidarebefordrade meddelandet
         mailbox: Mappnamn (standard: INBOX)
+        cc: Kopia-adress(er)
+        bcc: Hemlig kopia-adress(er)
+
+    Returns:
+        True om mejlet skickades. Vägrar servern några av mottagarna kastas
+        ett fel som anger vilka — skicka då inte om till alla.
     """
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)
     if raw is None:
         return False
 
-    original = parse_email(raw, body_format="full")
     msg = _parse_original(raw)
-
     subject = f"Fwd: {_base_subject(_header_text(msg, 'Subject'))}"
 
-    # Bygg vidarebefordrad body med citat
-    orig_body = original.get("body_plain", "")
-    forwarded = (
-        f"{body}\n\n"
-        f"---------- Forwarded message ----------\n"
-        f"From: {original['from']}\n"
-        f"Date: {original['date']}\n"
-        f"Subject: {original['subject']}\n\n"
-        f"{orig_body}"
-    )
+    header_lines = ["---------- Forwarded message ----------"]
+    for name in ("From", "Date", "Subject", "To", "Cc"):
+        value = _header_text(msg, name)
+        if value:
+            header_lines.append(f"{name}: {value}")
+
+    plain_part = msg.get_body(("plain",))
+    html_part = msg.get_body(("html",))
+    orig_html = _part_text(html_part)
+    # HTML-brev får en textversion, så att även textdelen har innehållet
+    orig_text = _original_text(msg)
+
+    intro = f"{body}\n\n" if body else ""
+    forwarded = f"{intro}" + "\n".join(header_lines) + f"\n\n{orig_text}\n"
+
+    forwarded_html = None
+    if orig_html:
+        prefix = (f"<div>{_escape_lines(body)}</div><br>\n" if body else "") + (
+            f"<div>{_escape_lines(chr(10).join(header_lines))}</div><br>\n"
+        )
+        opening = _BODY_OPEN_RE.search(orig_html)
+        cut = opening.end() if opening else 0
+        forwarded_html = orig_html[:cut] + prefix + orig_html[cut:]
+
+    body_parts = [p for p in (plain_part, html_part) if p is not None]
+    inline, attached = _forward_parts(msg, body_parts, orig_html)
 
     return await app.smtp.send_email(
         to=to,
         subject=subject,
         body=forwarded,
+        body_html=forwarded_html,
+        cc=cc,
+        bcc=bcc,
+        attachments=attached or None,
+        inline_parts=inline or None,
     )
