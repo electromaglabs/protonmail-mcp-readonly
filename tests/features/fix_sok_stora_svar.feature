@@ -5,9 +5,9 @@ Feature: Sökningar med många träffar låser inte servern
 
   Scenario: Metadata hämtas i delar
     Given att en sökning träffar 450 brev
-    And att metadata hämtas högst 200 brev åt gången
-    When jag söker med max_results 200
+    When jag söker på ämnet "Brev" med max_results 200
     Then ska jag få de 200 nyaste träffarna
+    And ska metadata ha hämtats med minst 2 FETCH-kommandon
     And ska inget FETCH-kommando ha gällt fler än 200 brev
 
   Scenario: Antalet träffar har ett tak som syns i verktygets schema

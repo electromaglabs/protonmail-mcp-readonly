@@ -8,7 +8,6 @@ from pytest_bdd import scenarios, given, when, then, parsers
 
 from mcp.server.fastmcp.exceptions import ToolError
 
-from protonmail_mcp import imap_client as imap_module
 from protonmail_mcp.server import mcp
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktyget
@@ -51,14 +50,17 @@ def many_hits(imap, count):
     imap._client.fetch = AsyncMock(side_effect=_fetch_response)
 
 
-@given(parsers.parse("att metadata hämtas högst {size:d} brev åt gången"))
-def chunk_size(monkeypatch, size):
-    monkeypatch.setattr(imap_module, "_FETCH_CHUNK_SIZE", size)
+@when(parsers.parse('jag söker på ämnet "{subject}" med max_results {n:d}'), target_fixture="hits")
+def search_with_max(imap, subject, n):
+    # Med ett ämne jämförs alla 450 kandidater lokalt, så metadata för alla
+    # hämtas — utan ämne skulle bara de max_results nyaste hämtas (T1).
+    # _FETCH_CHUNK_SIZE används som den är i imap_client.
+    return _messages(asyncio.run(imap.search_messages("INBOX", subject=subject, max_results=n)))
 
 
-@when(parsers.parse("jag söker med max_results {n:d}"), target_fixture="hits")
-def search_with_max(imap, n):
-    return _messages(asyncio.run(imap.search_messages("INBOX", max_results=n)))
+@then(parsers.parse("ska metadata ha hämtats med minst {n:d} FETCH-kommandon"))
+def several_fetches(imap, n):
+    assert imap._client.fetch.await_count >= n
 
 
 @then(parsers.parse("ska jag få de {n:d} nyaste träffarna"))
