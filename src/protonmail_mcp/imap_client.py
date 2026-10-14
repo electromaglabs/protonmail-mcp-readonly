@@ -3,7 +3,7 @@ import functools
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import date
 from email.parser import BytesHeaderParser
 from typing import Any
 
@@ -39,13 +39,37 @@ def _validate_mailbox(name: str) -> str:
     return name
 
 
-def _to_imap_date(value: str) -> str:
-    """Accepterar YYYY-MM-DD eller DD-Mon-YYYY, returnerar alltid DD-Mon-YYYY."""
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_ISO_DATE_RE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})$')
+_IMAP_DATE_RE = re.compile(r'^(\d{1,2})-([A-Za-z]{3})-(\d{4})$')
+# Kontrolltecken (CR, LF, NUL m.fl.) kan avsluta ett IMAP-kommando i förtid
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1F\x7F]')
+
+
+def _to_imap_date(value: str, field: str = "datum") -> str:
+    """Accepterar bara YYYY-MM-DD eller DD-Mon-YYYY, returnerar alltid DD-Mon-YYYY.
+
+    Allt annat ger ValueError, eftersom värdet skickas ociterat i SEARCH: ett
+    okänt format får servern att svara BAD, och ett påhängt CRLF blir ett eget
+    kommando. Månadsnamnen är engelska oavsett locale (RFC 3501 date-month).
+    """
+    text = value.strip()
+    iso = _ISO_DATE_RE.match(text)
+    imap = _IMAP_DATE_RE.match(text)
     try:
-        dt = datetime.strptime(value, "%Y-%m-%d")
-        return dt.strftime("%d-%b-%Y")
+        if iso:
+            year, month, day = (int(g) for g in iso.groups())
+        elif imap and imap.group(2).capitalize() in _MONTHS:
+            day, year = int(imap.group(1)), int(imap.group(3))
+            month = _MONTHS.index(imap.group(2).capitalize()) + 1
+        else:
+            raise ValueError
+        date(year, month, day)
     except ValueError:
-        return value  # Antag redan rätt format
+        raise ValueError(
+            f"Ogiltigt datum för {field}: {value!r} — använd YYYY-MM-DD eller DD-Mon-YYYY"
+        ) from None
+    return f"{day:02d}-{_MONTHS[month - 1]}-{year:04d}"
 
 
 def _validate_uid(uid: str) -> str:
@@ -58,6 +82,18 @@ def _validate_uid(uid: str) -> str:
 def _escape_imap_string(value: str) -> str:
     """Escapar dubbla citattecken och backslash i ett IMAP quoted-string (RFC 3501)."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _imap_quoted(value: str, field: str) -> str:
+    """Gör ett användarvärde till en IMAP quoted-string, eller kastar ValueError.
+
+    Alla fritextvärden som interpoleras i ett IMAP-kommando ska gå hit.
+    Escaping räcker inte: ett CR/LF i värdet avslutar kommandot, och resten
+    av raden körs som ett eget kommando (aioimaplib kontrollerar inget).
+    """
+    if _CONTROL_CHAR_RE.search(value):
+        raise ValueError(f"{field} får inte innehålla kontrolltecken (t.ex. radbrytning): {value!r}")
+    return f'"{_escape_imap_string(value)}"'
 
 
 def _quote_mailbox(name: str) -> str:
@@ -397,24 +433,25 @@ class IMAPClient:
         unseen: bool | None = None,
         max_results: int = 200,
     ) -> list[dict]:
-        await self._ensure_connected()
-        await self._select(mailbox)
-
+        # Validera allt innan något skickas till servern
         criteria: list[str] = []
         if from_addr:
-            criteria += ["FROM", f'"{_escape_imap_string(from_addr)}"']
+            criteria += ["FROM", _imap_quoted(from_addr, "from_addr")]
         if subject:
-            criteria += ["SUBJECT", f'"{_escape_imap_string(subject)}"']
+            criteria += ["SUBJECT", _imap_quoted(subject, "subject")]
         if since:
-            criteria += ["SINCE", _to_imap_date(since)]
+            criteria += ["SINCE", _to_imap_date(since, "since")]
         if before:
-            criteria += ["BEFORE", _to_imap_date(before)]
+            criteria += ["BEFORE", _to_imap_date(before, "before")]
         if unseen is True:
             criteria.append("UNSEEN")
         elif unseen is False:
             criteria.append("SEEN")
         if not criteria:
             criteria = ["ALL"]
+
+        await self._ensure_connected()
+        await self._select(mailbox)
 
         # search() returnerar sekvensnummer — vi hämtar sedan metadata
         resp = await self._client.search(" ".join(criteria))

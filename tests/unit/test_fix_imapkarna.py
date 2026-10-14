@@ -296,7 +296,8 @@ class TestNoSilentFailures:
     async def test_search_rejected_raises(self, client, result):
         client._client.search.return_value = SimpleNamespace(result=result, lines=[b"invalid search criteria"])
         with pytest.raises(ValueError, match="Sökningen misslyckades.*invalid search criteria"):
-            await client.search_messages("INBOX", since="2026/01/01")
+            # Ett giltigt datum: ogiltiga stoppas redan innan SEARCH (fix-sok, N1)
+            await client.search_messages("INBOX", since="2026-01-01")
         client._client.fetch.assert_not_called()
 
     @pytest.mark.asyncio
