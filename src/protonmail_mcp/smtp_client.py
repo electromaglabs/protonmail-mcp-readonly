@@ -168,6 +168,11 @@ class SMTPClient:
             # Standard Bridge-läge: self-signed cert
             self._ssl_ctx.verify_mode = ssl.CERT_NONE
 
+    @property
+    def account_address(self) -> str:
+        """Kontots adress, det vill säga avsändaren i allt som skickas."""
+        return self._settings.username
+
     async def send_email(
         self,
         to: str | Sequence[str],

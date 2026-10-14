@@ -64,12 +64,25 @@ def simple_message(mailbox, uid, sender, subject):
     ).encode("utf-8")
 
 
-@given(parsers.parse('ett mejl med UID "{uid}" med följande headers:'))
-def message_with_headers(mailbox, uid, docstring):
-    head = "\r\n".join(line.strip() for line in docstring.strip().splitlines())
-    mailbox[("INBOX", uid)] = (
-        f"{head}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nOriginaltext\r\n"
+def _store(mailbox, folder, uid, docstring):
+    """Lägg ett meddelande i attrappens brevlåda. Docstringen är headers,
+    eventuellt följda av en tom rad och brödtexten."""
+    head, _, body = docstring.strip().partition("\n\n")
+    head = "\r\n".join(line.strip() for line in head.splitlines())
+    body = "\r\n".join(body.splitlines()) if body else "Originaltext"
+    mailbox[(folder, uid)] = (
+        f"{head}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{body}\r\n"
     ).encode("utf-8")
+
+
+@given(parsers.re(r'ett mejl med UID "(?P<uid>[^"]+)" med följande (?:headers|innehåll):'))
+def message_with_headers(mailbox, uid, docstring):
+    _store(mailbox, "INBOX", uid, docstring)
+
+
+@given(parsers.parse('ett mejl med UID "{uid}" i mappen "{folder}" med följande headers:'))
+def message_in_folder(mailbox, uid, folder, docstring):
+    _store(mailbox, folder, uid, docstring)
 
 
 def _run(outcome, coro):
@@ -82,6 +95,83 @@ def _run(outcome, coro):
 @when(parsers.re(r'jag svarar på mejlet med UID "(?P<uid>[^"]+)" med texten "(?P<text>[^"]*)"'))
 def reply(ctx, captured, outcome, uid, text):
     _run(outcome, reply_to_email(ctx, uid=uid, body=text))
+
+
+@when(parsers.re(r'jag svarar alla på mejlet med UID "(?P<uid>[^"]+)" med texten "(?P<text>[^"]*)"'))
+def reply_all(ctx, captured, outcome, uid, text):
+    _run(outcome, reply_to_email(ctx, uid=uid, body=text, reply_all=True))
+
+
+@when(
+    parsers.re(
+        r'jag svarar(?P<all> alla)? på mejlet med UID "(?P<uid>[^"]+)" i mappen '
+        r'"(?P<folder>[^"]+)" med texten "(?P<text>[^"]*)"'
+    )
+)
+def reply_in_folder(ctx, captured, outcome, all, uid, folder, text):
+    _run(
+        outcome,
+        reply_to_email(ctx, uid=uid, body=text, mailbox=folder, reply_all=bool(all)),
+    )
+
+
+@when(
+    parsers.parse(
+        'jag svarar på mejlet med UID "{uid}" med kopia till "{cc}" och hemlig kopia till "{bcc}"'
+    )
+)
+def reply_with_cc_bcc(ctx, captured, outcome, uid, cc, bcc):
+    _run(outcome, reply_to_email(ctx, uid=uid, body="Se kopia", cc=cc, bcc=bcc))
+
+
+def _sent(captured, outcome):
+    assert "error" not in outcome, outcome.get("error")
+    return captured.parsed
+
+
+@then(parsers.parse('ska svaret gå till "{addrs}"'))
+def reply_goes_to(captured, outcome, addrs):
+    assert [a for _, a in header_addresses(_sent(captured, outcome), "To")] == _split(addrs)
+
+
+@then(parsers.parse('ska svaret ha kopia till "{addrs}"'))
+def reply_cc(captured, outcome, addrs):
+    assert [a for _, a in header_addresses(_sent(captured, outcome), "Cc")] == _split(addrs)
+
+
+@then("ska svaret inte ha någon kopia")
+def reply_no_cc(captured, outcome):
+    assert _sent(captured, outcome)["Cc"] is None
+
+
+@then(parsers.parse('ska svaret sakna headern "{name}"'))
+def reply_lacks_header(captured, outcome, name):
+    assert name not in _sent(captured, outcome)
+
+
+@then(parsers.parse('ska mottagaren "{addr}" heta "{name}" i svaret'))
+def reply_recipient_name(captured, outcome, addr, name):
+    assert (name, addr) in header_addresses(_sent(captured, outcome), "To")
+
+
+@then(parsers.parse('SMTP-mottagarna ska vara "{addrs}"'))
+def reply_rcpt(captured, outcome, addrs):
+    _sent(captured, outcome)
+    assert captured.recipients == _split(addrs)
+
+
+def _plain_body(captured, outcome) -> str:
+    return _sent(captured, outcome).get_body(("plain",)).get_content()
+
+
+@then(parsers.parse('ska svarets brödtext börja med "{text}"'))
+def body_starts(captured, outcome, text):
+    assert _plain_body(captured, outcome).startswith(text)
+
+
+@then(parsers.parse('ska svarets brödtext innehålla "{text}"'))
+def body_contains(captured, outcome, text):
+    assert text in _plain_body(captured, outcome)
 
 
 @then(parsers.parse('ska svarets ämne vara "{subject}"'))
