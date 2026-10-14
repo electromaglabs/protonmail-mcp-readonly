@@ -226,13 +226,40 @@ def _serialized(method):
 
 
 class _BridgeProtocol(aioimaplib.IMAP4ClientProtocol):
-    """aioimaplib:s protokoll, rättat för mappnamn som innehåller "* ".
+    """aioimaplib:s protokoll med två rättelser.
 
-    aioimaplib 2.0.1 gör line.replace(b'* ', b'') på hela den otaggade raden,
-    så LIST-raden för "Folders/* Viktigt" blev "Folders/Viktigt" och namnet
-    gick sedan inte att öppna. Här tas bara det inledande "* " bort; resten
-    av metoden är densamma som i aioimaplib.
+    1. aioimaplib 2.0.1 gör line.replace(b'* ', b'') på hela den otaggade
+       raden, så LIST-raden för "Folders/* Viktigt" blev "Folders/Viktigt"
+       och namnet gick sedan inte att öppna. Här tas bara det inledande "* "
+       bort; resten av _untagged_response är densamma som i aioimaplib.
+    2. När anslutningen bryts (Bridge startas om) avbryts väntande kommandon
+       direkt med ConnectionError, och nya kommandon skickas inte ut på den
+       döda transporten. Annars väntar de ut hela timeouten och felet blir
+       aioimaplib:s råa CommandTimeout.
     """
+
+    lost: ConnectionError | None = None
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        reason = f": {exc}" if exc else ""
+        self.lost = ConnectionError(f"Anslutningen till ProtonMail Bridge bröts{reason}")
+        for command in [self.pending_sync_command, *self.pending_async_commands.values()]:
+            # Command saknar ett publikt sätt att misslyckas; _exception är det
+            # aioimaplib självt använder för CommandTimeout
+            if command is not None and not command._event.is_set():
+                command._exception = ConnectionError(
+                    f"Anslutningen till ProtonMail Bridge bröts under {command.name}{reason} "
+                    "— försök igen, nästa anrop ansluter på nytt"
+                )
+                command.close(b"connection lost", "NO")
+        super().connection_lost(exc)
+
+    def send(self, line: str, scrub: str = None) -> None:
+        if self.lost is not None:
+            raise ConnectionError(
+                f"{self.lost} — försök igen, nästa anrop ansluter på nytt"
+            )
+        super().send(line, scrub=scrub)
 
     def _untagged_response(self, line: bytes):
         if line.startswith(b"* "):
@@ -300,10 +327,14 @@ class IMAPClient:
 
         def forget_on_connection_lost(_exc: Exception | None) -> None:
             # Bridge omstartad eller nere: släpp klienten så att nästa anrop
-            # ansluter direkt i stället för att vänta ut NOOP-timeouten
+            # ansluter direkt i stället för att vänta ut NOOP-timeouten. Mitt
+            # i ett anrop (låset taget) får klienten vara kvar: dess kommandon
+            # ger ConnectionError (_BridgeProtocol), och _serialized släpper
+            # den — annars blir nästa self._client.x ett AttributeError.
             if self._client is client:
                 logger.warning("Anslutningen till ProtonMail Bridge bröts")
-                self._client = None
+                if not self._lock.locked():
+                    self._client = None
 
         # Bridge v3 på port 1143 kräver plain IMAP (inte direkt SSL/TLS)
         client = aioimaplib.IMAP4(
@@ -426,9 +457,13 @@ class IMAPClient:
 
     async def _ensure_connected(self) -> None:
         # NOOP är tillåtet i NONAUTH, så NOOP ensam visar inte att klienten är inloggad
-        state = getattr(self._client.protocol, "state", None) if self._client is not None else None
+        protocol = getattr(self._client, "protocol", None) if self._client is not None else None
+        state = getattr(protocol, "state", None)
         if state in _NOT_LOGGED_IN_STATES:
             logger.warning("IMAP-klienten är inte inloggad (%s) — återansluter", state)
+            self._discard_connection()
+        elif isinstance(getattr(protocol, "lost", None), ConnectionError):
+            logger.warning("Anslutningen till ProtonMail Bridge är bruten — återansluter")
             self._discard_connection()
         if self._client is None:
             await self.connect()
