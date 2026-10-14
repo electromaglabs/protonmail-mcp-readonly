@@ -5,12 +5,14 @@ låtsas-Bridgen i tests/fix_flytta_bridge.py, så det som kontrolleras är vilka
 IMAP-kommandon Bridge faktiskt får och vad verktyget svarar.
 """
 import asyncio
+import time
+from types import SimpleNamespace
 
 import pytest
 from pytest_bdd import given, parsers, then, when
 
 from protonmail_mcp.tools.mailboxes import get_mailbox_status
-from protonmail_mcp.tools.messages import get_email
+from protonmail_mcp.tools.messages import get_email, get_email_headers
 from tests.fix_flytta_bridge import make_client
 
 
@@ -90,3 +92,49 @@ def bridge_not_got(bridge, command):
 def bridge_no_writes(bridge):
     writes = {"UID MOVE", "UID COPY", "UID STORE", "UID EXPUNGE", "EXPUNGE", "CREATE", "DELETE", "RENAME"}
     assert [c for c in bridge.commands if c[0] in writes] == [], bridge.commands
+
+
+def install_bodies(bridge) -> None:
+    """Låter låtsas-Bridgen svara på UID FETCH BODY.PEEK[...] med en literal.
+
+    bridge.bodies[(mapp, uid)] = råa bytes. Övriga UID-kommandon går till
+    låtsas-Bridgens vanliga hantering.
+    """
+    if hasattr(bridge, "bodies"):
+        return
+    bridge.bodies = {}
+    original = bridge._uid
+
+    async def uid(command, *args):
+        if command.upper() == "FETCH" and len(args) > 1 and "BODY.PEEK" in args[1]:
+            bridge.commands.append(("UID FETCH", *args))
+            raw = bridge.bodies.get((bridge.selected, args[0]))
+            if raw is None:
+                return SimpleNamespace(result="OK", lines=[b"command completed"])
+            return SimpleNamespace(result="OK", lines=[
+                f"1 FETCH (UID {args[0]} BODY[] {{{len(raw)}}}".encode(), bytearray(raw), b")",
+                b"command completed",
+            ])
+        return await original(command, *args)
+
+    bridge.client.uid.side_effect = uid
+
+
+@given(parsers.parse('att mejlet med UID "{uid}" i "{mailbox}" har ett ämne med {count:d} blanksteg mitt i'))
+def mail_with_blank_subject(bridge, uid, mailbox, count):
+    install_bodies(bridge)
+    bridge.add(mailbox, uid)
+    bridge.bodies[(mailbox, uid)] = b"Subject: a" + b" " * count + b"b\r\nFrom: x@example.com\r\n\r\n"
+
+
+@when(parsers.parse('jag hämtar rubrikerna för UID "{uid}" i "{mailbox}"'))
+def fetch_headers(mock_ctx, bridge, uid, mailbox):
+    start = time.perf_counter()
+    run_tool(bridge, get_email_headers(mock_ctx, uid=uid, mailbox=mailbox))
+    bridge.elapsed = time.perf_counter() - start
+
+
+@then(parsers.parse("ska svaret komma inom {seconds:g} sekund"))
+def answered_within(bridge, seconds):
+    assert bridge.errors == []
+    assert bridge.elapsed < seconds, bridge.elapsed
