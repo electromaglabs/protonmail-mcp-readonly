@@ -14,13 +14,19 @@ from .email_parser import decode_header_value
 
 logger = logging.getLogger(__name__)
 
-# Format: (\Flags) "delimiter" "name"  eller  (\Flags) "delimiter" name
-_LIST_RE = re.compile(r'\([^)]*\)\s+"[^"]*"\s+(.+)$')
+# Format: (\Flags) "delimiter" "name"  eller  (\Flags) "delimiter" name;
+# avgränsaren kan också vara NIL. Namnet är en quoted-string (RFC 3501) eller en atom.
+_LIST_RE = re.compile(
+    r'^\(([^)]*)\)\s+(?:"(?:[^"\\]|\\.)*"|NIL)\s+(?:"((?:[^"\\]|\\.)*)"|([^\s"]+))$',
+    re.IGNORECASE,
+)
+_QUOTED_ESCAPE_RE = re.compile(r'\\(.)')
 _UID_RE = re.compile(r'\bUID\s+(\d+)\b')
 _FLAGS_RE = re.compile(r'FLAGS\s+\(([^)]*)\)')
 _STATUS_NUM_RE = re.compile(r'(\w+)\s+(\d+)')
 _VALID_UID_RE = re.compile(r'^\d+$')
-_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F%*"\\]{1,255}$')
+# Backslash och citattecken är tillåtna: _quote_mailbox escapar dem
+_VALID_MAILBOX_RE = re.compile(r'^[^\x00-\x1F\x7F%*]{1,255}$')
 
 
 def _validate_mailbox(name: str) -> str:
@@ -82,7 +88,9 @@ def _parse_list_line(line: str) -> str | None:
     m = _LIST_RE.match(line)
     if not m:
         return None
-    return m.group(1).strip().strip('"')
+    if m.group(2) is not None:
+        return _QUOTED_ESCAPE_RE.sub(r"\1", m.group(2))
+    return m.group(3)
 
 
 def _parse_headers(raw: bytes) -> dict[str, str]:
