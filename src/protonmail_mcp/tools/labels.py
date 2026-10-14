@@ -79,3 +79,51 @@ async def remove_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -
     """
     app = _get_app(ctx)
     return single(await imap_labels.remove_label(app.imap, mailbox, [uid], label))
+
+
+@mcp.tool()
+async def flag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
+    """Stjärnmärk ett mejl (Starred i Proton).
+
+    Sätter IMAP-flaggan \\Flagged, som hos Proton är samma sak som Starred:
+    mejlet syns sedan under Starred och är stjärnmärkt i alla vyer. Mejlet
+    flyttas inte och inget annat ändras. Är det redan stjärnmärkt händer inget.
+
+    Avvisas med fel (inget ändras): UID:t finns inte i mailbox (UID:n gäller
+    per mapp), eller Bridge nekar (felet innehåller Bridges förklaring).
+
+    Args:
+        uid: Mejlets UID i mailbox
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
+
+    Returns:
+        True när mejlet är stjärnmärkt.
+    """
+    app = _get_app(ctx)
+    return single(await imap_labels.set_starred(app.imap, mailbox, [uid], True))
+
+
+@mcp.tool()
+async def unflag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
+    """Ta bort stjärnmärkningen från ett mejl (Starred i Proton).
+
+    Tar bort IMAP-flaggan \\Flagged, så att mejlet inte längre syns under
+    Starred. Mejlet ligger kvar i sin mapp och raderas inte. Är det inte
+    stjärnmärkt händer inget.
+
+    Avvisas med fel (inget ändras): UID:t finns inte i mailbox (UID:n gäller
+    per mapp), eller Bridge nekar (felet innehåller Bridges förklaring).
+
+    Args:
+        uid: Mejlets UID i mailbox (även UID:t från Starred går bra, med mailbox="Starred")
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
+
+    Returns:
+        True när stjärnmärkningen är borttagen.
+    """
+    app = _get_app(ctx)
+    return single(await imap_labels.set_starred(app.imap, mailbox, [uid], False))
