@@ -171,6 +171,29 @@ def decode_header_value(value) -> str:
 # Tecken som kräver citering av visningsnamnet (RFC 5322 specials, som formataddr)
 _ADDR_SPECIALS_RE = re.compile(r'[][\\()<>@,:;".]')
 _ADDR_ESCAPES_RE = re.compile(r'[\\"]')
+# Det som str.splitlines() räknar som radbrytning
+_LINE_BREAKS = frozenset("\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def _strip_address_whitespace(addr: str) -> str:
+    """Ta bort vikning och blanktecken ur adressdelen, utom blanksteg och tabb
+    inuti en citerad lokaldel ("a b"@x.se), där de hör till adressen (F5).
+    Radbrytningar tas alltid bort, så adressen kan inte injicera rubriker."""
+    out: list[str] = []
+    quoted = escaped = False
+    for ch in addr:
+        if ch in _LINE_BREAKS:
+            continue
+        if escaped:
+            escaped = False
+        elif quoted and ch == "\\":
+            escaped = True
+        elif ch == '"':
+            quoted = not quoted
+        elif ch.isspace() and not quoted:
+            continue
+        out.append(ch)
+    return "".join(out)
 
 
 def parse_addresses(header_value) -> list[tuple[str, str]]:
@@ -186,7 +209,7 @@ def parse_addresses(header_value) -> list[tuple[str, str]]:
     text = _header_to_text(header_value)
     pairs = []
     for name, addr in email.utils.getaddresses([text]):
-        name, addr = decode_header_value(name), "".join(addr.split())
+        name, addr = decode_header_value(name), _strip_address_whitespace(addr)
         if addr:  # ett namn utan adress går inte att skicka till
             pairs.append((name, addr))
     return pairs

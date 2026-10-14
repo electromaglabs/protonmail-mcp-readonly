@@ -71,3 +71,58 @@ class TestRfc2047IsLinear:
     )
     def test_matches_stdlib_for_ordinary_headers(self, value):
         assert decode_header_value(value) == _stdlib(value)
+
+
+class TestQuotedLocalPartKeepsSpaces:
+    """F5. Givet en adress vars citerade lokaldel innehåller blanksteg
+    När adressrubriken parsas
+    Så är adressen oförändrad (ett svar går till rätt adress), medan vikning
+    och blanktecken utanför citattecken tas bort och radbrytningar aldrig
+    kommer med (ingen mottagarinjektion, se 3beab63/bf3d5c1)."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ('x <"a b"@x.se>', [("x", '"a b"@x.se')]),
+            ('"a b"@x.se', [("", '"a b"@x.se')]),
+            ('x <"a\tb"@x.se>', [("x", '"a\tb"@x.se')]),
+            ('x <"a\\" b"@x.se>', [("x", '"a\\" b"@x.se')]),
+            ('x <"a b"@x.se>, y <c@x.se>', [("x", '"a b"@x.se'), ("y", "c@x.se")]),
+            # utanför citattecken: vikning och blanktecken bort, som förut
+            ("x <a.\r\n b@x.se>", [("x", "a.b@x.se")]),
+            ("x <a . b@x.se>", [("x", "a.b@x.se")]),
+        ],
+    )
+    def test_parse_addresses(self, value, expected):
+        from protonmail_mcp.email_parser import parse_addresses
+
+        assert parse_addresses(value) == expected
+
+    def test_formatted_address_parses_back_to_the_same_address(self):
+        from email.utils import getaddresses
+
+        from protonmail_mcp.email_parser import extract_addresses
+
+        formatted = extract_addresses('Anna <"anna svensson"@x.se>')
+        assert formatted == ['Anna <"anna svensson"@x.se>']
+        assert [a for _, a in getaddresses(formatted)] == ['"anna svensson"@x.se']
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            'x <"a\r\n b"@x.se>',
+            'x <"a\rb"@x.se>',
+            'x <"a\nb"@x.se>',
+            'x <"a b"@x.se>',
+            'x <"a\x85b"@x.se>',
+            'x <"a\x0bb"@x.se>',
+            'x <"a\\\r\n b"@x.se>',
+        ],
+    )
+    def test_line_breaks_never_survive_in_the_address(self, value):
+        from protonmail_mcp.email_parser import extract_addresses, parse_addresses
+
+        for _, addr in parse_addresses(value):
+            assert addr.splitlines() == [addr]
+        for formatted in extract_addresses(value):
+            assert formatted.splitlines() == [formatted]

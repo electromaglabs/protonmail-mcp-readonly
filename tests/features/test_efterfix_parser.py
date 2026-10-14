@@ -60,3 +60,18 @@ def took_less_than(timed_listing, seconds):
 def subject_starts_with(timed_listing, prefix):
     listing, _ = timed_listing
     assert listing[0]["subject"].startswith(prefix)
+
+
+@given(parsers.parse("ett mejl med rubrikraden '{line}'"), target_fixture="raw")
+def mail_with_header_single_quoted(mock_ctx, line):
+    return mail_with_header(mock_ctx, line)
+
+
+@then(parsers.parse("ska mottagarens adress vara '{addr}'"))
+def recipient_address_is(result, addr):
+    assert [a for _, a in result["addresses"]["to"]] == [addr]
+
+
+@then(parsers.parse("mottagaren ska visas som '{formatted}'"))
+def recipient_shown_as(result, formatted):
+    assert result["to"] == [formatted]

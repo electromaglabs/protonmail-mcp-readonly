@@ -22,3 +22,14 @@ Feature: Efter granskningen — rubriker, adresser och HTML-text i inkommande me
       | =?utf-8?q?Kommer_du??=                             | Kommer du?  |
       | =?iso-8859-1?q?f=F6r?= =?iso-8859-1?q?_dig?=       | för dig     |
       | Re: =?utf-8?q?m=C3=B6te?= idag                     | Re: möte idag |
+
+  Scenario: Blanksteg i en citerad lokaldel hör till adressen
+    Given ett mejl med rubrikraden 'To: Anna <"anna svensson"@x.se>'
+    When jag hämtar mejlet med get_email
+    Then ska mottagarens adress vara '"anna svensson"@x.se'
+    And mottagaren ska visas som 'Anna <"anna svensson"@x.se>'
+
+  Scenario: Blanksteg utanför citattecken tas bort ur adressen
+    Given ett mejl med rubrikraden 'To: Anna <anna. svensson@x.se>'
+    When jag hämtar mejlet med get_email
+    Then ska mottagarens adress vara 'anna.svensson@x.se'
