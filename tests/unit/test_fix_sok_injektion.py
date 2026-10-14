@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from protonmail_mcp.imap_client import IMAPClient, _imap_quoted, _to_imap_date
+from tests.fix_sok_fakebox import imap_mock
 
 
 class TestImapQuoted:
@@ -65,7 +66,7 @@ class TestSearchRejectsInjection:
         monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
         from protonmail_mcp.config import Settings
         imap = IMAPClient(Settings(_env_file=None))
-        imap._client = AsyncMock()
+        imap._client = imap_mock()
         imap._client.search = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b""]))
         return imap
 

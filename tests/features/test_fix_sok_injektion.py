@@ -11,6 +11,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from protonmail_mcp.server import mcp
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktyget
+from tests.fix_sok_fakebox import imap_mock
 
 scenarios("fix_sok_injektion.feature")
 
@@ -26,7 +27,7 @@ def settings(monkeypatch):
 @given("att jag är ansluten till en brevlåda", target_fixture="imap")
 def connected(mock_ctx, settings):
     imap = IMAPClient(settings)
-    imap._client = AsyncMock()
+    imap._client = imap_mock()
     imap._client.select = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b"0 EXISTS"]))
     imap._client.search = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b""]))
     mock_ctx.request_context.lifespan_context.imap = imap

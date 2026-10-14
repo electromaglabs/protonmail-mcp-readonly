@@ -7,6 +7,7 @@ import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
 from protonmail_mcp.imap_client import IMAPClient
+from tests.fix_sok_fakebox import imap_mock
 
 scenarios("fix_sok_fetch.feature")
 
@@ -17,7 +18,7 @@ def imap(monkeypatch):
     monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
     from protonmail_mcp.config import Settings
     client = IMAPClient(Settings(_env_file=None))
-    client._client = AsyncMock()
+    client._client = imap_mock()
     client._client.select = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b"2 EXISTS"]))
     return client
 
