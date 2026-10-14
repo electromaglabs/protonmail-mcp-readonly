@@ -274,13 +274,14 @@ class TestListMailboxes:
         assert "Folders/Sub" in names
 
     @pytest.mark.asyncio
-    async def test_empty_on_failure(self, client):
+    async def test_raises_on_failure(self, client):
+        """Ett nekat LIST ska inte se ut som en brevlåda utan mappar (F3)."""
         client._client.list = AsyncMock(return_value=SimpleNamespace(
             result="NO",
             lines=[],
         ))
-        result = await client.list_mailboxes()
-        assert result == []
+        with pytest.raises(ValueError, match="Listningen av mappar misslyckades"):
+            await client.list_mailboxes()
 
     @pytest.mark.asyncio
     async def test_list_mailboxes_returns_type_system(self, client):
@@ -364,13 +365,14 @@ class TestGetMessage:
         assert result == bytes(raw_email)
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_failure(self, client):
+    async def test_raises_on_failure(self, client):
+        """NO är ett serverfel, inte "inget meddelande" (F3/K3)."""
         client._client.uid = AsyncMock(return_value=SimpleNamespace(
             result="NO",
             lines=[],
         ))
-        result = await client.get_message("INBOX", "42")
-        assert result is None
+        with pytest.raises(ValueError, match="UID 42 i INBOX misslyckades"):
+            await client.get_message("INBOX", "42")
 
     @pytest.mark.asyncio
     async def test_validates_uid(self, client):
@@ -539,14 +541,14 @@ class TestListMailboxesBadResult:
         return imap
 
     @pytest.mark.asyncio
-    async def test_bad_result_returns_empty(self, client):
-        """list() med result='BAD' ska returnera tom lista."""
+    async def test_bad_result_raises(self, client):
+        """list() med result='BAD' ska ge fel med serverns text, inte en tom lista (F3)."""
         client._client.list = AsyncMock(return_value=SimpleNamespace(
             result="BAD",
             lines=["some error"],
         ))
-        result = await client.list_mailboxes()
-        assert result == []
+        with pytest.raises(ValueError, match="BAD.*some error"):
+            await client.list_mailboxes()
 
 
 # ---------------------------------------------------------------------------
@@ -669,13 +671,14 @@ class TestGetMessageHeaders:
         assert result["message-id"] == "<abc@ex>"
 
     @pytest.mark.asyncio
-    async def test_get_message_headers_returns_none_on_bad_result(self, client):
+    async def test_get_message_headers_raises_on_bad_result(self, client):
+        """NO är ett serverfel, inte "inget meddelande" (F3/K3)."""
         client._client.uid = AsyncMock(return_value=SimpleNamespace(
             result="NO",
             lines=[],
         ))
-        result = await client.get_message_headers("INBOX", "42")
-        assert result is None
+        with pytest.raises(ValueError, match="UID 42 i INBOX misslyckades"):
+            await client.get_message_headers("INBOX", "42")
 
 
 # ---------------------------------------------------------------------------
@@ -909,7 +912,7 @@ class TestConcurrentCalls:
 
         fake.select = slow_select
         fake.wait_hello_from_server = slow_hello
-        fake.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        fake.uid = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
 
         with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=fake) as ctor:
             await asyncio.gather(

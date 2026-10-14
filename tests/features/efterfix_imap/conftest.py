@@ -94,30 +94,65 @@ def bridge_no_writes(bridge):
     assert [c for c in bridge.commands if c[0] in writes] == [], bridge.commands
 
 
-def install_bodies(bridge) -> None:
-    """Låter låtsas-Bridgen svara på UID FETCH BODY.PEEK[...] med en literal.
+def _ok(*lines):
+    return SimpleNamespace(result="OK", lines=[*lines, b"command completed"])
 
-    bridge.bodies[(mapp, uid)] = råa bytes. Övriga UID-kommandon går till
-    låtsas-Bridgens vanliga hantering.
+
+def _no(text: str):
+    return SimpleNamespace(result="NO", lines=[text.encode()])
+
+
+def install_bodies(bridge) -> None:
+    """Låter låtsas-Bridgen svara med innehåll på FETCH, UID FETCH BODY.PEEK och SEARCH.
+
+    bridge.bodies[(mapp, uid)] = råa bytes (rubriker, ev. brödtext). Mejl
+    utan eget innehåll får en enkel rubrik. bridge.refuse["FETCH"] gör att
+    alla hämtningar nekas. Övriga UID-kommandon går till den vanliga hanteringen.
     """
     if hasattr(bridge, "bodies"):
         return
     bridge.bodies = {}
     original = bridge._uid
 
+    def raw_for(uid):
+        default = f"Subject: Brev {uid}\r\nFrom: x@example.com\r\n\r\n".encode()
+        return bridge.bodies.get((bridge.selected, uid), default)
+
+    def literal(seq, uid, what):
+        raw = raw_for(uid)
+        return [f"{seq} FETCH (UID {uid} FLAGS () {what} {{{len(raw)}}}".encode(), bytearray(raw), b")"]
+
     async def uid(command, *args):
         if command.upper() == "FETCH" and len(args) > 1 and "BODY.PEEK" in args[1]:
             bridge.commands.append(("UID FETCH", *args))
-            raw = bridge.bodies.get((bridge.selected, args[0]))
-            if raw is None:
-                return SimpleNamespace(result="OK", lines=[b"command completed"])
-            return SimpleNamespace(result="OK", lines=[
-                f"1 FETCH (UID {args[0]} BODY[] {{{len(raw)}}}".encode(), bytearray(raw), b")",
-                b"command completed",
-            ])
+            if "FETCH" in bridge.refuse:
+                return _no(bridge.refuse["FETCH"])
+            if args[0] not in bridge.mailboxes.get(bridge.selected, set()):
+                return _ok()
+            return _ok(*literal(1, args[0], "BODY[]"))
         return await original(command, *args)
 
+    def uids():
+        return sorted(bridge.mailboxes.get(bridge.selected, set()), key=int)
+
+    async def fetch(message_set, parts):
+        bridge.commands.append(("FETCH", message_set, parts))
+        if "FETCH" in bridge.refuse:
+            return _no(bridge.refuse["FETCH"])
+        lines = []
+        for part in message_set.split(","):
+            a, _, b = part.partition(":")
+            for seq in range(int(a), int(b or a) + 1):
+                lines += literal(seq, uids()[seq - 1], "BODY[HEADER]")
+        return _ok(*lines)
+
+    async def search(criteria):
+        bridge.commands.append(("SEARCH", criteria))
+        return _ok(" ".join(str(i) for i in range(1, len(uids()) + 1)).encode())
+
     bridge.client.uid.side_effect = uid
+    bridge.client.fetch.side_effect = fetch
+    bridge.client.search.side_effect = search
 
 
 @given(parsers.parse('att mejlet med UID "{uid}" i "{mailbox}" har ett ämne med {count:d} blanksteg mitt i'))

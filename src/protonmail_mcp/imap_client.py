@@ -356,17 +356,25 @@ class IMAPClient:
             self._discard_connection()
             await self.connect()
 
+    async def _list(self, pattern: str) -> list[tuple[list[str], str]]:
+        """LIST "" <pattern> som (attribut, läsbart namn). pattern är redan citerat.
+
+        Kastar ValueError om Bridge inte svarar OK: ett nekat LIST får inte se
+        ut som en brevlåda utan mappar.
+        """
+        resp = await self._client.list('""', pattern)
+        _require_ok(resp, "Listningen av mappar")
+        entries = []
+        for line in resp.lines:
+            entry = _parse_list_entry(_decode(line))
+            if entry and entry[1]:
+                entries.append(entry)
+        return entries
+
     @_serialized
     async def list_mailboxes(self) -> list[dict[str, Any]]:
         await self._ensure_connected()
-        resp = await self._client.list('""', "*")
-        mailboxes = []
-        if resp.result == "OK":
-            for line in resp.lines:
-                entry = _parse_list_entry(_decode(line))
-                if entry and entry[1]:
-                    mailboxes.append(describe_mailbox(entry[1], entry[0]))
-        return mailboxes
+        return [describe_mailbox(name, attributes) for attributes, name in await self._list("*")]
 
     @_serialized
     async def list_messages(
@@ -409,14 +417,8 @@ class IMAPClient:
             f"{start}:{stop}",
             "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)])",
         )
-        if fetch_resp.result != "OK":
-            return {
-                "messages": [],
-                "total": exists,
-                "page": page,
-                "pages": total_pages,
-                "has_more": page < total_pages,
-            }
+        # Ett nekat FETCH får inte se ut som en tom sida
+        _require_ok(fetch_resp, f"Hämtningen av sida {page} i {mailbox}")
 
         msgs = _sort_newest_first(_parse_fetch_metadata(fetch_resp.lines))
         return {
@@ -434,8 +436,9 @@ class IMAPClient:
         await self._ensure_connected()
         await self._select(mailbox)
         resp = await self._client.uid("fetch", safe_uid, "BODY.PEEK[]")
-        if resp.result != "OK":
-            return None
+        # NO/BAD är ett serverfel, inte "finns inte": None betyder bara att
+        # svaret var OK men saknade meddelandet
+        _require_ok(resp, f"Hämtningen av UID {safe_uid} i {mailbox}")
         # lines[0] = "SEQNUM FETCH (BODY[] {SIZE}"
         # lines[1] = bytearray with raw email
         for line in resp.lines:
@@ -647,8 +650,7 @@ class IMAPClient:
             "fetch", safe_uid,
             "BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID REPLY-TO)]"
         )
-        if resp.result != "OK":
-            return None
+        _require_ok(resp, f"Hämtningen av rubrikerna för UID {safe_uid} i {mailbox}")
         for line in resp.lines:
             if isinstance(line, bytearray) and len(line) > 4:
                 return _parse_headers(bytes(line))

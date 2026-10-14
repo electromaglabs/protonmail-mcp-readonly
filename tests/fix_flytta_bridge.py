@@ -7,6 +7,7 @@ aldrig fick skickas (t.ex. EXPUNGE utan UID).
 """
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -33,6 +34,8 @@ class FakeBridge:
         self.commands: list[tuple] = []
         # Kommandon (versaler, t.ex. "MOVE") som Bridge ska svara NO på
         self.refuse: dict[str, str] = {}
+        # Behållare som LIST visar med \Noselect, t.ex. "Folders" och "Labels"
+        self.containers: set[str] = set()
 
         client = AsyncMock()
         client.noop.return_value = _ok()
@@ -40,6 +43,7 @@ class FakeBridge:
         client.uid.side_effect = self._uid
         client.expunge.side_effect = self._expunge
         client.status.side_effect = self._status
+        client.list.side_effect = self._list
         client.create.side_effect = self._simple("CREATE")
         client.delete.side_effect = self._simple("DELETE")
         client.rename.side_effect = self._simple("RENAME")
@@ -97,6 +101,22 @@ class FakeBridge:
             return _no("no such mailbox")
         n = len(self.mailboxes[name])
         return _ok(f'"{name}" (MESSAGES {n} UNSEEN 0)'.encode())
+
+    async def _list(self, reference: str, pattern: str):
+        pattern = self._unquote(pattern)
+        self.commands.append(("LIST", pattern))
+        if "LIST" in self.refuse:
+            return _no(self.refuse["LIST"])
+        # IMAP-mönster: "*" matchar allt, "%" allt utom nivåavgränsaren
+        regex = re.compile("".join(
+            ".*" if c == "*" else "[^/]*" if c == "%" else re.escape(c) for c in pattern
+        ))
+        lines = []
+        for name in [*sorted(self.containers), *self.mailboxes]:
+            if regex.fullmatch(name):
+                attrs = "\\Noselect" if name in self.containers else "\\HasNoChildren"
+                lines.append(f'({attrs}) "/" "{name}"'.encode())
+        return _ok(*lines)
 
     def _simple(self, cmd: str):
         async def handler(*args):
