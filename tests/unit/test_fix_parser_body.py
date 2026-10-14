@@ -148,7 +148,7 @@ class TestBodyStructure:
         result = parse_email(raw, body_format="full")
         assert result["body_plain"] == ""
         assert result["attachments"] == [
-            {"filename": "scan.pdf", "content_type": "application/pdf", "size": 9}
+            {"index": 0, "part": "1", "filename": "scan.pdf", "content_type": "application/pdf", "size": 9}
         ]
 
 

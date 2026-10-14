@@ -270,15 +270,19 @@ def _disposition(part: Message) -> str | None:
         return None
 
 
-def _attachment(part: Message, filename: str) -> dict[str, Any]:
+def _attachment_bytes(part: Message) -> bytes:
+    """Bilagans innehåll. Ett bifogat mejl (message/rfc822) blir hela mejlet."""
     if part.is_multipart():
         # message/rfc822: get_payload(decode=True) är None för multipart
         try:
-            size = sum(len(p.as_bytes()) for p in part.get_payload() if isinstance(p, Message))
+            return b"".join(p.as_bytes() for p in part.get_payload() if isinstance(p, Message))
         except Exception:
-            size = 0
-    else:
-        size = len(part.get_payload(decode=True) or b"")
+            return b""
+    return part.get_payload(decode=True) or b""
+
+
+def _attachment(part: Message, filename: str) -> dict[str, Any]:
+    size = len(_attachment_bytes(part))
     return {"filename": filename, "content_type": part.get_content_type(), "size": size}
 
 
@@ -293,31 +297,39 @@ def _text_of(part: Message) -> str:
     return _safe_decode(payload, charset)
 
 
-def _collect(part: Message, out: dict[str, list], depth: int = 0) -> None:
+def _collect(part: Message, out: dict[str, list], depth: int = 0, section: str = "") -> None:
     """Samla brödtext och bilagor för ett meddelande.
 
     Går inte ner i message/* (vidarebefordrade mejl är bilagor, inte en del
     av ytterbrevet). I multipart/alternative tas en variant per typ; i övriga
     multipart (mixed, related, signed …) slås alla inline-textdelar ihop.
+
+    Bilagor samlas som (del, filnamn, delnummer), där delnumret är IMAP:s
+    sektionsnummer (RFC 3501 §6.4.5, t.ex. "1.2") — stabilt för mejlet.
     """
     if depth > _MAX_MIME_DEPTH:
         return
     ctype = part.get_content_type()
     maintype = part.get_content_maintype()
+    here = section or "1"  # ett meddelande utan multipart har bara del 1
 
     if maintype == "message" and part.is_multipart():
-        out["attachments"].append(_attachment(part, _filename(part)))
+        out["attachments"].append((part, _filename(part), here))
         return
 
     if part.is_multipart():
         children = [c for c in part.get_payload() if isinstance(c, Message)]
+        numbered = [
+            (child, f"{section}.{n}" if section else str(n))
+            for n, child in enumerate(children, 1)
+        ]
         if part.get_content_subtype() != "alternative":
-            for child in children:
-                _collect(child, out, depth + 1)
+            for child, child_section in numbered:
+                _collect(child, out, depth + 1, child_section)
             return
-        for child in children:
+        for child, child_section in numbered:
             sub: dict[str, list] = {"plain": [], "html": [], "attachments": []}
-            _collect(child, sub, depth + 1)
+            _collect(child, sub, depth + 1, child_section)
             for kind in ("plain", "html"):
                 if not out[kind] and any(sub[kind]):
                     out[kind].extend(sub[kind])
@@ -333,19 +345,58 @@ def _collect(part: Message, out: dict[str, list], depth: int = 0) -> None:
         if text := _text_of(part):
             out["html" if ctype == "text/html" else "plain"].append(text)
     elif disposition == "attachment" or filename:
-        out["attachments"].append(_attachment(part, filename))
+        out["attachments"].append((part, filename, here))
     elif disposition == "inline" or part.get("Content-ID"):
         pass  # inbäddad resurs utan filnamn, t.ex. cid-logga i multipart/related
     elif maintype == "text" and ctype != "text/calendar":
         pass  # annan textvariant i alternative, t.ex. text/x-amp-html
     else:
-        out["attachments"].append(_attachment(part, filename))
+        out["attachments"].append((part, filename, here))
 
 
 def _parts(msg: Message) -> dict[str, list]:
     out: dict[str, list] = {"plain": [], "html": [], "attachments": []}
     _collect(msg, out)
+    out["attachments"] = [
+        {"index": index, "part": section, **_attachment(part, filename)}
+        for index, (part, filename, section) in enumerate(out["attachments"])
+    ]
     return out
+
+
+def get_attachment_part(raw: bytes, index: int) -> dict[str, Any]:
+    """Plocka ut bilaga nummer ``index`` (0-baserat) ur ett rått mejl.
+
+    Samma MIME-genomgång som bilagelistan i parse_email, så indexet pekar på
+    exakt den bilaga som listas där. Returnerar index, part, filename,
+    content_type, size, charset (eller None) och data (bilagans bytes).
+    """
+    msg = email.message_from_bytes(raw)
+    out: dict[str, list] = {"plain": [], "html": [], "attachments": []}
+    _collect(msg, out)
+    found = out["attachments"]
+    if not 0 <= index < len(found):
+        if not found:
+            raise ValueError("Mejlet har inga bilagor")
+        count = f"{len(found)} bilaga" if len(found) == 1 else f"{len(found)} bilagor"
+        raise ValueError(
+            f"Ingen bilaga med index {index} — mejlet har {count} (index 0–{len(found) - 1})"
+        )
+    part, filename, section = found[index]
+    data = _attachment_bytes(part)
+    try:
+        charset = part.get_content_charset()
+    except Exception:
+        charset = None
+    return {
+        "index": index,
+        "part": section,
+        "filename": filename,
+        "content_type": part.get_content_type(),
+        "size": len(data),
+        "charset": charset,
+        "data": data,
+    }
 
 
 def get_body(msg: Message) -> dict[str, str]:
