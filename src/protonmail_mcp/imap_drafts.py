@@ -18,6 +18,7 @@ from .imap_client import (
     _quote_mailbox,
     _require_ok,
     _serialized,
+    _validate_uid,
 )
 
 DRAFTS = "Drafts"
@@ -89,3 +90,40 @@ async def append_draft(imap: IMAPClient, message: bytes, message_id: str | None)
     """
     await imap._ensure_connected()
     return await _store_draft(imap, message, message_id)
+
+
+async def _delete_permanently(imap: IMAPClient, uid: str) -> None:
+    """Radera ett utkast permanent med den befintliga vägen i IMAPClient.
+
+    delete_message(permanent=True) gör UID STORE \\Deleted + UID EXPUNGE på
+    just det UID:t (aldrig EXPUNGE på hela mappen) och tar bort \\Deleted igen
+    om EXPUNGE misslyckas. Låset hålls redan här, så den odekorerade metoden
+    anropas (``_serialized`` använder functools.wraps, som sparar __wrapped__).
+    """
+    await IMAPClient.delete_message.__wrapped__(imap, DRAFTS, uid, permanent=True)
+
+
+@_serialized
+async def replace_draft(
+    imap: IMAPClient, old_uid: str, message: bytes, message_id: str | None
+) -> str | None:
+    """Ersätt utkastet old_uid i Drafts med ett nytt meddelande.
+
+    Ordningen gör att inget går förlorat: först kontrolleras att det gamla
+    utkastet finns, sedan sparas det nya med APPEND, och först när det lyckats
+    raderas det gamla permanent. Misslyckas APPEND rörs det gamla inte.
+    Returnerar det nya utkastets UID (None om Bridge inte angav det).
+    """
+    safe_uid = _validate_uid(old_uid)
+    await imap._ensure_connected()
+    await imap._select(DRAFTS)
+    await imap._require_uid(DRAFTS, safe_uid)
+    new_uid = await _store_draft(imap, message, message_id)
+    try:
+        await _delete_permanently(imap, safe_uid)
+    except ValueError as exc:
+        raise ValueError(
+            f"Det nya utkastet sparades i {DRAFTS} (UID {new_uid}), men det gamla "
+            f"(UID {safe_uid}) kunde inte tas bort, så båda finns kvar: {exc}"
+        ) from exc
+    return new_uid

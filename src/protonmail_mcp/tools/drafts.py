@@ -6,7 +6,7 @@ list_emails(mailbox="Drafts") och läses med get_email(uid, mailbox="Drafts").
 """
 from collections.abc import Sequence
 from email.message import EmailMessage, Message
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context
 
@@ -223,3 +223,57 @@ async def create_forward_draft(
     if fields is None:
         raise _not_found(uid, mailbox)
     return await _save(app, _build_draft(app, **fields, bcc=bcc))
+
+
+@mcp.tool()
+async def update_draft(
+    ctx: Context,
+    uid: str,
+    mailbox: Literal["Drafts"],
+    to: str | list[str],
+    subject: str,
+    body: str,
+    body_html: OptionalStr = None,
+    cc: str | list[str] | None = None,
+    bcc: str | list[str] | None = None,
+    reply_to: OptionalStr = None,
+) -> dict:
+    """Ersätt ett utkast i Drafts med en ny version. Ingenting skickas.
+
+    Den nya versionen byggs som create_draft (alla fält anges på nytt) och
+    sparas först; därefter raderas det gamla utkastet permanent (UID STORE
+    \\Deleted + UID EXPUNGE på just det UID:t). Misslyckas sparandet ligger det
+    gamla utkastet kvar orört. Utkastet får ett nytt UID och ett nytt
+    Message-ID. Bara utkast i Drafts kan uppdateras; hitta dem med
+    list_emails(mailbox="Drafts").
+
+    Args:
+        uid: Utkastets UID i Drafts (från create_draft eller list_emails)
+        mailbox: Alltid "Drafts" — anges för att bekräfta att UID:t kommer därifrån
+        to: Mottagaradress(er) — sträng eller lista
+        subject: Ämnesrad
+        body: Brödtext i klartext
+        body_html: Valfri HTML-version av brödtexten
+        cc: Kopia-adress(er)
+        bcc: Hemlig kopia-adress(er)
+        reply_to: Svarsadress
+
+    Returns:
+        {"uid", "mailbox": "Drafts", "message_id", "replaced_uid"} där uid är
+        det nya utkastets UID och replaced_uid det raderade.
+
+    Raises:
+        ValueError: utkastet finns inte i Drafts, ogiltig adress eller
+            ämnesrad (inget ändras), Bridge vägrar spara (det gamla ligger
+            kvar), eller det gamla gick inte att radera (båda ligger kvar;
+            felet anger UID:n).
+    """
+    if mailbox != DRAFTS:
+        raise ValueError(f"Bara utkast i {DRAFTS} kan uppdateras, inte i {mailbox!r}")
+    app = _get_app(ctx)
+    msg = _build_draft(
+        app, to=to, subject=subject, body=body, body_html=body_html,
+        cc=cc, bcc=bcc, reply_to=reply_to,
+    )
+    new_uid = await imap_drafts.replace_draft(app.imap, uid, msg.as_bytes(), msg["Message-ID"])
+    return {**_draft_result(new_uid, msg), "replaced_uid": uid}

@@ -86,3 +86,53 @@ class TestAppendDraft:
         uid = await imap_drafts.append_draft(imap, RAW, "<a\r\nX DELETE INBOX>")
         assert uid is None
         assert "SEARCH" not in bridge.names()
+
+
+class TestReplaceDraft:
+    @pytest.mark.asyncio
+    async def test_checks_old_then_appends_then_expunges_only_the_old_uid(self):
+        imap, bridge = make_imap()
+        old = bridge.add("Drafts", b"Subject: gammal\r\n\r\nx\r\n", ("\\Draft",))
+        new_uid = await imap_drafts.replace_draft(imap, old, RAW, "<abc@proton.me>")
+        assert new_uid == "2"
+        assert list(bridge.messages("Drafts")) == [2]
+        names = bridge.names()
+        assert names.index("APPEND") < names.index("UID STORE") < names.index("UID EXPUNGE")
+        assert ("UID EXPUNGE", old) in bridge.commands
+        assert "EXPUNGE" not in names
+
+    @pytest.mark.asyncio
+    async def test_invalid_uid_is_rejected_before_anything_is_sent(self):
+        imap, bridge = make_imap()
+        with pytest.raises(ValueError, match="Ogiltigt UID"):
+            await imap_drafts.replace_draft(imap, "1:*", RAW, "<abc@proton.me>")
+        assert bridge.commands == []
+
+    @pytest.mark.asyncio
+    async def test_missing_old_draft_appends_nothing(self):
+        imap, bridge = make_imap()
+        with pytest.raises(ValueError, match="Inget meddelande med UID 5 i Drafts"):
+            await imap_drafts.replace_draft(imap, "5", RAW, "<abc@proton.me>")
+        assert "APPEND" not in bridge.names()
+
+    @pytest.mark.asyncio
+    async def test_failed_append_leaves_old_draft_untouched(self):
+        imap, bridge = make_imap()
+        old = bridge.add("Drafts", b"Subject: gammal\r\n\r\nx\r\n")
+        bridge.refuse["APPEND"] = "nope"
+        with pytest.raises(ValueError, match="Sparandet av utkastet"):
+            await imap_drafts.replace_draft(imap, old, RAW, "<abc@proton.me>")
+        assert list(bridge.messages("Drafts")) == [int(old)]
+        assert not {"UID STORE", "UID EXPUNGE"} & set(bridge.names())
+
+    @pytest.mark.asyncio
+    async def test_failed_delete_reports_both_uids(self):
+        imap, bridge = make_imap()
+        old = bridge.add("Drafts", b"Subject: gammal\r\n\r\nx\r\n")
+        bridge.refuse["EXPUNGE"] = "expunge failed"
+        with pytest.raises(ValueError) as excinfo:
+            await imap_drafts.replace_draft(imap, old, RAW, "<abc@proton.me>")
+        text = str(excinfo.value)
+        assert "UID 2" in text and f"UID {old}" in text
+        # \Deleted lämnas inte kvar på det gamla utkastet
+        assert "\\Deleted" not in bridge.messages("Drafts")[int(old)]["flags"]

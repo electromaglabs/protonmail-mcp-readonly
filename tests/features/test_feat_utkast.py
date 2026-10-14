@@ -15,12 +15,17 @@ from protonmail_mcp.tools.drafts import (
     create_draft,
     create_forward_draft,
     create_reply_draft,
+    update_draft,
 )
 from protonmail_mcp.tools.reply import reply_to_email
 from tests.feat_utkast_bridge import make_imap
 from tests.fix_svar_support import capture_smtp, header_addresses, make_client
 
-scenarios("feat_utkast_skapa.feature", "feat_utkast_svar.feature")
+scenarios(
+    "feat_utkast_skapa.feature",
+    "feat_utkast_svar.feature",
+    "feat_utkast_uppdatera.feature",
+)
 
 
 @pytest.fixture
@@ -103,6 +108,20 @@ def original_has_attachment(bridge, original, filename):
     bridge.mailboxes["INBOX"][int(original["uid"])]["raw"] = msg.as_bytes()
 
 
+@given(
+    parsers.parse('ett utkast i Drafts till "{to}" med ämnet "{subject}" och texten "{body}"'),
+    target_fixture="draft",
+)
+def existing_draft(bridge, to, subject, body):
+    msg = EmailMessage()
+    msg["From"] = "me@proton.me"
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg["Message-ID"] = "<draft-1@proton.me>"
+    msg.set_content(body)
+    return {"uid": bridge.add("Drafts", msg.as_bytes(), ("\\Draft", "\\Seen"))}
+
+
 # --- When --------------------------------------------------------------------
 
 
@@ -153,6 +172,27 @@ def make_forward_draft(ctx, outcome, original, to, text):
         outcome,
         create_forward_draft(ctx, uid=original["uid"], mailbox="INBOX", to=to, body=text),
     )
+
+
+@when(
+    parsers.parse(
+        'jag uppdaterar utkastet till "{to}" med ämnet "{subject}" och texten "{body}"'
+    )
+)
+def update_existing_draft(ctx, outcome, draft, to, subject, body):
+    _run(
+        outcome,
+        update_draft(ctx, uid=draft["uid"], mailbox="Drafts", to=to, subject=subject, body=body),
+    )
+
+
+@when(
+    parsers.parse(
+        'jag uppdaterar utkastet med UID "{uid}" till "{to}" med ämnet "{subject}" och texten "{body}"'
+    )
+)
+def update_draft_uid(ctx, outcome, uid, to, subject, body):
+    _run(outcome, update_draft(ctx, uid=uid, mailbox="Drafts", to=to, subject=subject, body=body))
 
 
 # --- Then --------------------------------------------------------------------
@@ -236,3 +276,23 @@ def draft_matches_sent(bridge, captured):
 def draft_has_attachment(bridge, filename):
     msg = bridge.parsed("Drafts", _latest_draft_uid(bridge))
     assert filename in [part.get_filename() for part in msg.iter_attachments()]
+
+
+@then("det gamla utkastet ska vara permanent raderat med UID STORE och UID EXPUNGE på sitt UID")
+def old_draft_expunged(bridge, draft):
+    uid = draft["uid"]
+    assert int(uid) not in bridge.messages("Drafts")
+    assert ("UID STORE", uid, "+FLAGS", r"(\Deleted)") in bridge.commands
+    assert ("UID EXPUNGE", uid) in bridge.commands
+    # Aldrig EXPUNGE på hela mappen
+    assert "EXPUNGE" not in bridge.names()
+
+
+@then("inget UID STORE eller UID EXPUNGE ska ha skickats")
+def no_store_or_expunge(bridge):
+    assert not {"UID STORE", "UID EXPUNGE", "EXPUNGE"} & set(bridge.names())
+
+
+@then("inget APPEND ska ha skickats")
+def no_append(bridge):
+    assert "APPEND" not in bridge.names()

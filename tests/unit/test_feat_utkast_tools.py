@@ -178,3 +178,45 @@ class TestForwardDraft:
         with pytest.raises(ValueError, match="Inget meddelande med UID 7 i INBOX"):
             await drafts.create_forward_draft(ctx, uid="7", mailbox="INBOX", to="b@example.com")
         assert saved == {}
+
+
+class TestUpdateDraft:
+    @pytest.mark.asyncio
+    async def test_only_drafts_mailbox(self, monkeypatch):
+        replaced = []
+
+        async def fake_replace(*args):
+            replaced.append(args)
+
+        monkeypatch.setattr(drafts.imap_drafts, "replace_draft", fake_replace)
+        ctx, _ = _ctx()
+        with pytest.raises(ValueError, match="Bara utkast i Drafts"):
+            await drafts.update_draft(ctx, uid="3", mailbox="INBOX", to="a@example.se",
+                                      subject="s", body="b")
+        assert replaced == []
+
+    @pytest.mark.asyncio
+    async def test_result_names_new_and_replaced_uid(self, monkeypatch):
+        seen = {}
+
+        async def fake_replace(imap, old_uid, raw, message_id):
+            seen.update(old_uid=old_uid, raw=raw, message_id=message_id)
+            return "9"
+
+        monkeypatch.setattr(drafts.imap_drafts, "replace_draft", fake_replace)
+        ctx, _ = _ctx()
+        result = await drafts.update_draft(ctx, uid="3", mailbox="Drafts", to="a@example.se",
+                                           subject="Ny", body="b", bcc="h@example.se")
+        msg = _parse(seen["raw"])
+        assert seen["old_uid"] == "3"
+        assert msg["Subject"] == "Ny" and msg["Bcc"] == "h@example.se"
+        assert result == {"uid": "9", "mailbox": "Drafts",
+                          "message_id": msg["Message-ID"], "replaced_uid": "3"}
+
+    def test_mcp_schema_requires_drafts_mailbox(self):
+        from protonmail_mcp.server import mcp
+
+        tool = mcp._tool_manager.get_tool("update_draft")
+        schema = tool.parameters["properties"]["mailbox"]
+        assert schema.get("const") == "Drafts" or schema.get("enum") == ["Drafts"]
+        assert "mailbox" in tool.parameters["required"]
