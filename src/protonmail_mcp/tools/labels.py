@@ -4,16 +4,17 @@ from mcp.server.fastmcp import Context
 from pydantic import Field
 
 from .. import imap_labels
-from ..imap_bulk import single
+from ..imap_bulk import BulkResult, single
 from ..server import mcp
 from . import _get_app
+from ._uids import UidArg
 
 Mailbox = Annotated[str, Field(min_length=1, max_length=255)]
 Label = Annotated[str, Field(min_length=1, max_length=255)]
 
 
 @mcp.tool()
-async def add_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -> bool:
+async def add_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -> bool | BulkResult:
     """Lägg till en etikett (Labels/…) på ett mejl. Mejlet ligger kvar i sin mapp.
 
     I Proton kan ett mejl ha många etiketter men ligger i exakt en mapp.
@@ -33,7 +34,8 @@ async def add_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -> b
     - Bridge nekar (felet innehåller Bridges förklaring).
 
     Args:
-        uid: Mejlets UID i mailbox
+        uid: Mejlets UID i mailbox, eller en lista med upp till 100 UID:n ur
+            samma mailbox
         mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
             samma nummer i en annan mapp är ett annat mejl. Använd fältet
             mailbox från svaret av list_emails, search_emails eller get_email.
@@ -41,13 +43,20 @@ async def add_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -> b
 
     Returns:
         True när etiketten är tillagd.
+        Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
+        [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
+        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
+        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
+        än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
+    if isinstance(uid, list):
+        return await imap_labels.add_label(app.imap, mailbox, uid, label)
     return single(await imap_labels.add_label(app.imap, mailbox, [uid], label))
 
 
 @mcp.tool()
-async def remove_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -> bool:
+async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -> bool | BulkResult:
     """Ta bort en etikett (Labels/…) från ett mejl utan att röra mejlet i övrigt.
 
     Mejlet ligger kvar i sin mapp och behåller sina andra etiketter; det
@@ -68,7 +77,8 @@ async def remove_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -
     - Bridge nekar (felet innehåller Bridges förklaring).
 
     Args:
-        uid: Mejlets UID i mailbox
+        uid: Mejlets UID i mailbox, eller en lista med upp till 100 UID:n ur
+            samma mailbox
         mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
             samma nummer i en annan mapp är ett annat mejl. Använd fältet
             mailbox från svaret av list_emails, search_emails eller get_email.
@@ -76,13 +86,20 @@ async def remove_label(ctx: Context, uid: str, mailbox: Mailbox, label: Label) -
 
     Returns:
         True när etiketten är borttagen.
+        Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
+        [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
+        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
+        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
+        än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
+    if isinstance(uid, list):
+        return await imap_labels.remove_label(app.imap, mailbox, uid, label)
     return single(await imap_labels.remove_label(app.imap, mailbox, [uid], label))
 
 
 @mcp.tool()
-async def flag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
+async def flag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Stjärnmärk ett mejl (Starred i Proton).
 
     Sätter IMAP-flaggan \\Flagged, som hos Proton är samma sak som Starred:
@@ -93,20 +110,28 @@ async def flag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
     per mapp), eller Bridge nekar (felet innehåller Bridges förklaring).
 
     Args:
-        uid: Mejlets UID i mailbox
+        uid: Mejlets UID i mailbox, eller en lista med upp till 100 UID:n ur
+            samma mailbox
         mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
             samma nummer i en annan mapp är ett annat mejl. Använd fältet
             mailbox från svaret av list_emails, search_emails eller get_email.
 
     Returns:
         True när mejlet är stjärnmärkt.
+        Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
+        [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
+        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
+        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
+        än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
+    if isinstance(uid, list):
+        return await imap_labels.set_starred(app.imap, mailbox, uid, True)
     return single(await imap_labels.set_starred(app.imap, mailbox, [uid], True))
 
 
 @mcp.tool()
-async def unflag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
+async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Ta bort stjärnmärkningen från ett mejl (Starred i Proton).
 
     Tar bort IMAP-flaggan \\Flagged, så att mejlet inte längre syns under
@@ -117,13 +142,21 @@ async def unflag_email(ctx: Context, uid: str, mailbox: Mailbox) -> bool:
     per mapp), eller Bridge nekar (felet innehåller Bridges förklaring).
 
     Args:
-        uid: Mejlets UID i mailbox (även UID:t från Starred går bra, med mailbox="Starred")
+        uid: Mejlets UID i mailbox (även UID:t från Starred går bra, med
+            mailbox="Starred"), eller en lista med upp till 100 UID:n ur samma mailbox
         mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
             samma nummer i en annan mapp är ett annat mejl. Använd fältet
             mailbox från svaret av list_emails, search_emails eller get_email.
 
     Returns:
         True när stjärnmärkningen är borttagen.
+        Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
+        [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
+        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
+        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
+        än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
+    if isinstance(uid, list):
+        return await imap_labels.set_starred(app.imap, mailbox, uid, False)
     return single(await imap_labels.set_starred(app.imap, mailbox, [uid], False))

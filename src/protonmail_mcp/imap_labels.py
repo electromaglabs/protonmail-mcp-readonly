@@ -14,7 +14,8 @@ from email.parser import BytesHeaderParser
 from typing import Any
 
 from .imap_bulk import (
-    BulkResult, existing_uids, fail_all, missing_error, result, uid_set, validate_uids,
+    BulkResult, existing_uids, fail_all, missing_error, result, store_flags, uid_set,
+    validate_uids,
 )
 from .imap_client import (
     _FETCH_CHUNK_SIZE, _FETCH_START_RE, _LITERAL_END_RE, _UID_RE,
@@ -279,18 +280,5 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
 @_serialized
 async def set_starred(imap: IMAPClient, mailbox: str, uids: list[str], starred: bool) -> BulkResult:
     """Stjärnmärker (\\Flagged) eller avmarkerar mejlen; gäller i alla vyer hos Proton."""
-    uids = validate_uids(uids)
-    _quote_mailbox(mailbox)
-    await imap._ensure_connected()
-    await imap._select(mailbox)
-    found, failed = await existing_uids(imap, mailbox, uids)
-    ok: list[str] = []
-    if found:
-        action = "+FLAGS" if starred else "-FLAGS"
-        resp = await imap._uid("store", uid_set(found), action, r"(\Flagged)")
-        if resp.result == "OK":
-            ok = found
-        else:
-            what = "Stjärnmärkningen" if starred else "Borttagningen av stjärnmärkningen"
-            failed += fail_all(found, f"{what} i {mailbox} misslyckades ({resp.result}): {_response_text(resp)}")
-    return result(uids, ok, failed)
+    what = "Stjärnmärkningen" if starred else "Borttagningen av stjärnmärkningen"
+    return await store_flags(imap, mailbox, uids, r"(\Flagged)", starred, what)
