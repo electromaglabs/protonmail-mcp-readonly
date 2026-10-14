@@ -2,7 +2,6 @@
 from pytest_bdd import given, parsers, scenarios, when
 
 from protonmail_mcp.tools.messages import list_emails
-from protonmail_mcp.tools.search import search_emails
 
 from .conftest import install_bodies, run_tool
 
@@ -21,8 +20,3 @@ def container(bridge, name):
 def list_mails(mock_ctx, bridge, mailbox):
     install_bodies(bridge)
     run_tool(bridge, list_emails(mock_ctx, mailbox=mailbox))
-
-
-@when(parsers.parse('jag söker efter olästa mejl i "{mailbox}"'))
-def search_unseen(mock_ctx, bridge, mailbox):
-    run_tool(bridge, search_emails(mock_ctx, mailbox=mailbox, unseen=True))

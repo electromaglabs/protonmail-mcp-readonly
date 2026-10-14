@@ -38,6 +38,8 @@ _FETCH_CHUNK_SIZE = 200
 # Så många av de nyaste kandidaterna jämförs lokalt mot avkodat ämne och
 # avsändare (Bridge söker bara i okodade headers). 1000 brev tar ~4 s.
 _LOCAL_SCAN_LIMIT = 1000
+# Metadata per brev i list_emails och search_emails: samma fält i båda
+_METADATA_ITEMS = "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)])"
 # fullmatch: "$" släpper igenom ett avslutande "\n", och "\d" matchar Unicode-siffror
 _VALID_UID_RE = re.compile(r'[0-9]+')
 # Bara kontrolltecken (CR, LF, NUL m.fl.) kan bryta ut ur en quoted-string.
@@ -525,10 +527,7 @@ class IMAPClient:
         stop = exists - offset
         start = max(1, stop - page_size + 1)
 
-        fetch_resp = await self._client.fetch(
-            f"{start}:{stop}",
-            "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)])",
-        )
+        fetch_resp = await self._client.fetch(f"{start}:{stop}", _METADATA_ITEMS)
         # Ett nekat FETCH får inte se ut som en tom sida
         _require_ok(fetch_resp, f"Hämtningen av sida {page} i {mailbox}")
 
@@ -658,14 +657,11 @@ class IMAPClient:
         return sorted(_parse_seqnums(resp), key=int)
 
     async def _fetch_metadata(self, seqnums: list[str]) -> list[dict[str, Any]]:
-        """Hämtar UID, FLAGS och sökheaders i delar om högst _FETCH_CHUNK_SIZE."""
+        """Hämtar UID, FLAGS och metadatarubriker i delar om högst _FETCH_CHUNK_SIZE."""
         msgs: list[dict[str, Any]] = []
         for start in range(0, len(seqnums), _FETCH_CHUNK_SIZE):
             chunk = seqnums[start:start + _FETCH_CHUNK_SIZE]
-            fetch_resp = await self._client.fetch(
-                ",".join(chunk),
-                "(UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])",
-            )
+            fetch_resp = await self._client.fetch(",".join(chunk), _METADATA_ITEMS)
             if fetch_resp.result != "OK":
                 raise ValueError(
                     f"Hämtningen av sökträffarna misslyckades ({fetch_resp.result}): {_response_text(fetch_resp)}"

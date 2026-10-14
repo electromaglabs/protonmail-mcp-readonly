@@ -5,6 +5,7 @@ låtsas-Bridgen i tests/fix_flytta_bridge.py, så det som kontrolleras är vilka
 IMAP-kommandon Bridge faktiskt får och vad verktyget svarar.
 """
 import asyncio
+import re
 import time
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from pytest_bdd import given, parsers, then, when
 from protonmail_mcp.tools.folders import delete_folder
 from protonmail_mcp.tools.mailboxes import get_mailbox_status
 from protonmail_mcp.tools.messages import get_email, get_email_headers
+from protonmail_mcp.tools.search import search_emails
 from tests.fix_flytta_bridge import make_client
 
 
@@ -63,6 +65,11 @@ def delete(mock_ctx, bridge, name):
 @when(parsers.parse('jag tar bort mappen "{name}" med force'))
 def delete_force(mock_ctx, bridge, name):
     run_tool(bridge, delete_folder(mock_ctx, name=name, force=True))
+
+
+@when(parsers.parse('jag söker efter olästa mejl i "{mailbox}"'))
+def search_unseen(mock_ctx, bridge, mailbox):
+    run_tool(bridge, search_emails(mock_ctx, mailbox=mailbox, unseen=True))
 
 
 @when(parsers.parse('jag hämtar status för "{mailbox}"'))
@@ -135,8 +142,13 @@ def install_bodies(bridge) -> None:
         default = f"Subject: Brev {uid}\r\nFrom: x@example.com\r\n\r\n".encode()
         return bridge.bodies.get((bridge.selected, uid), default)
 
-    def literal(seq, uid, what):
+    def literal(seq, uid, what, fields=None):
         raw = raw_for(uid)
+        if fields is not None:
+            # Som Bridge: bara de begärda rubrikerna, och inga vikta rader här
+            head = raw.split(b"\r\n\r\n", 1)[0].split(b"\r\n")
+            kept = [h for h in head if h.split(b":", 1)[0].decode().upper() in fields]
+            raw = b"\r\n".join(kept) + b"\r\n\r\n"
         return [f"{seq} FETCH (UID {uid} FLAGS () {what} {{{len(raw)}}}".encode(), bytearray(raw), b")"]
 
     async def uid(command, *args):
@@ -156,11 +168,13 @@ def install_bodies(bridge) -> None:
         bridge.commands.append(("FETCH", message_set, parts))
         if "FETCH" in bridge.refuse:
             return _no(bridge.refuse["FETCH"])
+        m = re.search(r"HEADER\.FIELDS \(([^)]*)\)", parts)
+        fields = set(m.group(1).upper().split()) if m else None
         lines = []
         for part in message_set.split(","):
             a, _, b = part.partition(":")
             for seq in range(int(a), int(b or a) + 1):
-                lines += literal(seq, uids()[seq - 1], "BODY[HEADER]")
+                lines += literal(seq, uids()[seq - 1], "BODY[HEADER]", fields)
         return _ok(*lines)
 
     async def search(criteria):
