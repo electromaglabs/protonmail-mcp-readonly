@@ -5,12 +5,14 @@ from . import _get_app
 
 
 @mcp.tool()
-async def mark_email_read(ctx: Context, uid: str, mailbox: str = "INBOX") -> bool:
+async def mark_email_read(ctx: Context, uid: str, mailbox: str) -> bool:
     """Markera ett e-post som läst.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
+        uid: E-postets UID i mailbox
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
 
     Returns:
         True när markeringen är gjord. Kastar ett fel om UID:t inte finns i
@@ -21,12 +23,14 @@ async def mark_email_read(ctx: Context, uid: str, mailbox: str = "INBOX") -> boo
 
 
 @mcp.tool()
-async def mark_email_unread(ctx: Context, uid: str, mailbox: str = "INBOX") -> bool:
+async def mark_email_unread(ctx: Context, uid: str, mailbox: str) -> bool:
     """Markera ett e-post som oläst.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
+        uid: E-postets UID i mailbox
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
 
     Returns:
         True när markeringen är gjord. Kastar ett fel om UID:t inte finns i
@@ -38,7 +42,7 @@ async def mark_email_unread(ctx: Context, uid: str, mailbox: str = "INBOX") -> b
 
 @mcp.tool()
 async def move_email(
-    ctx: Context, uid: str, target_mailbox: str, mailbox: str = "INBOX"
+    ctx: Context, uid: str, target_mailbox: str, mailbox: str
 ) -> bool:
     """Flytta ett e-post till en annan mapp. Bara det angivna mejlet påverkas.
 
@@ -59,7 +63,10 @@ async def move_email(
     Args:
         uid: E-postets UID i källmappen
         target_mailbox: Målmapp att flytta till
-        mailbox: Källmapp (standard: INBOX)
+        mailbox: Källmappen, dvs. mappen som UID:t kom från (obligatorisk).
+            UID:n gäller per mapp: samma nummer i en annan mapp är ett annat
+            mejl. Använd fältet mailbox från svaret av list_emails,
+            search_emails eller get_email.
 
     Returns:
         True när flytten är klar. Misslyckas den kastas ett fel med Bridges förklaring.
@@ -70,7 +77,7 @@ async def move_email(
 
 @mcp.tool()
 async def delete_email(
-    ctx: Context, uid: str, mailbox: str = "INBOX", permanent: bool = False
+    ctx: Context, uid: str, mailbox: str, permanent: bool = False
 ) -> bool:
     """Ta bort ett e-post genom att flytta det till papperskorgen (Trash).
 
@@ -88,7 +95,9 @@ async def delete_email(
 
     Args:
         uid: E-postets UID i mailbox
-        mailbox: Mappnamn (standard: INBOX)
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails eller get_email.
         permanent: Radera permanent i stället för att flytta till Trash (standard: False)
 
     Returns:
