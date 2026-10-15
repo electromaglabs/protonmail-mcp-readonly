@@ -479,14 +479,39 @@ _ADDRESS_HEADERS = frozenset(
     {"from", "to", "cc", "bcc", "reply-to", "sender", "return-path", "delivered-to",
      "resent-from", "resent-to", "resent-cc", "resent-bcc", "resent-sender"}
 )
-# Identifierare som andra verktyg slår upp med (trådar, svar): lämnas orörda
+# Identifierare som andra verktyg slår upp med (trådar, svar): visas bara
+# som ASCII-<msg-id> (se clean_msg_ids)
 _IDENTIFIER_HEADERS = frozenset({"message-id", "in-reply-to", "references", "resent-message-id"})
+# msg-id: "<" … ">" utan blanktecken; ASCII och högst en rubrikrads längd
+_MSG_ID_TOKEN_RE = re.compile(r"<[^<>\s]+>")
+_MAX_MSG_ID_LEN = 998
+_MSG_ID_UNSAFE_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_msg_ids(value) -> Sanitized:
+    """Message-ID, In-Reply-To, References: bara de ASCII-<msg-id> som finns
+    i rubriken, åtskilda med ett blanksteg.
+
+    RFC 2047-ord avkodas aldrig (kodade ord är inte tillåtna i msg-id, RFC
+    2047 §5) — ett kodat ord står kvar som synlig ASCII. Id med 8-bitars
+    tecken, kontrolltecken eller orimlig längd, och all text mellan id:n,
+    tas inte med. removed räknar de osynliga tecken som rubriken hade
+    visat avkodad (taggtecken i ett kodat ord eller i rå UTF-8), så att de
+    flaggas i suspicious_content. Linjär tid.
+    """
+    if not value:
+        return Sanitized("")
+    text = _header_to_text(value)
+    ids = [
+        msg_id for msg_id in _MSG_ID_TOKEN_RE.findall(text)
+        if msg_id.isascii() and len(msg_id) <= _MAX_MSG_ID_LEN and not _MSG_ID_UNSAFE_RE.search(msg_id)
+    ]
+    return Sanitized(" ".join(ids), sanitize_text(decode_header_value(value)).removed)
 
 
 def _clean_header(lower: str, value: str) -> Sanitized:
-    """Rensa ett avkodat rubrikvärde efter vilken sorts rubrik det är."""
-    if lower in _IDENTIFIER_HEADERS:
-        return Sanitized(value)
+    """Rensa ett avkodat rubrikvärde efter vilken sorts rubrik det är.
+    Identifierare tas om hand av _headers_dict (före avkodningen)."""
     if lower in _ADDRESS_HEADERS:
         return sanitize_address_text(value)
     return sanitize_text(value)
@@ -508,7 +533,10 @@ def _headers_dict(msg: Message, counts: dict[str, int] | None = None) -> dict[st
         if lower in seen:
             continue
         seen.add(lower)
-        cleaned = _clean_header(lower, decode_header_value(value))
+        if lower in _IDENTIFIER_HEADERS:
+            cleaned = clean_msg_ids(value)
+        else:
+            cleaned = _clean_header(lower, decode_header_value(value))
         removed += cleaned.count
         headers[_CANONICAL_HEADERS.get(lower, key)] = cleaned.text
     if counts is not None and removed:
@@ -692,7 +720,7 @@ def parse_email(
 
     subject = clean.text("subject", decode_header_value(_raw_header(msg, "Subject")))
     result = {
-        "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
+        "message_id": clean.add("message_id", clean_msg_ids(_raw_header(msg, "Message-ID"))),
         "subject": subject,
         "from": from_,
         "to": formatted["to"],
@@ -706,8 +734,8 @@ def parse_email(
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": parts["attachments"],
-        "in_reply_to": decode_header_value(_raw_header(msg, "In-Reply-To")),
-        "references": decode_header_value(_raw_header(msg, "References")),
+        "in_reply_to": clean.add("in_reply_to", clean_msg_ids(_raw_header(msg, "In-Reply-To"))),
+        "references": clean.add("references", clean_msg_ids(_raw_header(msg, "References"))),
         "headers": _headers_dict(msg, clean.counts),
     }
     # Märkning för klienten: innehållet ovan är avsändarens, och vad som

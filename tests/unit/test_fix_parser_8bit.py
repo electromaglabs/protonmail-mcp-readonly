@@ -24,7 +24,9 @@ class TestRawUtf8Headers:
     def test_date_and_message_id_are_str(self):
         r = parse_email(RAW_UTF8)
         assert type(r["date"]) is str and r["date"] == "Mån, 1 Jan 2024"
-        assert type(r["message_id"]) is str and r["message_id"] == "<å@x>"
+        # Ändrat i efterfix-rensning (F1): bara ASCII-<msg-id> visas — ett id
+        # med 8-bitars tecken kan inte användas i trådar eller svar
+        assert type(r["message_id"]) is str and r["message_id"] == ""
 
     def test_headers_dict_is_decoded_text(self):
         r = parse_email(RAW_UTF8)

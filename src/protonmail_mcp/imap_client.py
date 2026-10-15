@@ -12,7 +12,13 @@ import aioimaplib
 
 from . import policy
 from .config import Settings
-from .email_parser import FieldCleaner, decode_header_value, iso_date, suspicious_reasons
+from .email_parser import (
+    FieldCleaner,
+    clean_msg_ids,
+    decode_header_value,
+    iso_date,
+    suspicious_reasons,
+)
 from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
 
 logger = logging.getLogger(__name__)
@@ -1094,15 +1100,19 @@ def _decode_header_bytes(raw: bytes) -> str:
 
 
 # Avsändarstyrd text i listningar: adressrader rensas utom adresserna själva,
-# fritext helt. Identifierare (Message-ID, References …) och Content-Type lämnas.
+# fritext helt. Identifierare visas bara som ASCII-<msg-id> (clean_msg_ids).
+# Övriga rubriker (Content-Type …) lämnas.
 _METADATA_ADDRESS_HEADERS = frozenset({"from", "to", "cc", "bcc", "reply-to", "sender"})
 _METADATA_TEXT_HEADERS = frozenset({"subject", "date"})
+_METADATA_ID_HEADERS = frozenset({"message-id", "in-reply-to", "references"})
 
 
 def _metadata_value(hdrs, name: str, clean: FieldCleaner | None = None) -> str:
     """Ett rubrikvärde för listningen, rensat efter sorts rubrik. Det som
     rensas (och osynliga tecken som lämnas i adresser) räknas i clean."""
     clean = clean if clean is not None else FieldCleaner()
+    if name in _METADATA_ID_HEADERS:
+        return clean.add(name, clean_msg_ids(hdrs.get(name)))
     value = decode_header_value(hdrs.get(name))
     if name in _METADATA_ADDRESS_HEADERS:
         return clean.address_text(name, value)
