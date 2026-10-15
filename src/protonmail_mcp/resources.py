@@ -107,14 +107,21 @@ def parse_email_uri(uri: str) -> tuple[str, str]:
 def canonical_uri(uri: str) -> str:
     """Den kanoniska formen av en resurs-URI (för jämförelser, t.ex. prenumerationer).
 
+    Mappnamnet normaliseras med samma regel som bevakaren (imap_idle.mailbox_key):
+    INBOX jämförs utan hänsyn till skiftläge (RFC 3501), så mailbox://inbox och
+    mailbox://INBOX är samma resurs. Övriga namn jämförs exakt.
+
     ValueError om URI:n inte är någon av serverns resurser.
     """
+    from .imap_idle import mailbox_key
+
     if uri == MAILBOXES_URI:
         return uri
     if uri.startswith(_MAILBOX_PREFIX):
-        return mailbox_uri(parse_mailbox_uri(uri))
+        return mailbox_uri(mailbox_key(parse_mailbox_uri(uri)))
     if uri.startswith(_EMAIL_PREFIX):
-        return email_uri(*parse_email_uri(uri))
+        mailbox, uid = parse_email_uri(uri)
+        return email_uri(mailbox_key(mailbox), uid)
     raise ValueError(
         f"Okänd resurs: {uri}. Servern har {MAILBOXES_URI}, {MAILBOX_TEMPLATE} och {EMAIL_TEMPLATE}."
     )
