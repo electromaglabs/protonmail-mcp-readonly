@@ -8,15 +8,20 @@ utan att användaren bekräftat det.
 
 Argumenten valideras med samma typer som verktygen (Mailbox, Uid) och samma
 validerare som IMAP-klienten, så att en prompt inte kan bära med sig
-kontrolltecken eller ett UID som inte är ett heltal. Mappnamnet citeras i
-texten (JSON-sträng), så att det inte kan avsluta instruktionen.
+kontrolltecken eller ett UID som inte är ett heltal. Utöver IMAP-klientens
+kontroll (C0 och DEL) vägras här även C1-kontrolltecken (U+0080–U+009F, bl.a.
+NEL U+0085) och Unicode-radbrytningarna U+2028 och U+2029: json.dumps med
+ensure_ascii=False escapar dem inte, och i klienten blir de en ny rad i
+instruktionen. Mappnamnet och tonen citeras i texten (JSON-sträng), så att
+de inte kan avsluta instruktionen.
 """
 import json
+import re
 from typing import Annotated, Any
 
 from pydantic import Field
 
-from .imap_client import _CONTROL_CHAR_RE, _validate_mailbox, _validate_uid
+from .imap_client import _validate_mailbox, _validate_uid
 from .tools._types import Mailbox
 from .tools._uids import Uid
 
@@ -37,12 +42,25 @@ Regler för verktygen (gäller hela uppgiften):
 
 _MAX_TONE_CHARS = 40
 
+# Tecken som bryter raden eller är kontrolltecken i en prompttext: C0, DEL, C1
+# och Unicode-radbrytningarna (LINE/PARAGRAPH SEPARATOR). Gäller bara promptarna;
+# IMAP-valideringen av mappnamn påverkas inte.
+_PROMPT_UNSAFE_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _check_prompt_text(value: str, field: str) -> str:
+    """value oförändrat, eller ValueError om det kan bryta raden i prompttexten."""
+    if _PROMPT_UNSAFE_RE.search(value):
+        raise ValueError(f"{field} får inte innehålla radbrytningar eller andra kontrolltecken")
+    return value
+
 _MailboxArg = Annotated[Mailbox, Field(description="Mappnamn, t.ex. INBOX eller Folders/Kunder")]
 
 
 def _quoted(mailbox: str) -> str:
     """Mappnamnet validerat och citerat som JSON-sträng (å, ä, ö som de är)."""
-    return json.dumps(_validate_mailbox(mailbox), ensure_ascii=False)
+    name = _check_prompt_text(_validate_mailbox(mailbox), "mailbox")
+    return json.dumps(name, ensure_ascii=False)
 
 
 def sammanfatta_olasta(
@@ -95,9 +113,7 @@ def svara_pa_mejl(
 ) -> str:
     """Läs ett mejl och dess tråd och skriv ett svarsutkast (skickas inte)."""
     safe_uid = _validate_uid(uid)
-    if _CONTROL_CHAR_RE.search(ton):
-        raise ValueError("ton får inte innehålla radbrytningar eller andra kontrolltecken")
-    tone = json.dumps(ton, ensure_ascii=False)
+    tone = json.dumps(_check_prompt_text(ton, "ton"), ensure_ascii=False)
     return f"""\
 Skriv ett svar på mejlet med UID {safe_uid} i mappen {_quoted(mailbox)}, med tonen {tone}.
 
