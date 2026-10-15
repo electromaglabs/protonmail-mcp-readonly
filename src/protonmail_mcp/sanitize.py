@@ -237,6 +237,21 @@ def _is_address(token: str, followed_by: str) -> bool:
     return "@" in token and len(token) <= _MAX_ADDRESS_LEN + 2
 
 
+def sanitize_address(addr: str | None) -> Sanitized:
+    """En enskild adress (local@domain): bara taggtecken tas bort.
+
+    Övriga tecken som sanitize_text skulle ta bort lämnas, eftersom en
+    ändrad adress kunde peka på en annan mottagare; de räknas i
+    kept_in_address så att anroparen kan varna.
+    """
+    if not addr:
+        return Sanitized("")
+    if addr.isascii() and not _ASCII_UNSAFE_RE.search(addr):
+        return Sanitized(addr)
+    addr, tags = _TAG_RE.subn("", addr)
+    return Sanitized(addr, {"tag": tags} if tags else {}, sanitize_text(addr).count)
+
+
 def sanitize_address_text(text: str | None) -> Sanitized:
     """Rensa en adressrad ("Anna <anna@x.se>, b@y.se") utan att röra adresserna.
 
@@ -269,11 +284,10 @@ def sanitize_address_text(text: str | None) -> Sanitized:
         if not _is_address(token, text[m.end():m.end() + 1]):
             continue
         flush(m.start())
-        token, tags = _TAG_RE.subn("", token)
-        if tags:
-            removed["tag"] = removed.get("tag", 0) + tags
-        kept += sanitize_text(token).count
-        out.append(token)
+        result = sanitize_address(token)
+        _merge(removed, result.removed)
+        kept += result.kept_in_address
+        out.append(result.text)
         pending_start = m.end()
     flush(len(text))
     return Sanitized("".join(out), removed, kept)

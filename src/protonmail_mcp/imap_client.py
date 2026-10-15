@@ -13,6 +13,7 @@ import aioimaplib
 from . import policy
 from .config import Settings
 from .email_parser import decode_header_value
+from .sanitize import clean_text, sanitize_address_text
 from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
 
 logger = logging.getLogger(__name__)
@@ -1093,6 +1094,21 @@ def _decode_header_bytes(raw: bytes) -> str:
         return raw.decode("latin-1")
 
 
+# Avsändarstyrd text i listningar: adressrader rensas utom adresserna själva,
+# fritext helt. Identifierare (Message-ID, References …) och Content-Type lämnas.
+_METADATA_ADDRESS_HEADERS = frozenset({"from", "to", "cc", "bcc", "reply-to", "sender"})
+_METADATA_TEXT_HEADERS = frozenset({"subject", "date"})
+
+
+def _metadata_value(hdrs, name: str) -> str:
+    value = decode_header_value(hdrs.get(name))
+    if name in _METADATA_ADDRESS_HEADERS:
+        return sanitize_address_text(value).text
+    if name in _METADATA_TEXT_HEADERS:
+        return clean_text(value)
+    return value
+
+
 def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> list[dict[str, Any]]:
     """Parsar FETCH-svar med UID, FLAGS och header-fält.
 
@@ -1144,14 +1160,14 @@ def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> l
         meta = {
             "uid": uid,
             "flags": flags_m.group(1).split() if flags_m else [],
-            "subject": decode_header_value(hdrs.get("subject")),
-            "from": decode_header_value(hdrs.get("from")),
-            "to": decode_header_value(hdrs.get("to")),
-            "date": decode_header_value(hdrs.get("date")),
-            "message_id": decode_header_value(hdrs.get("message-id")),
+            "subject": _metadata_value(hdrs, "subject"),
+            "from": _metadata_value(hdrs, "from"),
+            "to": _metadata_value(hdrs, "to"),
+            "date": _metadata_value(hdrs, "date"),
+            "message_id": _metadata_value(hdrs, "message-id"),
         }
         for name in extra_headers:
-            meta[name.replace("-", "_")] = decode_header_value(hdrs.get(name))
+            meta[name.replace("-", "_")] = _metadata_value(hdrs, name)
         messages.append(meta)
     return messages
 

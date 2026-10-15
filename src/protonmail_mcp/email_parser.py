@@ -9,6 +9,7 @@ from email.message import Message
 from typing import Any
 
 from .html_text import html_to_text
+from .sanitize import Sanitized, clean_text, sanitize_address, sanitize_address_text, sanitize_text
 
 # Etiketter som är vanliga i post men saknas i Python eller oftast är fel
 _CHARSET_ALIASES = {
@@ -257,10 +258,17 @@ _MAX_MIME_DEPTH = 100
 
 
 def _filename(part: Message) -> str:
+    """Bilagans filnamn, avkodat men orensat (se _clean_filename)."""
     try:
         return decode_header_value(part.get_filename())
     except Exception:
         return ""
+
+
+def _clean_filename(filename: str) -> Sanitized:
+    """Filnamnet styrs av avsändaren: osynliga tecken och bidi-styrtecken
+    (faktura<RLO>fdp.exe som visas som "fakturaexe.pdf") tas bort."""
+    return sanitize_text(filename)
 
 
 def _disposition(part: Message) -> str | None:
@@ -355,12 +363,18 @@ def _collect(part: Message, out: dict[str, list], depth: int = 0, section: str =
 
 
 def _parts(msg: Message) -> dict[str, list]:
+    """Brödtextdelar och bilagor. out["filename_removed"] är antal tecken
+    som rensats ur bilagornas filnamn (ett heltal i en lista)."""
     out: dict[str, list] = {"plain": [], "html": [], "attachments": []}
     _collect(msg, out)
-    out["attachments"] = [
-        {"index": index, "part": section, **_attachment(part, filename)}
-        for index, (part, filename, section) in enumerate(out["attachments"])
-    ]
+    attachments = []
+    removed = 0
+    for index, (part, filename, section) in enumerate(out["attachments"]):
+        cleaned = _clean_filename(filename)
+        removed += cleaned.count
+        attachments.append({"index": index, "part": section, **_attachment(part, cleaned.text)})
+    out["attachments"] = attachments
+    out["filename_removed"] = [removed]
     return out
 
 
@@ -391,7 +405,7 @@ def get_attachment_part(raw: bytes, index: int) -> dict[str, Any]:
     return {
         "index": index,
         "part": section,
-        "filename": filename,
+        "filename": _clean_filename(filename).text,
         "content_type": part.get_content_type(),
         "size": len(data),
         "charset": charset,
@@ -451,19 +465,45 @@ _CANONICAL_HEADERS = {
 }
 
 
-def _headers_dict(msg: Message) -> dict[str, str]:
+# Rubriker med adresser: bara visningsnamnen rensas (sanitize_address_text)
+_ADDRESS_HEADERS = frozenset(
+    {"from", "to", "cc", "bcc", "reply-to", "sender", "return-path", "delivered-to",
+     "resent-from", "resent-to", "resent-cc", "resent-bcc", "resent-sender"}
+)
+# Identifierare som andra verktyg slår upp med (trådar, svar): lämnas orörda
+_IDENTIFIER_HEADERS = frozenset({"message-id", "in-reply-to", "references", "resent-message-id"})
+
+
+def _clean_header(lower: str, value: str) -> Sanitized:
+    """Rensa ett avkodat rubrikvärde efter vilken sorts rubrik det är."""
+    if lower in _IDENTIFIER_HEADERS:
+        return Sanitized(value)
+    if lower in _ADDRESS_HEADERS:
+        return sanitize_address_text(value)
+    return sanitize_text(value)
+
+
+def _headers_dict(msg: Message, counts: dict[str, int] | None = None) -> dict[str, str]:
     """Rubriker som str. Nycklar är skiftlägesokänsliga i e-post (RFC 5322):
     välkända rubriker får vedertagen stavning, övriga stavningen från första
     förekomsten, och vid dubbletter gäller första förekomsten — samma värde
-    som message_id/references m.fl. bygger på."""
+    som message_id/references m.fl. bygger på.
+
+    Värdena rensas från osynliga tecken (se _clean_header); antal borttagna
+    tecken läggs i counts["headers"]."""
     headers: dict[str, str] = {}
     seen: set[str] = set()
+    removed = 0
     for key, value in msg.raw_items():
         lower = key.lower()
         if lower in seen:
             continue
         seen.add(lower)
-        headers[_CANONICAL_HEADERS.get(lower, key)] = decode_header_value(value)
+        cleaned = _clean_header(lower, decode_header_value(value))
+        removed += cleaned.count
+        headers[_CANONICAL_HEADERS.get(lower, key)] = cleaned.text
+    if counts is not None and removed:
+        counts["headers"] = counts.get("headers", 0) + removed
     return headers
 
 
@@ -474,6 +514,32 @@ def _raw_header(msg: Message, name: str) -> str | None:
         if key.lower() == wanted:
             return value
     return None
+
+
+class _Cleaner:
+    """Rensar avsändarstyrda fält och räknar borttagna tecken per fält."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.categories: dict[str, int] = {}
+        self.kept_in_address = 0
+
+    def add(self, key: str, result: Sanitized) -> str:
+        if result.count:
+            self.counts[key] = self.counts.get(key, 0) + result.count
+            for category, n in result.removed.items():
+                self.categories[category] = self.categories.get(category, 0) + n
+        self.kept_in_address += result.kept_in_address
+        return result.text
+
+    def text(self, key: str, value: str) -> str:
+        return self.add(key, sanitize_text(value))
+
+    def address_text(self, key: str, value: str) -> str:
+        return self.add(key, sanitize_address_text(value))
+
+    def pair(self, key: str, name: str, addr: str) -> tuple[str, str]:
+        return self.text(key, name), self.add(key, sanitize_address(addr))
 
 
 def parse_email(
@@ -489,9 +555,15 @@ def parse_email(
         raise ValueError(f"max_length måste vara 0 eller större (eller None), fick {max_length}")
     msg = email.message_from_bytes(raw)
     parts = _parts(msg)
+    clean = _Cleaner()
+    if parts["filename_removed"][0]:
+        clean.counts["attachments"] = parts["filename_removed"][0]
 
-    body_plain = "\n".join(parts["plain"])
-    body_html = "\n".join(parts["html"])
+    # Hela texten rensas före formatering och trunkering. HTML-texten rensas
+    # efter html_to_text, eftersom entiteter (&#8203; &zwnj;) kan avkodas
+    # till osynliga tecken.
+    body_plain = clean.text("body_plain", "\n".join(parts["plain"]))
+    body_html = clean.text("body_html", "\n".join(parts["html"]))
 
     if body_format == "full":
         # Returnera råa body utan trunkering
@@ -499,11 +571,11 @@ def parse_email(
     elif body_format == "text":
         # Saknas text (eller är den bara blanktecken, vanligt i utskick): använd HTML
         if not body_plain.strip() and body_html:
-            body_plain = _strip_html(body_html)
+            body_plain = clean.text("body_plain", _strip_html(body_html))
         body_plain = _truncate(body_plain, max_length)
     elif body_format == "stripped":
         if not body_plain.strip() and body_html:
-            body_plain = _strip_html(body_html)
+            body_plain = clean.text("body_plain", _strip_html(body_html))
         body_plain = _strip_quotes_and_signature(body_plain)
         body_plain = _truncate(body_plain, max_length)
 
@@ -513,8 +585,10 @@ def parse_email(
         # finns i "full" eller med max_length=None.
         body_html = _truncate(body_html, max_length)
 
+    # Visningsnamnen rensas; adresserna lämnas (utom taggtecken), så att
+    # ett svar aldrig går till en annan adress än den som står i mejlet
     addresses = {
-        key: parse_addresses(_raw_header(msg, name))
+        key: [clean.pair(key, n, a) for n, a in parse_addresses(_raw_header(msg, name))]
         for key, name in (
             ("from", "From"), ("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"), ("reply_to", "Reply-To")
         )
@@ -530,11 +604,11 @@ def parse_email(
         # i sig kan tolkas som adresser (kodat "a@x.se, evil@y.se")
         decoded = decode_header_value(_raw_header(msg, "From"))
         if not any("@" in a for _, a in email.utils.getaddresses([decoded])):
-            from_ = decoded
+            from_ = clean.address_text("from", decoded)
 
     return {
         "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
-        "subject": decode_header_value(_raw_header(msg, "Subject")),
+        "subject": clean.text("subject", decode_header_value(_raw_header(msg, "Subject"))),
         "from": from_,
         "to": formatted["to"],
         "cc": formatted["cc"],
@@ -542,13 +616,13 @@ def parse_email(
         "reply_to": formatted["reply_to"],
         # (namn, adress)-par, för anropare som vill ha adressen utan att parsa om
         "addresses": {key: [[n, a] for n, a in pairs] for key, pairs in addresses.items()},
-        "date": decode_header_value(_raw_header(msg, "Date")),
+        "date": clean_text(decode_header_value(_raw_header(msg, "Date"))),
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": parts["attachments"],
         "in_reply_to": decode_header_value(_raw_header(msg, "In-Reply-To")),
         "references": decode_header_value(_raw_header(msg, "References")),
-        "headers": _headers_dict(msg),
+        "headers": _headers_dict(msg, clean.counts),
     }
 
 
