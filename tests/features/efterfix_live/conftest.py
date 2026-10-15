@@ -16,8 +16,8 @@ from tests.efterfix_live_bridge import make_client
 
 @pytest.fixture
 def bridge(monkeypatch, mock_ctx):
-    monkeypatch.setattr(imap_client, "_GONE_TIMEOUT", 1.0, raising=False)
-    monkeypatch.setattr(imap_client, "_GONE_INTERVAL", 0.0, raising=False)
+    monkeypatch.setattr(imap_client, "_GONE_TIMEOUT", 0.2)
+    monkeypatch.setattr(imap_client, "_GONE_INTERVAL", 0.01)
     imap, fake = make_client(monkeypatch)
     mock_ctx.request_context.lifespan_context.imap = imap
     return fake
@@ -57,7 +57,7 @@ def no_then_vanish(bridge, mailbox):
 
 @given(parsers.parse('att Bridge svarar NO med Code=2501 på permanent radering i "{mailbox}" och mejlen blir kvar'))
 def no_and_stays(bridge, mailbox):
-    bridge.no_then_vanish[mailbox] = [10_000, 1]
+    bridge.no_then_vanish[mailbox] = [10**9, 1]
 
 
 @then("ska verktyget svara att det lyckades")

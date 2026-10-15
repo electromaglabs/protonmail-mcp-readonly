@@ -123,6 +123,10 @@ async def delete_email(
     permanent=True: raderar mejlet permanent. Går bara när mailbox är Trash
     (eller Drafts för utkast) och kan inte ångras. Har mejlet kvar en etikett
     tar Bridge bara bort det ur Trash/Drafts. Bara det angivna mejlet påverkas.
+    Bridge kan neka raderingen ("Message does not exist", Code=2501) men ändå
+    genomföra den när Bridge synkar med Proton; då väntar verktyget upp till
+    45 s och räknar mejl som försvunnit som raderade. Ett utkast som då blivit
+    kvar i All Mail utan mapp raderas via Trash.
 
     Args:
         uid: UID:t som sträng, eller en lista med upp till 100 UID:n ur

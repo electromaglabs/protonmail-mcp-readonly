@@ -820,16 +820,16 @@ class IMAPClient:
                 f"Permanent radering görs bara i Trash eller Drafts, inte i {mailbox}. "
                 "Ta bort mejlet utan permanent först, så hamnar det i Trash."
             )
+        from . import imap_bulk  # imap_bulk bygger på den här modulen
+
         await self._ensure_connected()
         await self._select(mailbox)
         await self._require_uid(mailbox, safe_uid)
-        resp = await self._uid("store", safe_uid, "+FLAGS", r"(\Deleted)")
-        _require_ok(resp, f"Borttagningsmarkeringen av UID {safe_uid} i {mailbox}")
-        resp = await self._uid("expunge", safe_uid)
-        if resp.result != "OK":
-            # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlet
-            await self._uid("store", safe_uid, "-FLAGS", r"(\Deleted)")
-        _require_ok(resp, f"Den permanenta raderingen av UID {safe_uid} i {mailbox}")
+        _, failed = await imap_bulk.permanent_delete_found(
+            self, mailbox, [safe_uid], f"Den permanenta raderingen av UID {safe_uid} i {mailbox}"
+        )
+        if failed:
+            raise ValueError(failed[0]["error"])
         return True
 
     async def _require_uid(self, mailbox: str, uid: str) -> None:
@@ -1211,6 +1211,12 @@ def _is_label_view(name: str) -> bool:
 
 # Mappar där Bridge raderar permanent när ett mejl som redan finns där läggs dit igen
 _READD_DELETES = ("trash", "drafts")
+# Nekar Bridge en permanent radering med Code=2501 kan mejlet ändå försvinna när
+# Bridge hämtar nästa händelse från Proton (EventPeriod 20 s + jitter 20 s i
+# Bridges internal/user/user.go). Så länge väntar raderingen, med en kontroll
+# per intervall.
+_GONE_TIMEOUT = 45.0
+_GONE_INTERVAL = 3.0
 
 
 def _check_move(source: str, target: str) -> None:

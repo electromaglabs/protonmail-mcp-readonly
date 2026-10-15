@@ -5,6 +5,10 @@ med UID:na i den ordning de angavs. Formatfel (ogiltigt UID, för många UID:n)
 ger ValueError för hela anropet innan Bridge kontaktas; fel som gäller ett
 enskilt mejl (finns inte, Bridge nekar) hamnar i "failed".
 """
+import asyncio
+import logging
+import re
+import time
 from typing import Any
 
 from . import policy
@@ -22,6 +26,8 @@ from .imap_client import (
     _serialized,
     _validate_uid,
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_UIDS = 100
 
@@ -209,19 +215,161 @@ async def delete(imap: IMAPClient, mailbox: str, uids: list[str], permanent: boo
     found, failed = await existing_uids(imap, mailbox, uids)
     ok: list[str] = []
     if found:
-        targets = uid_set(found)
-        resp = await imap._uid("store", targets, "+FLAGS", r"(\Deleted)")
-        if resp.result != "OK":
-            failed += fail_all(found, _failure(f"Borttagningsmarkeringen i {mailbox}", resp))
-            return result(uids, ok, failed)
-        resp = await imap._uid("expunge", targets)
-        if resp.result == "OK":
-            ok = found
-        else:
-            # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlen
-            await imap._uid("store", targets, "-FLAGS", r"(\Deleted)")
-            ok, more = await _split_after_failure(
-                imap, mailbox, found, _failure(f"Den permanenta raderingen i {mailbox}", resp)
-            )
-            failed += more
+        ok, more = await permanent_delete_found(imap, mailbox, found, f"Den permanenta raderingen i {mailbox}")
+        failed += more
     return result(uids, ok, failed)
+
+
+# Bridges svar när Proton-API:t säger "Message does not exist" (go-proton-api,
+# UnlabelMessages). Live kom det för en hel omgång permanenta raderingar i
+# Trash, och mejlen försvann ändå ur Trash vid Bridges nästa händelsehämtning.
+_DOES_NOT_EXIST = "Code=2501"
+_FLAGS_RE = re.compile(r"FLAGS\s*\(([^)]*)\)", re.IGNORECASE)
+ALL_MAIL = "All Mail"
+TRASH = "Trash"
+
+
+async def permanent_delete_found(
+    imap: IMAPClient, mailbox: str, found: list[str], what: str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """UID STORE \\Deleted + UID EXPUNGE på found, som finns i den valda mappen (Trash/Drafts).
+
+    Returnerar (ok, failed). Nekar Bridge EXPUNGE tas \\Deleted bort igen och
+    det kontrolleras vilka UID:n som ändå är borta. Är felet Code=2501
+    ("Message does not exist") väntas det, högst imap_client._GONE_TIMEOUT
+    sekunder: Bridge kan ha gjort ändringen i Proton och visar den först efter
+    nästa händelsehämtning (var 20:e–40:e sekund). Utkast som då försvunnit ur
+    mappen men blivit kvar i All Mail utan mapp raderas via Trash
+    (_delete_orphaned_drafts). Aldrig EXPUNGE utan UID.
+    """
+    targets = uid_set(found)
+    resp = await imap._uid("store", targets, "+FLAGS", r"(\Deleted)")
+    if resp.result != "OK":
+        return [], fail_all(found, _failure(f"Borttagningsmarkeringen i {mailbox}", resp))
+    resp = await imap._uid("expunge", targets)
+    if resp.result == "OK":
+        return found, []
+    # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlen
+    await imap._uid("store", targets, "-FLAGS", r"(\Deleted)")
+    error = _failure(what, resp)
+    ok, failed = await _split_after_failure(imap, mailbox, found, error)
+    if not failed or _DOES_NOT_EXIST not in _response_text(resp):
+        return ok, failed
+    left = [f["uid"] for f in failed]
+    drafts = await _draft_identities(imap, mailbox, left)
+    gone, failed = await _wait_until_gone(imap, mailbox, left, error)
+    ok += gone
+    vanished = {uid: drafts[uid] for uid in gone if uid in drafts}
+    if vanished:
+        orphan_failed = await _delete_orphaned_drafts(imap, vanished)
+        bad = {f["uid"] for f in orphan_failed}
+        ok = [u for u in ok if u not in bad]
+        failed += orphan_failed
+    return ok, failed
+
+
+async def _draft_identities(imap: IMAPClient, mailbox: str, uids: list[str]) -> dict[str, dict]:
+    """Identitet (Message-ID, tid, storlek) för de UID:n i vald mapp som är utkast.
+
+    Bästa försök: går det inte att avgöra blir svaret tomt, och då görs ingen
+    återställning av föräldralösa utkast.
+    """
+    from .imap_labels import _fetch_identities_by_uid  # imap_labels bygger på den här modulen
+
+    try:
+        resp = await imap._uid("fetch", uid_set(uids), "(UID FLAGS)")
+        if resp.result != "OK":
+            return {}
+        drafts = []
+        for line in resp.lines:
+            text = _decode(line)
+            uid_m, flags_m = _UID_RE.search(text), _FLAGS_RE.search(text)
+            if uid_m and flags_m and "\\draft" in flags_m.group(1).casefold().split():
+                drafts.append(uid_m.group(1))
+        if not drafts:
+            return {}
+        identities = await _fetch_identities_by_uid(imap, mailbox, drafts)
+    except ValueError:
+        return {}
+    return {uid: info for uid, info in identities.items() if uid in drafts and info["message_id"]}
+
+
+async def _wait_until_gone(
+    imap: IMAPClient, mailbox: str, uids: list[str], error: str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Väntar tills UID:na inte längre finns i mailbox, högst _GONE_TIMEOUT sekunder.
+
+    Mappen väljs om inför varje kontroll, så att Bridges köade ändringar syns.
+    Returnerar (borta, failed med error för de som finns kvar).
+    """
+    from . import imap_client  # läses vid anropet, så att testerna kan korta tiderna
+
+    timeout = imap_client._GONE_TIMEOUT
+    deadline = time.monotonic() + timeout
+    left = uids
+    while True:
+        await asyncio.sleep(imap_client._GONE_INTERVAL)
+        try:
+            await imap._select(mailbox)
+            left, _ = await existing_uids(imap, mailbox, left)
+        except ValueError as exc:
+            return [], fail_all(uids, f"{error} (kunde inte kontrollera vilka som genomfördes: {exc})")
+        if not left or time.monotonic() >= deadline:
+            break
+    left_set = set(left)
+    note = f" Mejlet finns kvar i {mailbox} efter {timeout:g} s väntan på att Bridge skulle ta bort det."
+    return [u for u in uids if u not in left_set], fail_all(left, error + note)
+
+
+async def _delete_orphaned_drafts(imap: IMAPClient, drafts: dict[str, dict]) -> list[dict[str, str]]:
+    """Raderar utkast som försvann ur Trash/Drafts men blev kvar i All Mail utan mapp.
+
+    Live: när Bridge svarat NO (Code=2501) på permanent radering av ett utkast
+    i Trash tog Proton bort Trash från utkastet men raderade det inte, så det
+    låg kvar i All Mail, osynligt i Drafts och Trash. Bridge raderar bara när
+    EXPUNGE lyckas (connector.go: RemoveMessagesFromMailbox → DeleteMessage).
+    Utkastet läggs därför i Trash igen med UID COPY från All Mail och raderas
+    där med UID STORE \\Deleted + UID EXPUNGE på just det UID:t. Returnerar
+    failed för utkast som inte gick att radera.
+    """
+    from .imap_labels import _find_in_label  # imap_labels bygger på den här modulen
+
+    try:
+        await imap._select(ALL_MAIL)
+        orphans, _ = await _find_in_label(imap, ALL_MAIL, drafts)
+    except ValueError as exc:
+        logger.warning("Kunde inte leta efter föräldralösa utkast i All Mail: %s", exc)
+        return []
+    failed = []
+    for src_uid, all_mail_uid in orphans.items():
+        problem = await _delete_orphan(imap, src_uid, all_mail_uid, drafts[src_uid])
+        if problem:
+            failed.append({"uid": src_uid, "error": (
+                f"Utkastet med UID {src_uid} försvann ur mappen men Proton raderade det inte: "
+                f"det låg kvar i All Mail utan mapp (UID {all_mail_uid} där). Ett nytt försök "
+                f"via Trash misslyckades: {problem}. Utkastet kan ligga kvar i Trash eller "
+                "bara i All Mail."
+            )})
+    return failed
+
+
+async def _delete_orphan(imap: IMAPClient, src_uid: str, all_mail_uid: str, identity: dict) -> str | None:
+    """COPY från All Mail till Trash och permanent radering där. None om det gick."""
+    from .imap_labels import _find_in_label
+
+    resp = await imap._uid("copy", uid_set([all_mail_uid]), _quote_mailbox(TRASH))
+    if resp.result != "OK":
+        return _failure(f"Kopieringen till {TRASH}", resp)
+    await imap._select(TRASH)
+    found, errors = await _find_in_label(imap, TRASH, {src_uid: identity})
+    if src_uid not in found:
+        return f"utkastet hittades inte i {TRASH} efter kopieringen"
+    trash_uid = uid_set([found[src_uid]])
+    resp = await imap._uid("store", trash_uid, "+FLAGS", r"(\Deleted)")
+    if resp.result != "OK":
+        return _failure(f"Borttagningsmarkeringen i {TRASH}", resp)
+    resp = await imap._uid("expunge", trash_uid)
+    if resp.result != "OK":
+        await imap._uid("store", trash_uid, "-FLAGS", r"(\Deleted)")
+        return _failure(f"Den permanenta raderingen i {TRASH}", resp)
+    return None

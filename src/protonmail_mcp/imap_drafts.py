@@ -170,6 +170,22 @@ async def _has_uid(imap: IMAPClient, uid: str) -> bool:
     )
 
 
+async def _expunge_draft(imap: IMAPClient, uid: str) -> None:
+    """UID STORE \\Deleted + UID EXPUNGE på utkastet i Drafts (som är vald).
+
+    Väntar inte som delete_email gör när Bridge nekar med Code=2501: efter
+    ett skick har Bridge ofta redan tagit bort utkastet i Proton, och
+    remove_sent_draft kontrollerar själv om det finns kvar.
+    """
+    resp = await imap._uid("store", uid, "+FLAGS", r"(\Deleted)")
+    _require_ok(resp, f"Borttagningsmarkeringen av UID {uid} i {DRAFTS}")
+    resp = await imap._uid("expunge", uid)
+    if resp.result != "OK":
+        # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta det
+        await imap._uid("store", uid, "-FLAGS", r"(\Deleted)")
+    _require_ok(resp, f"Den permanenta raderingen av UID {uid} i {DRAFTS}")
+
+
 @_serialized
 @policy.write_operation("remove_sent_draft", mailbox=DRAFTS)
 async def remove_sent_draft(imap: IMAPClient, uid: str) -> bool:
@@ -192,7 +208,7 @@ async def remove_sent_draft(imap: IMAPClient, uid: str) -> bool:
     if not await _has_uid(imap, safe_uid):
         return False
     try:
-        await IMAPClient.delete_message.__wrapped__(imap, DRAFTS, safe_uid, permanent=True)
+        await _expunge_draft(imap, safe_uid)
     except ValueError:
         await imap._select(DRAFTS)
         if not await _has_uid(imap, safe_uid):
