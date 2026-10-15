@@ -197,7 +197,7 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   `uv run pytest -m integration` kör mot riktiga Bridge och bara läsande (kräver `.env`); SMTP-testet skickar ett
   riktigt mejl till den egna adressen och körs bara med `PROTONMAIL_ALLOW_SEND=1`. Gör inga skrivoperationer mot
   riktiga Bridge vid utveckling — läs-endast-kontroller (LIST/STATUS/SELECT/SEARCH/FETCH BODY.PEEK) går bra.
-- **Python 3.10 måste fungera** (lägsta version). CI kör enhets- och BDD-testerna på 3.10, 3.11 och 3.12; kör
+- **Python 3.10 måste fungera** (lägsta version). CI kör enhets- och BDD-testerna på 3.10–3.14; kör
   lokalt både standardversionen och
   `uv run --python 3.10 --isolated --with pytest --with pytest-asyncio --with pytest-bdd --with pytest-mock --with-editable . pytest tests/unit tests/features -q`.
 
