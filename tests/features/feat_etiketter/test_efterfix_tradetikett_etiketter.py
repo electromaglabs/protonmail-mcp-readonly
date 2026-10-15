@@ -55,3 +55,19 @@ def add_label_single(mock_ctx, bridge, label, uid, mailbox):
 @then(parsers.parse('ska felet inte nämna "{text}"'))
 def error_does_not_mention(bridge, text):
     assert bridge.errors and all(text not in e for e in bridge.errors), bridge.errors
+
+
+def _doc(tool: str) -> str:
+    from protonmail_mcp.tools import labels
+
+    return " ".join(getattr(labels, tool).__doc__.split())
+
+
+@then(parsers.parse('ska beskrivningen av "{tool}" nämna "{text}"'))
+def doc_mentions(tool, text):
+    assert text in _doc(tool)
+
+
+@then(parsers.parse('ska beskrivningen av "{tool}" inte nämna "{text}"'))
+def doc_does_not_mention(tool, text):
+    assert text not in _doc(tool)

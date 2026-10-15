@@ -56,3 +56,9 @@ Feature: remove_label och add_label ger rätt svar per UID i svåra fall
     Then ska verktyget ge ett fel som nämner "Labels/Faktura"
     And ska felet inte nämna "create_folder"
     And ska Bridge inte ha fått något skrivkommando
+
+  Scenario: Bara remove_label säger att UID:n som saknar etiketten hamnar i failed
+    Then ska beskrivningen av "remove_label" nämna "som saknar etiketten"
+    And ska beskrivningen av "add_label" inte nämna "som saknar etiketten"
+    And ska beskrivningen av "flag_email" inte nämna "som saknar etiketten"
+    And ska beskrivningen av "unflag_email" inte nämna "som saknar etiketten"

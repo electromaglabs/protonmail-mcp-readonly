@@ -48,9 +48,9 @@ async def add_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -
         True när etiketten är tillagd.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
-        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
-        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
-        än 100 avvisar hela anropet innan något ändras.
+        finns i mailbox eller som Bridge nekar hamnar i failed medan de
+        andra genomförs. Ett ogiltigt UID (inte heltal) eller fler än 100
+        avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
     if isinstance(uid, list):
@@ -128,9 +128,9 @@ async def flag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bulk
         True när mejlet är stjärnmärkt.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
-        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
-        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
-        än 100 avvisar hela anropet innan något ändras.
+        finns i mailbox eller som Bridge nekar hamnar i failed medan de
+        andra genomförs. Ett ogiltigt UID (inte heltal) eller fler än 100
+        avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
     if isinstance(uid, list):
@@ -160,9 +160,9 @@ async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bu
         True när stjärnmärkningen är borttagen.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
-        finns, som saknar etiketten eller som Bridge nekar hamnar i failed
-        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
-        än 100 avvisar hela anropet innan något ändras.
+        finns i mailbox eller som Bridge nekar hamnar i failed medan de
+        andra genomförs. Ett ogiltigt UID (inte heltal) eller fler än 100
+        avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
     if isinstance(uid, list):

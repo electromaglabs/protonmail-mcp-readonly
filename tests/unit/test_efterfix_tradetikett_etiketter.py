@@ -202,3 +202,21 @@ class TestLabelCase:
         bridge.put("INBOX", "42", "<a@x>")
         with pytest.raises(ValueError, match="create_folder"):
             await imap_labels.add_label(imap, "INBOX", ["42"], "faktura")
+
+
+class TestReturnsDocs:
+    @staticmethod
+    def _returns(tool: str) -> str:
+        from protonmail_mcp.tools import labels
+
+        doc = getattr(labels, tool).__doc__
+        return " ".join(doc[doc.index("Returns:"):].split())
+
+    @pytest.mark.parametrize("tool", ["add_label", "flag_email", "unflag_email"])
+    def test_no_copied_text_about_missing_label(self, tool):
+        returns = self._returns(tool)
+        assert "saknar etiketten" not in returns
+        assert "UID:n som inte finns" in returns and "Bridge nekar" in returns
+
+    def test_remove_label_keeps_it(self):
+        assert "som saknar etiketten" in self._returns("remove_label")
