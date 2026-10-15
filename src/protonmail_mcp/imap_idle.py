@@ -14,7 +14,8 @@ Per mapp, i en bakgrundsuppgift:
 3. Efter varje IDLE-omgång (EXISTS/RECENT eller förnyelse): DONE, UID SEARCH
    efter UID:n över vattenmärket och hämta deras metadata med BODY.PEEK
    (inget markeras som läst), med samma parser som list_emails. Lägg dem i
-   händelsekön och anropa lyssnarna. Tillbaka till 2.
+   händelsekön och anropa lyssnarna, varje omgång som en egen uppgift som
+   bevakningen inte väntar på. Tillbaka till 2.
    Bridge skickar köade uppdateringar i svaret på nästa kommando och aldrig
    igen: en EXISTS i svaret på UID SEARCH/FETCH (som aioimaplib annars
    kastar) eller i IDLE-kön för den omgång som avslutas räknas därför som
@@ -82,6 +83,9 @@ FETCH_LIMIT = 200
 # Efter ett UIDVALIDITY-byte: mejl som kom så här långt innan bevakningen
 # senast var i fas räknas också (Bridge får mejlen från Proton med fördröjning)
 RECOVER_MARGIN = timedelta(minutes=5)
+# Högst så många lyssnaromgångar får vara igång samtidigt; fler hoppas över
+# (en lyssnare som hänger sig ska inte kunna fylla minnet)
+MAX_PENDING_NOTIFICATIONS = 100
 # Högst så många sökningar efter en IDLE-omgång när Bridge hela tiden
 # rapporterar nya mejl i svaren; resten fångas av nästa omgång
 CATCH_UP_ROUNDS = 5
@@ -345,6 +349,8 @@ class MailWatcher:
         self._states = {mailbox_key(m): _MailboxState(m, queue_size) for m in self.mailboxes}
         self._listeners: list[Listener] = []
         self._tasks: dict[str, asyncio.Task] = {}
+        # Lyssnaromgångar som körs (referenser så att de inte skräpsamlas)
+        self._notify_tasks: set[asyncio.Task] = set()
         self._stopping = False
         # Verktygens vattenmärken per mapp: (UIDVALIDITY, UID). Här i stället
         # för i verktygsmodulen så att de lever lika länge som sessionen.
@@ -365,19 +371,16 @@ class MailWatcher:
                 )
 
     async def stop(self) -> None:
-        """Stoppa alla uppgifter och stäng anslutningarna. Kan anropas flera gånger."""
+        """Stoppa alla uppgifter (även lyssnare som körs) och stäng anslutningarna.
+
+        Kan anropas flera gånger.
+        """
         self._stopping = True
         pending, self._tasks = set(self._tasks.values()), {}
-        # Avbryt tills uppgiften verkligen är klar: asyncio.wait_for i Python
-        # 3.10–3.11 kan svälja en avbrytning som sammanfaller med att det den
-        # väntar på blir klart, och då skulle uppgiften gå vidare in i nästa IDLE.
-        while pending:
-            for task in pending:
-                task.cancel()
-            done, pending = await asyncio.wait(pending, timeout=0.5)
-            for task in done:
-                if not task.cancelled() and task.exception() is not None:
-                    logger.warning("Bevakningen avslutades med fel: %s", task.exception())
+        await _cancel_all(pending)
+        # Lyssnarna sist: bevakningsuppgifterna kan inte starta nya nu
+        await _cancel_all(set(self._notify_tasks))
+        self._notify_tasks.clear()
         for state in self._states.values():
             state.connected = False
             self._wake(state)
@@ -387,8 +390,9 @@ class MailWatcher:
     def add_listener(self, callback: Listener) -> None:
         """callback(mailbox, messages) anropas (await) för varje omgång nya mejl.
 
-        Den körs i bevakningsuppgiften, så den bör vara snabb. Fel loggas och
-        stoppar varken bevakningen eller andra lyssnare.
+        Varje omgång körs som en egen uppgift; bevakningen väntar inte på den
+        utan startar om IDLE direkt. Fel loggas och stoppar varken bevakningen
+        eller andra lyssnare. stop() avbryter lyssnare som fortfarande körs.
         """
         self._listeners.append(callback)
 
@@ -491,6 +495,23 @@ class MailWatcher:
         state.last_event = _now()
         self._wake(state)
 
+    def _schedule_notify(self, mailbox: str, msgs: list[dict[str, Any]]) -> None:
+        """Anropa lyssnarna i en egen uppgift, utan att vänta på dem."""
+        if not self._listeners or self._stopping:
+            return
+        if len(self._notify_tasks) >= MAX_PENDING_NOTIFICATIONS:
+            logger.warning("%d lyssnaromgångar körs redan; notisen om %d mejl i %s hoppas över",
+                           len(self._notify_tasks), len(msgs), mailbox)
+            return
+        task = asyncio.create_task(self._notify(mailbox, msgs), name=f"protonmail-notify:{mailbox}")
+        self._notify_tasks.add(task)
+        task.add_done_callback(self._notify_done)
+
+    def _notify_done(self, task: asyncio.Task) -> None:
+        self._notify_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("Lyssnarna på nya mejl misslyckades: %s", task.exception())
+
     async def _notify(self, mailbox: str, msgs: list[dict[str, Any]]) -> None:
         for callback in list(self._listeners):
             try:
@@ -581,7 +602,7 @@ class MailWatcher:
         if state.recovered:
             state.last_event = _now()
             logger.info("%d mejl i %s kom medan bevakningen var nere", len(state.recovered), state.name)
-            await self._notify(state.name, state.recovered)
+            self._schedule_notify(state.name, state.recovered)
 
     async def _catch_up(self, state: _MailboxState, imap: IMAPClient, client) -> None:
         """Hämta nya mejl efter en IDLE-omgång, tills inget tyder på fler.
@@ -614,7 +635,7 @@ class MailWatcher:
         state.synced_at = checked
         self._record(state, msgs)
         logger.info("%d nytt/nya mejl i %s", len(msgs), state.name)
-        await self._notify(state.name, msgs)
+        self._schedule_notify(state.name, msgs)
 
     async def _idle(self, imap: IMAPClient, client, state: _MailboxState | None = None) -> bool:
         """En IDLE-omgång. True vid nytt mejl, False när den ska förnyas.
@@ -663,6 +684,22 @@ class MailWatcher:
                     f"ProtonMail Bridge avslutade inte IDLE inom {imap.timeout:g} s"
                 ) from None
         return new_mail
+
+
+async def _cancel_all(pending: set[asyncio.Task]) -> None:
+    """Avbryt uppgifterna och vänta tills de verkligen är klara.
+
+    asyncio.wait_for i Python 3.10–3.11 kan svälja en avbrytning som
+    sammanfaller med att det den väntar på blir klart, och då skulle
+    uppgiften gå vidare (t.ex. in i nästa IDLE): avbryt därför igen.
+    """
+    while pending:
+        for task in pending:
+            task.cancel()
+        done, pending = await asyncio.wait(pending, timeout=0.5)
+        for task in done:
+            if not task.cancelled() and task.exception() is not None:
+                logger.warning("Bevakningen avslutades med fel: %s", task.exception())
 
 
 def _drain(client) -> bool:
