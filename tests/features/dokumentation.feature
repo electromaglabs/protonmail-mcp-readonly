@@ -22,3 +22,6 @@ Feature: Dokumentationen stämmer med koden
     Then ska resurstabellen i README.md innehålla exakt serverns resurser och resursmallar
     And ska prompttabellen i README.md innehålla exakt serverns promptar
 
+  Scenario: CLAUDE.md:s modulkarta täcker alla moduler
+    Given CLAUDE.md och källkoden
+    Then ska modulkartan i CLAUDE.md innehålla exakt modulerna i src/protonmail_mcp

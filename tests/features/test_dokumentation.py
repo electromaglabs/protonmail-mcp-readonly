@@ -22,6 +22,11 @@ def readme_and_server(context):
     context["prompts"] = asyncio.run(docs.registered_prompts())
 
 
+@given("CLAUDE.md och källkoden")
+def claude_md_and_source(context):
+    context["claude_md"] = docs.CLAUDE_MD.read_text(encoding="utf-8")
+
+
 def _diff(documented, actual) -> str:
     return (
         f"saknas i dokumentationen: {sorted(set(actual) - set(documented))}, "
@@ -74,3 +79,10 @@ def resources_match(context):
 def prompts_match(context):
     documented = docs.documented_names(context["readme"], docs.PROMPTS_SECTION)
     assert documented == context["prompts"], _diff(documented, context["prompts"])
+
+
+@then("ska modulkartan i CLAUDE.md innehålla exakt modulerna i src/protonmail_mcp")
+def modules_match(context):
+    documented = docs.documented_modules(context["claude_md"])
+    actual = docs.source_modules()
+    assert documented == actual, _diff(documented, actual)

@@ -65,6 +65,8 @@ claude mcp add protonmail -s user -- uv --directory /path/to/protonmail-mcp-serv
 
 Credentials are read from `.env` in the project root. To pass settings explicitly instead, add `-e PROTONMAIL_USERNAME=… -e PROTONMAIL_PASSWORD=…` (and any other `PROTONMAIL_*` setting) before `--`.
 
+The server can also be started with `python -m protonmail_mcp` (or `python -m protonmail_mcp.server`) inside the project environment.
+
 To try the server interactively, use the MCP Inspector and open the URL it prints:
 
 ```bash
@@ -164,7 +166,19 @@ The mailbox is also exposed as read-only MCP resources, as JSON. They go through
 
 **Mailbox names in URIs are percent-encoded as UTF-8** (RFC 3986, the same as RFC 6570 expansion of `{mailbox}`): everything except `A–Z a–z 0–9 - . _ ~` is encoded, including `/` and spaces. `Labels/Näs Samfällighet` becomes `mailbox://Labels%2FN%C3%A4s%20Samf%C3%A4llighet`, and email 42 in `Folders/A/B` is `email://Folders%2FA%2FB/42`. When reading, unencoded `/` (`mailbox://Folders/A/B`) and lower-case percent codes are accepted too.
 
-**Subscriptions.** The server supports `resources/subscribe`. It sends `notifications/resources/updated` for `mailbox://{mailbox}` when the IDLE watcher sees new mail in a watched folder (`PROTONMAIL_WATCH_MAILBOXES`). Nothing else currently produces a notification: subscribing to `mailboxes://`, to `email://…`, or to a folder that is not watched is accepted but stays silent, and changes such as flags, moves or deletions are not reported. Subscriptions are compared in canonical form, so `mailbox://Folders/A/B` and `mailbox://Folders%2FA%2FB` are the same resource.
+**Subscriptions.** The server supports `resources/subscribe` and sends `notifications/resources/updated` in two cases:
+
+1. **New mail in a watched folder** (`PROTONMAIL_WATCH_MAILBOXES`, default `INBOX`): the IDLE watcher notifies `mailbox://{mailbox}`.
+2. **After a successful write tool in this server**, for the resources that call changed:
+   - marking read/unread, starring and labels: the folder and `email://{mailbox}/{uid}` (labels also the label's `mailbox://`)
+   - `move_email`: source folder, target folder and the email; `delete_email`: the folder, the email and Trash (unless `permanent=true`)
+   - `create_folder`, `delete_folder`, `rename_folder`: `mailboxes://` and the affected `mailbox://`
+   - draft tools: `mailbox://Drafts` (`update_draft` also the old draft and Trash, `send_draft` the old draft and Sent)
+   - `send_email`, `reply_to_email`, `forward_email`: `mailbox://Sent`
+
+   With a list of UIDs only the UIDs that succeeded are notified; a failed call notifies nothing. Notifications are sent in the background, so a tool's answer never waits for them.
+
+**Changes made by other clients** (Proton's apps, the web, another IMAP client) are only seen as new mail in watched folders; flags, moves and folder changes made elsewhere produce no notification. Subscriptions are accepted on every valid resource URI and compared in canonical form, so `mailbox://Folders/A/B` and `mailbox://Folders%2FA%2FB` are the same resource, and `INBOX` is case-insensitive.
 
 ## Prompts
 
@@ -261,7 +275,7 @@ CI runs the unit and BDD tests on Python 3.10, 3.11 and 3.12.
 - Body search (`text`/`body`) with å, ä, ö finds about 95 % of matches: a word that quoted-printable happens to wrap mid-word is missed, as are words in base64-encoded parts or written as HTML entities (`&ouml;`).
 - Validation errors for missing or wrongly typed parameters come from pydantic, in English, before the tool runs; all other errors are in Swedish.
 - Homoglyphs (e.g. Cyrillic `а` for Latin `a`) are visible characters and are not removed, and `suspicious_content` does not catch every phrasing — it is a warning, not a guarantee.
-- Notifications only exist for new mail in watched folders. Changes made by other clients (or by this server) to flags, labels or folders are not reported, and folders that are not in `PROTONMAIL_WATCH_MAILBOXES` never notify.
+- Notifications for changes made by other clients only exist as new mail in watched folders (`PROTONMAIL_WATCH_MAILBOXES`, at most 5). Flags, labels, moves and folder changes made outside this server are not reported, and `rename_folder` does not notify sub-folders renamed along with their parent.
 - High-water marks for new mail and the hourly send counter are kept in memory and reset when the server restarts. If a `check_new_emails` call is interrupted after the mark moved but before the client got the answer, those emails no longer count as new (they are still listed by `list_emails`).
 - `get_thread` only follows `Message-ID`/`In-Reply-To`/`References`; a reply without them is not part of the thread. Each search in All Mail takes a few seconds, so one call is capped at ten searches, 200 IDs and 60 s.
 - What Proton does with sub-folders when a folder is deleted with `force=true` is unknown.
