@@ -1,6 +1,6 @@
 [project]
 name = "protonmail-mcp"
-version = "0.1.0"
+version = "0.3.0"
 description = "MCP server for ProtonMail Bridge — lets Claude read, search and send email via local Bridge"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
