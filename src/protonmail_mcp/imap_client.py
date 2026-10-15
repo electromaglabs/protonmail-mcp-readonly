@@ -218,36 +218,16 @@ def _close_transport(client: aioimaplib.IMAP4) -> None:
 
 
 async def _with_timeout(aw, seconds: float):
-    """Som asyncio.wait_for, men ett avbrott utifrån tappas aldrig.
+    """Väntar in aw högst seconds sekunder (asyncio.timeout); TimeoutError annars.
 
-    asyncio.wait_for i Python 3.10/3.11 sväljer ett avbrott som kommer när det
-    inre anropet redan är klart men innan wait_for vaknat (bpo-42130). Ett
-    avbrutet verktygsanrop körde då vidare och höll klientens lås tills nästa
-    kommando nådde sin tidsgräns. Här väntas det inre anropet in direkt i den
-    egna uppgiften: asyncio.timeout där det finns (3.11+, skiljer på egen
-    tidsgräns och avbrott utifrån), annars en timer som avbryter uppgiften och
-    gör om just det avbrottet till TimeoutError.
+    Det inre anropet väntas in direkt i den egna uppgiften, så ett avbrott
+    utifrån når alltid fram som CancelledError, även när det kommer i samma
+    ögonblick som anropet blir klart. (asyncio.wait_for i Python 3.10/3.11
+    svalde just det avbrottet, bpo-42130; testerna i
+    test_efterfix_l7_avbrott*.py vaktar mot att det kommer tillbaka.)
     """
-    if hasattr(asyncio, "timeout"):
-        async with asyncio.timeout(seconds):
-            return await aw
-    task = asyncio.current_task()
-    expired = False
-
-    def expire() -> None:
-        nonlocal expired
-        expired = True
-        task.cancel()
-
-    handle = asyncio.get_running_loop().call_later(seconds, expire)
-    try:
+    async with asyncio.timeout(seconds):
         return await aw
-    except asyncio.CancelledError:
-        if expired:
-            raise asyncio.TimeoutError from None
-        raise
-    finally:
-        handle.cancel()
 
 
 def _serialized(method):

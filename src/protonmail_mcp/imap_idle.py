@@ -690,9 +690,9 @@ class MailWatcher:
 async def _cancel_all(pending: set[asyncio.Task]) -> None:
     """Avbryt uppgifterna och vänta tills de verkligen är klara.
 
-    asyncio.wait_for i Python 3.10–3.11 kan svälja en avbrytning som
-    sammanfaller med att det den väntar på blir klart, och då skulle
-    uppgiften gå vidare (t.ex. in i nästa IDLE): avbryt därför igen.
+    En uppgift som sväljer en avbrytning (t.ex. en lyssnare som fångar
+    CancelledError) skulle annars gå vidare och få stop() att hänga: avbryt
+    därför igen tills den är klar.
     """
     while pending:
         for task in pending:

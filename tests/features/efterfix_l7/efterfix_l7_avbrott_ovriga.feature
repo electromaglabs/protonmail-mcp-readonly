@@ -1,7 +1,7 @@
 Feature: Avbrott når fram även i utkasten och bevakningen
   Som MCP-server
   vill jag att ett avbrutet anrop slutar direkt även när avbrottet kommer i samma ögonblick
-  som det anropet väntar på blir klart, så att inget fortsätter i bakgrunden (Python 3.10/3.11).
+  som det anropet väntar på blir klart, så att inget fortsätter i bakgrunden.
 
   Scenario: Väntan på nya mejl avbryts när bevakningen vaknar samtidigt
     Given en bevakning av "INBOX" som inte har några nya mejl

@@ -50,7 +50,7 @@ class TestVariationsvaljare:
 class TestFormatteckenOchMarkeringar:
     @pytest.mark.parametrize("cp", [0x13439, 0x1343F, 0x1BCA0, 0x1D173, 0x206A, 0xFFF9, 0x2064])
     def test_formattecken_aven_i_aldre_unicode(self, cp):
-        # Python 3.10 har Unicode 13 där U+13439–1343F ännu inte är Cf
+        # Tabellen täcker tecken som är Cf i nyare Unicode än Pythons egen databas
         result = sanitize_text(f"a{chr(cp)}b")
         assert result.text == "ab"
         assert result.count == 1

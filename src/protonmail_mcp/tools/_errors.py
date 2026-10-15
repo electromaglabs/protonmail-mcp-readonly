@@ -9,7 +9,6 @@ användaren kan göra. Stackspår skickas aldrig till klienten; oväntade fel
 loggas med stackspår till stderr (stdout är MCP-protokollet). Lösenordet
 tas bort ur allt som returneras eller loggas.
 """
-import asyncio
 import functools
 import logging
 import socket
@@ -33,7 +32,6 @@ _MAX_DETAIL_CHARS = 300
 _CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
     ConnectionError,  # även aiosmtplib.SMTPConnectError och SMTPServerDisconnected
     TimeoutError,  # även aiosmtplib.SMTPTimeoutError
-    asyncio.TimeoutError,  # ett eget undantag i Python 3.10
     aioimaplib.AioImapException,  # Abort, CommandTimeout, IncompleteRead …
     socket.gaierror,  # värdnamnet går inte att slå upp
 )

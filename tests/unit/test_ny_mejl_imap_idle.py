@@ -208,7 +208,7 @@ async def test_new_messages_fetched_with_peek_and_filtered_by_watermark():
 
 
 async def test_stop_finishes_even_if_a_cancellation_is_swallowed():
-    """Python 3.10:s wait_for kan svälja en avbrytning (fixat i 3.12); stop() får ändå inte hänga."""
+    """En uppgift som sväljer en avbrytning (t.ex. en lyssnare) får inte få stop() att hänga."""
     w = MailWatcher(_settings())
     swallowed = asyncio.Event()
 
@@ -216,7 +216,7 @@ async def test_stop_finishes_even_if_a_cancellation_is_swallowed():
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
-            swallowed.set()  # som wait_for i 3.10: avbrytningen försvinner
+            swallowed.set()  # avbrytningen försvinner
         await asyncio.sleep(3600)  # väntar vidare som en ny IDLE-omgång
 
     w._tasks["INBOX"] = asyncio.create_task(stubborn(), name="protonmail-watch:INBOX")

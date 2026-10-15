@@ -148,7 +148,7 @@ def _set_unstructured(msg: EmailMessage, name: str, value: str) -> None:
     """Sätt en fritextheader (t.ex. Subject) så att den överlever ombrytning.
 
     email.policy-foldern tappar eller dubblar mellanslag när den viker långa
-    icke-ASCII-värden (CPython 3.10–3.12). Header kodar i stället hela värdet
+    icke-ASCII-värden (CPython 3.12). Header kodar i stället hela värdet
     som angränsande encoded-words, vars mellanrum mottagaren ignorerar, och
     radlängden hålls under 78 så att policyn inte viker om dem.
     """
@@ -309,7 +309,7 @@ def _header_addr_specs(msg: Message, name: str) -> list[str]:
         try:
             header = email.policy.SMTP.header_fetch_parse(key, text)
             specs.extend(address.addr_spec for address in header.addresses)
-        except Exception as exc:  # parsern kan krascha på trasiga adresser (t.ex. IndexError i 3.10)
+        except Exception as exc:  # parsern kan krascha på trasiga adresser (t.ex. IndexError)
             raise ValueError(f"Ogiltig e-postadress i {name}: {text!r}") from exc
     return specs
 

@@ -120,10 +120,8 @@ async def _within(coro, seconds: float):
         raise
     if task in done:
         return task.result()
-    # Python 3.10–3.11:s wait_for kan svälja en avbrytning: försök tills den är klar
-    while not task.done():
-        task.cancel()
-        await asyncio.wait({task}, timeout=0.5)
+    task.cancel()
+    await asyncio.wait({task})
     raise _Overdue
 
 
