@@ -5,6 +5,7 @@ from mcp.server.fastmcp import Context
 from mcp.types import ToolAnnotations
 
 from ..server import AppContext, mcp
+from ._errors import with_error_messages
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -36,7 +37,10 @@ def tool(
     - idempotent: samma anrop igen ändrar inget mer
     - open_world: når omvärlden (skickar mejl till andra)
 
-    Funktionen returneras oförändrad, så att den kan anropas direkt i tester.
+    Servern får funktionen omsluten av with_error_messages (tools/_errors.py):
+    undantag blir begripliga fel på svenska i stället för interna texter och
+    stackspår. Funktionen själv returneras oförändrad, så att den kan
+    anropas direkt i tester.
     """
     annotations = ToolAnnotations(
         title=title,
@@ -47,7 +51,8 @@ def tool(
     )
 
     def register(fn: F) -> F:
-        mcp.tool(title=title, annotations=annotations)(fn)
+        wrapped = with_error_messages(fn, fn.__name__, open_world=open_world)
+        mcp.tool(name=fn.__name__, title=title, annotations=annotations)(wrapped)
         return fn
 
     return register
