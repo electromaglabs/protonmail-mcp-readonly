@@ -101,12 +101,117 @@ def _declarations(style: str) -> dict[str, tuple[str, bool]]:
     return out
 
 
-def _style(attrs) -> dict[str, str]:
-    """style-attributets deklarationer som {egenskap: värde} (se _declarations)."""
+def _inline(attrs) -> dict[str, tuple[str, bool]]:
     for name, value in attrs:
         if name == "style" and value:
-            return {k: v for k, (v, _) in _declarations(value).items()}
+            return _declarations(value)
     return {}
+
+
+def _style(attrs, rules: "_Rules | None" = None, tag: str = "") -> dict[str, str]:
+    """Elementets stil som {egenskap: värde}: style-attributet (se
+    _declarations), och display/visibility ur enkla <style>-regler när
+    style-attributet inte sätter dem (eller regeln är !important)."""
+    inline = _inline(attrs)
+    if rules:
+        for prop, (value, important) in rules.match(tag, attrs).items():
+            if prop not in inline or (important and not inline[prop][1]):
+                inline[prop] = (value, important)
+                inline[_FROM_RULE] = ("1", False)
+    return {k: v for k, (v, _) in inline.items()}
+
+
+# Markerar i stil-dicten att display/visibility kom från en <style>-regel
+_FROM_RULE = " regel"
+# Egenskaper som tas med ur <style>-regler
+_RULE_PROPS = ("display", "visibility")
+# Enkel väljare: element, .klass eller element.klass
+_SIMPLE_SELECTOR_RE = re.compile(r"([a-z][a-z0-9]*)?(?:\.([a-z0-9_-]+))?$")
+_BRACE_RE = re.compile(r"[{}]")
+
+
+class _Rules:
+    """Enkla regler ur <style>: element-, klass- och element.klass-väljare
+    med display eller visibility, UTANFÖR @-block (@media gäller bara vissa
+    skärmar och tolkas inte). Värden som (värde, !important), med
+    specificitet: klass före element. Linjär tid."""
+
+    def __init__(self) -> None:
+        self.by_tag: dict[str, dict] = {}
+        self.by_class: dict[str, dict] = {}
+        self.by_tag_class: dict[tuple[str, str], dict] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self.by_tag or self.by_class or self.by_tag_class)
+
+    def add_stylesheet(self, css: str) -> None:
+        css = _strip_comments(css.lower())
+        pos, n = 0, len(css)
+        while pos < n:
+            m = _BRACE_RE.search(css, pos)
+            if m is None:
+                return
+            if m.group() == "}":  # herrelös: hoppa över
+                pos = m.end()
+                continue
+            prelude = css[pos:m.start()].rsplit(";", 1)[-1].strip()
+            if prelude.startswith("@"):
+                pos = self._skip_block(css, m.end())
+                continue
+            close = css.find("}", m.end())
+            body = css[m.end(): close if close != -1 else n]
+            pos = close + 1 if close != -1 else n
+            decls = {p: v for p, v in _declarations(body).items() if p in _RULE_PROPS}
+            if decls:
+                for selector in prelude.split(","):
+                    self._add(selector.strip(), decls)
+
+    @staticmethod
+    def _skip_block(css: str, pos: int) -> int:
+        depth = 1
+        while depth:
+            m = _BRACE_RE.search(css, pos)
+            if m is None:
+                return len(css)
+            depth += 1 if m.group() == "{" else -1
+            pos = m.end()
+        return pos
+
+    def _add(self, selector: str, decls: dict) -> None:
+        m = _SIMPLE_SELECTOR_RE.match(selector)
+        if not selector or not m:
+            return
+        tag, cls = m.group(1), m.group(2)
+        if tag and cls:
+            target = self.by_tag_class.setdefault((tag, cls), {})
+        elif cls:
+            target = self.by_class.setdefault(cls, {})
+        else:
+            target = self.by_tag.setdefault(tag, {})
+        for prop, value in decls.items():
+            if prop not in target or value[1] or not target[prop][1]:
+                target[prop] = value
+
+    def match(self, tag: str, attrs) -> dict[str, tuple[str, bool]]:
+        """display/visibility för elementet: !important först, sedan
+        specificitet (element.klass och klass före element)."""
+        found: dict[str, tuple[tuple[str, bool], tuple[bool, int]]] = {}
+
+        def offer(decls: dict | None, specificity: int) -> None:
+            for prop, value in (decls or {}).items():
+                rank = (value[1], specificity)
+                if prop not in found or rank >= found[prop][1]:
+                    found[prop] = (value, rank)
+
+        offer(self.by_tag.get(tag), 1)
+        if self.by_class or self.by_tag_class:
+            for name, value in attrs:
+                if name == "class" and value:
+                    for cls in value.lower().split():
+                        offer(self.by_class.get(cls), 10)
+                        offer(self.by_tag_class.get((tag, cls)), 11)
+                    break
+        return {prop: value for prop, (value, _) in found.items()}
 
 
 def _compact(value: str) -> str:
@@ -240,7 +345,7 @@ def _hard_hidden(attrs, style: dict[str, str]) -> str | None:
     if not style:
         return None
     if style.get("display") == "none":
-        return "display:none"
+        return "<style>-regel" if _FROM_RULE in style and not _inline(attrs).get("display") else "display:none"
     if style.get("mso-hide") == "all":
         return "mso-hide:all"
     if (opacity := style.get("opacity")) is not None:
@@ -348,6 +453,9 @@ class _TextExtractor(HTMLParser):
         self.stack: list[tuple[str, tuple]] = []
         self.stack_tags: dict[str, int] = {}
         self.state = _ROOT
+        # Enkla regler ur <style> (se _Rules) och texten i pågående <style>
+        self.rules = _Rules()
+        self.css_parts: list[str] | None = None
         self.hidden_parts: list[str] = []
         self.white_parts: list[str] = []
         self.hidden_elements = 0
@@ -429,7 +537,7 @@ class _TextExtractor(HTMLParser):
             return
         hard, font_zero, vis_hidden, color, bg, hidden, _ = self.state
         if not hard:
-            style = _style(attrs)
+            style = _style(attrs, self.rules, tag)
             if reason := _hard_hidden(attrs, style):
                 hard = True
             elif props := _soft_style(attrs, style):
@@ -465,6 +573,8 @@ class _TextExtractor(HTMLParser):
             self.in_head = False  # även när </head> och <body> saknas
         if tag in _SKIP:
             self.skip += 1
+            if tag == "style":
+                self.css_parts = []
         if self.skip or self.in_head:
             return
         if tag == "br":
@@ -490,6 +600,9 @@ class _TextExtractor(HTMLParser):
             self.in_head = False
         if tag in _SKIP:
             self.skip = max(0, self.skip - 1)
+            if tag == "style" and self.css_parts is not None:
+                self.rules.add_stylesheet("".join(self.css_parts))
+                self.css_parts = None
             return
         if self.skip or self.in_head:
             return
@@ -503,6 +616,8 @@ class _TextExtractor(HTMLParser):
             self._end_line()
 
     def handle_data(self, data):
+        if self.css_parts is not None:
+            self.css_parts.append(data)
         if self.in_head and not self.skip and data.strip():
             self.in_head = False  # text stänger också ett ostängt head
         if self.skip or self.in_head:
@@ -560,6 +675,10 @@ def html_to_text_report(markup: str) -> HtmlText:
     bort allt, genomskinlig textfärg, textfärg (även <font color>) nästan lika
     med en känd bakgrundsfärg, och hidden-attributet. Gömd text ingår inte i
     text — läsaren ser den inte, och då ska inte heller modellen läsa den.
+
+    Enkla regler i <style> (element, .klass, element.klass) med display:none
+    eller visibility:hidden utanför @-block gäller också; regler i @media och
+    sammansatta väljare tolkas inte.
 
     Stilen tolkas som i en webbläsare: sista deklarationen gäller (utom mot
     !important), CSS-kommentarer räknas inte, och öppna element följs i en
