@@ -6,9 +6,9 @@ from pydantic import Field
 from .. import imap_labels
 from ..imap_bulk import BulkResult, single
 from . import _get_app, SETS_STATE, tool
+from ._types import Mailbox
 from ._uids import UidArg
 
-Mailbox = Annotated[str, Field(min_length=1, max_length=255)]
 Label = Annotated[str, Field(min_length=1, max_length=255)]
 
 

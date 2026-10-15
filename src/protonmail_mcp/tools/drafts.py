@@ -23,7 +23,8 @@ from ..smtp_client import (
     _validate_subject,
 )
 from . import _get_app, ADDS, DESTRUCTIVE, SENDS, tool
-from ._types import OptionalStr
+from ._types import Mailbox, OptionalStr
+from ._uids import Uid
 from .reply import _MSGID_RE, _forward_parts, _msg_ids, _parse_original, build_forward, build_reply
 
 logger = logging.getLogger(__name__)
@@ -150,8 +151,8 @@ async def create_draft(
 @tool("Skapa svarsutkast", **ADDS)
 async def create_reply_draft(
     ctx: Context,
-    uid: str,
-    mailbox: str,
+    uid: Uid,
+    mailbox: Mailbox,
     body: str,
     reply_all: bool = False,
     body_html: OptionalStr = None,
@@ -197,8 +198,8 @@ async def create_reply_draft(
 @tool("Skapa vidarebefordringsutkast", **ADDS)
 async def create_forward_draft(
     ctx: Context,
-    uid: str,
-    mailbox: str,
+    uid: Uid,
+    mailbox: Mailbox,
     to: str | list[str],
     body: str = "",
     cc: str | list[str] | None = None,
@@ -295,7 +296,7 @@ def _kept_from_old(old_raw: bytes, body_html: str | None) -> tuple[dict[str, Any
 @tool("Ersätt utkast", **DESTRUCTIVE)
 async def update_draft(
     ctx: Context,
-    uid: str,
+    uid: Uid,
     mailbox: Literal["Drafts"],
     to: str | list[str],
     subject: str,
@@ -378,7 +379,7 @@ async def update_draft(
 @tool("Skicka utkast", **SENDS)
 async def send_draft(
     ctx: Context,
-    uid: str,
+    uid: Uid,
     mailbox: Literal["Drafts"],
 ) -> dict:
     """Skicka ett utkast ur Drafts exakt som det ligger där, och ta sedan bort det.

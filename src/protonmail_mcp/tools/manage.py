@@ -3,11 +3,12 @@ from mcp.server.fastmcp import Context
 from .. import imap_bulk
 from ..imap_bulk import BulkResult
 from . import _get_app, DESTRUCTIVE, SETS_STATE, tool
+from ._types import Mailbox
 from ._uids import UidArg
 
 
 @tool("Markera som läst", **SETS_STATE)
-async def mark_email_read(ctx: Context, uid: UidArg, mailbox: str) -> bool | BulkResult:
+async def mark_email_read(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Markera ett eller flera e-post som lästa.
 
     Args:
@@ -33,7 +34,7 @@ async def mark_email_read(ctx: Context, uid: UidArg, mailbox: str) -> bool | Bul
 
 
 @tool("Markera som oläst", **SETS_STATE)
-async def mark_email_unread(ctx: Context, uid: UidArg, mailbox: str) -> bool | BulkResult:
+async def mark_email_unread(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Markera ett eller flera e-post som olästa.
 
     Args:
@@ -60,7 +61,7 @@ async def mark_email_unread(ctx: Context, uid: UidArg, mailbox: str) -> bool | B
 
 @tool("Flytta mejl", **DESTRUCTIVE)
 async def move_email(
-    ctx: Context, uid: UidArg, target_mailbox: str, mailbox: str
+    ctx: Context, uid: UidArg, target_mailbox: Mailbox, mailbox: Mailbox
 ) -> bool | BulkResult:
     """Flytta ett e-post till en annan mapp. Bara det angivna mejlet påverkas.
 
@@ -107,7 +108,7 @@ async def move_email(
 
 @tool("Radera mejl", **DESTRUCTIVE)
 async def delete_email(
-    ctx: Context, uid: UidArg, mailbox: str, permanent: bool = False
+    ctx: Context, uid: UidArg, mailbox: Mailbox, permanent: bool = False
 ) -> bool | BulkResult:
     """Ta bort ett e-post genom att flytta det till papperskorgen (Trash).
 

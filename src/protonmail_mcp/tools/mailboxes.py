@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import Context
 
+from ._types import Mailbox
 from . import _get_app, READ_ONLY, tool
 
 
@@ -22,7 +23,7 @@ async def list_mailboxes(ctx: Context) -> list[dict]:
 
 
 @tool("Antal mejl i en mapp", **READ_ONLY)
-async def get_mailbox_status(ctx: Context, mailbox: str = "INBOX") -> dict:
+async def get_mailbox_status(ctx: Context, mailbox: Mailbox = "INBOX") -> dict:
     """Hämta antal meddelanden och olästa i en mapp.
 
     Kastar fel om mappen inte finns, och om den är en behållare (Folders,

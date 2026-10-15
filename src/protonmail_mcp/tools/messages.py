@@ -4,6 +4,8 @@ from mcp.server.fastmcp import Context
 from pydantic import Field
 
 from ..email_parser import parse_email
+from ._types import Mailbox
+from ._uids import Uid
 from . import _get_app, READ_ONLY, tool
 
 
@@ -23,8 +25,8 @@ def _not_found(uid: str, mailbox: str) -> ValueError:
 @tool("Läs ett mejls rubriker", **READ_ONLY)
 async def get_email_headers(
     ctx: Context,
-    uid: str,
-    mailbox: str,
+    uid: Uid,
+    mailbox: Mailbox,
 ) -> dict:
     """Hämta ett mejls rubriker utan brödtext (snabbt). Ingenting ändras.
 
@@ -65,7 +67,7 @@ async def get_email_headers(
 @tool("Lista mejl i en mapp", **READ_ONLY)
 async def list_emails(
     ctx: Context,
-    mailbox: str = "INBOX",
+    mailbox: Mailbox = "INBOX",
     page: Annotated[int, Field(ge=1)] = 1,
     page_size: Annotated[int, Field(ge=1, le=100)] = 20,
 ) -> dict:
@@ -92,8 +94,8 @@ async def list_emails(
 @tool("Läs ett mejl", **READ_ONLY)
 async def get_email(
     ctx: Context,
-    uid: str,
-    mailbox: str,
+    uid: Uid,
+    mailbox: Mailbox,
     body_format: Literal["text", "full", "stripped"] = "text",
     max_length: Annotated[int, Field(ge=0)] | None = 500,
 ) -> dict:

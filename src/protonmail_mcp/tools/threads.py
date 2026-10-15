@@ -4,15 +4,17 @@ from mcp.server.fastmcp import Context
 from pydantic import Field
 
 from ..imap_threads import get_thread as fetch_thread
+from ._types import Mailbox
+from ._uids import Uid
 from . import _get_app, READ_ONLY, tool
 
 
 @tool("Visa konversation", **READ_ONLY)
 async def get_thread(
     ctx: Context,
-    uid: str,
-    mailbox: str,
-    max_messages: Annotated[int, Field(ge=1, le=200, strict=True)] = 50,
+    uid: Uid,
+    mailbox: Mailbox,
+    max_messages: Annotated[int, Field(ge=1, le=200)] = 50,
 ) -> dict:
     """Hämta hela konversationen (tråden) som ett mejl ingår i.
 

@@ -4,18 +4,17 @@ from mcp.server.fastmcp import Context
 from pydantic import Field
 
 from . import _get_app, READ_ONLY, tool
-from ._types import OptionalStr
+from ._types import Mailbox, OptionalStr
 from .messages import _with_mailbox
 
 # Storleksgräns i byte; None = inget villkor
-_Size = Annotated[int | None, Field(ge=0, strict=True)]
-_Tristate = Annotated[bool | None, Field(strict=True)]
+_Size = Annotated[int | None, Field(ge=0)]
 
 
 @tool("Sök mejl", **READ_ONLY)
 async def search_emails(
     ctx: Context,
-    mailbox: str = "INBOX",
+    mailbox: Mailbox = "INBOX",
     from_addr: OptionalStr = None,
     subject: OptionalStr = None,
     since: OptionalStr = None,
@@ -26,11 +25,11 @@ async def search_emails(
     cc_addr: OptionalStr = None,
     text: OptionalStr = None,
     body: OptionalStr = None,
-    flagged: _Tristate = None,
-    answered: _Tristate = None,
+    flagged: bool | None = None,
+    answered: bool | None = None,
     larger_than: _Size = None,
     smaller_than: _Size = None,
-    has_attachment: _Tristate = None,
+    has_attachment: bool | None = None,
 ) -> dict:
     """Sök e-post med filter. Alla angivna filter måste stämma (AND).
 

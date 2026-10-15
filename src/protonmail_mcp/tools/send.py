@@ -1,8 +1,8 @@
 from mcp.server.fastmcp import Context
 
-from ..attachments import AttachmentPaths, load_for_sending
+from ..attachments import load_for_sending
 from . import _get_app, SENDS, tool
-from ._types import OptionalStr
+from ._types import AttachmentArg, OptionalStr
 
 
 @tool("Skicka mejl", **SENDS)
@@ -15,7 +15,7 @@ async def send_email(
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
     reply_to: OptionalStr = None,
-    attachments: AttachmentPaths = None,
+    attachments: AttachmentArg = None,
 ) -> bool:
     """Skicka ett e-post.
 
@@ -27,7 +27,7 @@ async def send_email(
         cc: Kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
         reply_to: Svarsadress
-        attachments: Filer att bifoga — filnamn eller sökvägar inom bilagekatalogen
+        attachments: Filer att bifoga — ett filnamn eller en lista, inom bilagekatalogen
             (PROTONMAIL_ATTACHMENT_DIR, standard ~/Downloads/protonmail-mcp).
             Högst 20 filer och 25 MB tillsammans. Filer utanför katalogen
             (även via symlänk) avvisas, och då skickas inget.

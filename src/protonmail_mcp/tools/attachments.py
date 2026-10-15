@@ -7,6 +7,8 @@ from pydantic import Field
 
 from .. import attachments as attachment_files
 from ..email_parser import _decode_bytes, get_attachment_part
+from ._types import Mailbox
+from ._uids import Uid
 from . import _get_app, ADDS, tool
 from .messages import _not_found
 
@@ -14,8 +16,8 @@ from .messages import _not_found
 @tool("Hämta bilaga", **ADDS)
 async def get_attachment(
     ctx: Context,
-    uid: str,
-    mailbox: str,
+    uid: Uid,
+    mailbox: Mailbox,
     index: Annotated[int, Field(ge=0)],
     save: bool = True,
 ) -> dict:

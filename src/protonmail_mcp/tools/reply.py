@@ -9,10 +9,11 @@ from email.utils import parseaddr, parsedate_to_datetime
 
 from mcp.server.fastmcp import Context
 
-from ..attachments import AttachmentPaths, load_for_sending
+from ..attachments import load_for_sending
 from ..email_parser import parse_addresses
 from . import _get_app, SENDS, tool
-from ._types import OptionalStr
+from ._types import AttachmentArg, Mailbox, OptionalStr
+from ._uids import Uid
 from .messages import _not_found
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
@@ -391,15 +392,15 @@ def _insert_before_body_end(document: str, fragment: str) -> str:
 @tool("Svara på mejl", **SENDS)
 async def reply_to_email(
     ctx: Context,
-    uid: str,
+    uid: Uid,
     body: str,
-    mailbox: str,
+    mailbox: Mailbox,
     body_html: OptionalStr = None,
     reply_all: bool = False,
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
     quote_original: bool = True,
-    attachments: AttachmentPaths = None,
+    attachments: AttachmentArg = None,
 ) -> bool:
     """Svara på ett e-post. Sätter In-Reply-To, References och Re:-prefix automatiskt.
 
@@ -418,7 +419,7 @@ async def reply_to_email(
         cc: Ytterligare kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
         quote_original: Citera originalet under svaret (standard: True)
-        attachments: Filer att bifoga — filnamn eller sökvägar inom bilagekatalogen
+        attachments: Filer att bifoga — ett filnamn eller en lista, inom bilagekatalogen
             (PROTONMAIL_ATTACHMENT_DIR). Högst 20 filer och 25 MB tillsammans.
             Originalets bilagor följer inte med i ett svar.
 
@@ -531,13 +532,13 @@ def _escape_lines(text: str) -> str:
 @tool("Vidarebefordra mejl", **SENDS)
 async def forward_email(
     ctx: Context,
-    uid: str,
+    uid: Uid,
     to: str | list[str],
-    mailbox: str,
+    mailbox: Mailbox,
     body: str = "",
     cc: str | list[str] | None = None,
     bcc: str | list[str] | None = None,
-    attachments: AttachmentPaths = None,
+    attachments: AttachmentArg = None,
 ) -> bool:
     """Vidarebefordra ett e-post med originalets text, HTML-version och bilagor.
 
@@ -555,7 +556,7 @@ async def forward_email(
         cc: Kopia-adress(er)
         bcc: Hemlig kopia-adress(er)
         attachments: Ytterligare filer att bifoga, utöver originalets bilagor —
-            filnamn eller sökvägar inom bilagekatalogen (PROTONMAIL_ATTACHMENT_DIR).
+            ett filnamn eller en lista, inom bilagekatalogen (PROTONMAIL_ATTACHMENT_DIR).
             Högst 20 filer och 25 MB tillsammans.
 
     Returns:

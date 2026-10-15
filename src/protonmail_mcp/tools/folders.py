@@ -1,10 +1,11 @@
 from mcp.server.fastmcp import Context
 
 from . import _get_app, ADDS, DESTRUCTIVE, tool
+from ._types import Mailbox
 
 
 @tool("Skapa mapp eller etikett", **ADDS)
-async def create_folder(ctx: Context, name: str) -> bool:
+async def create_folder(ctx: Context, name: Mailbox) -> bool:
     """Skapa en ny mapp eller etikett i Proton.
 
     Namnet avgör typen och måste ha ett av prefixen:
@@ -26,7 +27,7 @@ async def create_folder(ctx: Context, name: str) -> bool:
 
 
 @tool("Ta bort mapp eller etikett", **DESTRUCTIVE)
-async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
+async def delete_folder(ctx: Context, name: Mailbox, force: bool = False) -> bool:
     """Ta bort en egen mapp (Folders/…) eller etikett (Labels/…).
 
     Mappen måste vara tom och sakna undermappar; annars avvisas anropet med
@@ -48,7 +49,7 @@ async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
 
 
 @tool("Byt namn på mapp eller etikett", **DESTRUCTIVE)
-async def rename_folder(ctx: Context, old_name: str, new_name: str) -> bool:
+async def rename_folder(ctx: Context, old_name: Mailbox, new_name: Mailbox) -> bool:
     """Byt namn på en egen mapp (Folders/…) eller etikett (Labels/…).
 
     Båda namnen måste ha samma prefix: en mapp kan inte bli en etikett eller

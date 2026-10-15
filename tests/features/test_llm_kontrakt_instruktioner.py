@@ -1,6 +1,4 @@
 """BDD: serverinstruktionerna (FastMCP instructions) når klienten (llm-kontrakt)."""
-import asyncio
-
 from pytest_bdd import parsers, scenarios, then, when
 
 from protonmail_mcp.server import mcp
