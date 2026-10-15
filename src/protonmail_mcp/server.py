@@ -46,12 +46,24 @@ async def lifespan(server: FastMCP):
 mcp = FastMCP("protonmail", lifespan=lifespan)
 
 
-def main() -> None:
-    # Importera tools här för att undvika cirkulär import vid modulnivå
+def register_tools() -> None:
+    """Registrera alla verktyg på ``mcp`` (importen av modulerna gör det).
+
+    Importeras här i stället för på modulnivå för att undvika cirkulär import.
+    Upprepade anrop gör inget, eftersom modulerna bara importeras en gång.
+    """
     from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts, attachments, labels, threads  # noqa: F401
 
+
+def main() -> None:
+    register_tools()
     mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
-    main()
+    # python -m protonmail_mcp.server kör filen som modulen __main__, med en
+    # egen mcp. Verktygen registreras på protonmail_mcp.server.mcp (det är den
+    # verktygsmodulerna importerar), så starta via den riktiga modulen.
+    from protonmail_mcp.server import main as _main
+
+    _main()
