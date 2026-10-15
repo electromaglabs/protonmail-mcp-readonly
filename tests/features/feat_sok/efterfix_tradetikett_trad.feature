@@ -42,3 +42,16 @@ Feature: get_thread har tak och blockerar inte andra verktyg
     When jag hämtar konversationen för UID "7" i INBOX
     Then ska konversationen bestå av All Mail-UID "1001, 1002" i datumordning
     And ska konversationen vara komplett
+
+  Scenario: Ett startmejl utan Message-ID returneras med den mapp där dess UID gäller
+    Given en brevlåda "INBOX" med mejlen
+      | uid | from             | subject | date                            | message_id |
+      | 70  | anna@example.com | Utan ID | Mon, 05 Oct 2026 09:00:00 +0200 |            |
+    When jag hämtar konversationen för UID "70" i INBOX
+    Then ska konversationen bestå av UID "70"
+    And ska varje mejl ha mailbox "INBOX"
+    And ska konversationen inte vara komplett
+    And ska anteckningen nämna "mailbox="INBOX""
+
+  Scenario: Verktygsbeskrivningen säger att varje mejl läses i sitt eget mailbox-fält
+    Then ska beskrivningen av get_thread hänvisa till varje mejls mailbox-fält

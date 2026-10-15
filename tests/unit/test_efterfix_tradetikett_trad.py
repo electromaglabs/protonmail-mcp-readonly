@@ -156,3 +156,30 @@ class TestLock:
         result = await get_thread(bridge.imap, "9", "INBOX")
         assert len(searches) >= 2 and set(searches) == {"All Mail"}
         assert "2" in [m["uid"] for m in result["messages"]]
+
+
+class TestMailboxField:
+    async def test_without_message_id_the_uid_belongs_to_the_source_mailbox(self, bridge):
+        bridge.add("All Mail", _msg(70, "<a@x>", "Mon, 05 Oct 2026 09:00:00 +0200"))
+        bridge.add("INBOX", FakeMessage(uid=70, headers={"Subject": "Utan ID", "From": "a@x"}))
+        result = await get_thread(bridge.imap, "70", "INBOX")
+        assert result["mailbox"] == "INBOX"
+        assert [(m["uid"], m["mailbox"]) for m in result["messages"]] == [("70", "INBOX")]
+        assert 'mailbox="INBOX"' in result["note"]
+
+    async def test_every_message_mailbox_matches_the_top_level(self, bridge):
+        _thread_ab(bridge)
+        bridge.add("INBOX", _msg(7, "<b@x>", "Mon, 05 Oct 2026 10:00:00 +0200", "<a@x>", "<a@x>"))
+        result = await get_thread(bridge.imap, "7", "INBOX")
+        assert {m["mailbox"] for m in result["messages"]} == {result["mailbox"]} == {"All Mail"}
+
+    def test_tool_docstring_does_not_promise_all_mail_always(self):
+        from protonmail_mcp.tools.threads import get_thread as tool
+
+        doc = tool.__doc__
+        assert 'get_email(uid, mailbox="All Mail")' not in doc
+        assert "mejlets eget mailbox-fält" in doc
+        assert "saknar Message-ID" in doc
+
+    def test_module_docstring_does_not_promise_all_mail_always(self):
+        assert 'mailbox ("All Mail")' not in get_thread.__doc__

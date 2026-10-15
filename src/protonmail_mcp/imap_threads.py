@@ -18,6 +18,7 @@ anrop, och IMAP-låset hålls bara under en sökning åt gången (SELECT + SEARC
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import timezone
@@ -199,7 +200,8 @@ async def get_thread(imap, uid: str, mailbox: str, max_messages: int = 50) -> di
             "complete": False,
             "note": (
                 "Mejlet saknar Message-ID, så konversationen kan inte sökas fram. "
-                "Bara mejlet självt returneras."
+                f"Bara mejlet självt returneras; dess uid gäller i {mailbox}, så läs det "
+                f"med get_email(uid, mailbox={json.dumps(mailbox, ensure_ascii=False)})."
             ),
         }
 

@@ -21,7 +21,10 @@ async def get_thread(
     Message-ID, In-Reply-To och References: alla mejl i All Mail som hör till
     samma kedja, både mottagna och skickade. Inget ändras — inga mejl
     markeras som lästa. Brödtexten hämtas inte; läs varje mejl med
-    get_email(uid, mailbox="All Mail").
+    get_email(uid, mailbox=...) där mailbox är mejlets eget mailbox-fält i
+    svaret. Det är "All Mail" (UID:n i All Mail), utom när startmejlet
+    saknar Message-ID: då kan tråden inte sökas fram, bara startmejlet
+    returneras och dess uid och mailbox är de som angavs.
 
     Mejl som svarar utan In-Reply-To/References (t.ex. ett nytt mejl med samma
     ämne) kommer inte med. Varje sökning i All Mail tar några sekunder
@@ -37,8 +40,9 @@ async def get_thread(
             konversationen längre returneras startmejlet och de senaste.
 
     Returns:
-        dict med mailbox ("All Mail"), messages (äldst först; uid i All Mail,
-        mailbox, from, to, cc, subject, date, message_id, in_reply_to, flags),
+        dict med mailbox (vyn där mejlens uid gäller, samma som varje mejls
+        mailbox-fält), messages (äldst först; uid, mailbox, from, to, cc,
+        subject, date, message_id, in_reply_to, flags),
         total (antal hittade mejl), complete (False om något tak nåddes
         eller startmejlet saknar Message-ID) och note.
 

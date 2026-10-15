@@ -104,3 +104,18 @@ def other_call_ran_between(outcome):
     events = outcome["events"]
     assert events.count("sökning") >= 2, events
     assert events.index("annat anrop") < events.index("sökning", 1), events
+
+
+@then(parsers.parse('ska konversationen bestå av UID "{uids}"'))
+def thread_has_uids(outcome, uids):
+    assert "error" not in outcome, outcome.get("error")
+    assert [m["uid"] for m in outcome["result"]["messages"]] == [u.strip() for u in uids.split(",")]
+
+
+@then("ska beskrivningen av get_thread hänvisa till varje mejls mailbox-fält")
+def docstring_points_to_each_mailbox():
+    from protonmail_mcp.tools.threads import get_thread
+
+    doc = get_thread.__doc__
+    assert 'get_email(uid, mailbox="All Mail")' not in doc
+    assert "mejlets eget mailbox-fält" in doc
