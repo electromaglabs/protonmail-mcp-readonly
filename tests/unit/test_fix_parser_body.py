@@ -14,20 +14,20 @@ def _alternative(plain: str, html: str) -> bytes:
 
 
 class TestHtmlIsLimited:
-    """PE2: max_length/body_format gäller även body_html."""
+    """PE2: förvalda parametrar ger ingen stor HTML.
+
+    Ändrat i efterfix-rensning (F3): i "text" och "stripped" returneras ingen
+    HTML alls (body_html är None, has_html säger att den finns), eftersom det
+    är i rå HTML som gömd text finns. Hela HTML:en ges av "full"."""
 
     BIG = "<html><body>" + "x" * 10_000 + "</body></html>"
 
     @pytest.mark.parametrize("fmt", ["text", "stripped"])
-    def test_html_truncated_in_text_modes(self, fmt):
-        result = parse_email(_alternative("hej", self.BIG), body_format=fmt, max_length=500)
-        assert result["body_html"].startswith("<html><body>xxx")
-        assert len(result["body_html"]) <= 500 + len("\n[...99999 characters remaining]")
-        assert "characters remaining]" in result["body_html"]
-
-    def test_html_untruncated_when_max_length_none(self):
-        result = parse_email(_alternative("hej", self.BIG), body_format="text", max_length=None)
-        assert result["body_html"] == self.BIG
+    @pytest.mark.parametrize("max_length", [500, None])
+    def test_no_html_in_text_modes(self, fmt, max_length):
+        result = parse_email(_alternative("hej", self.BIG), body_format=fmt, max_length=max_length)
+        assert result["body_html"] is None
+        assert result["has_html"] is True
 
     def test_full_returns_complete_html(self):
         result = parse_email(_alternative("hej", self.BIG), body_format="full", max_length=5)

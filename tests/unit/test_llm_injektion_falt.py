@@ -51,7 +51,7 @@ class TestParseEmail:
             result = parse_email(raw, body_format=fmt, max_length=None)
             assert ZW not in result["body_plain"] and RLO not in result["body_plain"]
             assert "\U000e0073" not in result["body_plain"]
-            assert ZW not in result["body_html"]
+            assert ZW not in (result["body_html"] or "")  # None utom i full (efterfix-rensning F3)
         assert parse_email(raw)["body_plain"].startswith("Hej du\n> citat")
 
     def test_html_text_rensas_efter_entitetsavkodning(self):

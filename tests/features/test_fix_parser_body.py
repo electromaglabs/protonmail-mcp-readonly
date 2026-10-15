@@ -46,6 +46,13 @@ def html_at_most(result, n):
     assert len(result["body_html"]) <= n
 
 
+@then("ska body_html saknas")
+def html_absent(result):
+    # efterfix-rensning (F3): rå HTML bara med body_format="full"
+    assert result["body_html"] is None
+    assert result["has_html"] is True
+
+
 @then(parsers.parse("body_plain ska vara högst {n:d} tecken"))
 def plain_at_most(result, n):
     assert len(result["body_plain"]) <= n

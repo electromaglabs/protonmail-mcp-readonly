@@ -29,8 +29,9 @@ class TestParseEmailPlainText:
         assert "Hello world!" in result["body_plain"]
 
     def test_body_html_empty(self, sample_raw_email):
-        result = parse_email(sample_raw_email)
+        result = parse_email(sample_raw_email, body_format="full")  # efterfix-rensning (F3): HTML bara i full
         assert result["body_html"] == ""
+        assert parse_email(sample_raw_email)["has_html"] is False
 
 
     def test_headers_are_json_serializable(self, sample_raw_email):
@@ -49,7 +50,7 @@ class TestParseEmailHtml:
         assert "<p>" not in result["body_plain"]
 
     def test_body_html_contains_html(self, sample_html_email):
-        result = parse_email(sample_html_email)
+        result = parse_email(sample_html_email, body_format="full")  # efterfix-rensning (F3): HTML bara i full
         assert "<html>" in result["body_html"]
         assert "<p>Hello!</p>" in result["body_html"]
 
@@ -62,7 +63,7 @@ class TestParseEmailMultipart:
         assert "Plain text" in result["body_plain"]
 
     def test_body_html_populated(self, sample_multipart_email):
-        result = parse_email(sample_multipart_email)
+        result = parse_email(sample_multipart_email, body_format="full")  # efterfix-rensning (F3): HTML bara i full
         assert "<p>HTML</p>" in result["body_html"]
 
     def test_multiple_to(self, sample_multipart_email):
@@ -196,7 +197,9 @@ class TestParseEmailEdgeCases:
         result = parse_email(raw)
         assert "Only HTML here" in result["body_plain"]
         assert "<p>" not in result["body_plain"]
-        assert "<p>Only HTML here</p>" in result["body_html"]
+        # efterfix-rensning (F3): HTML bara i full
+        assert result["body_html"] is None and result["has_html"] is True
+        assert "<p>Only HTML here</p>" in parse_email(raw, body_format="full")["body_html"]
 
 
 class TestBodyFormatAndMaxLength:

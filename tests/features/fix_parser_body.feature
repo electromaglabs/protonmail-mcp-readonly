@@ -6,7 +6,7 @@ Feature: Brödtext och bilagor i hämtade mejl
   Scenario: Stort HTML-nyhetsbrev med förvalda parametrar
     Given ett multipart/alternative-mejl med 200000 tecken HTML
     When jag hämtar mejlet med get_email med förvalda parametrar
-    Then ska body_html vara högst 600 tecken
+    Then ska body_html saknas
     And body_plain ska vara högst 600 tecken
 
   Scenario: Hela HTML:en går att få med body_format full

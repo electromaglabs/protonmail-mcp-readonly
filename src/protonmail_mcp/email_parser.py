@@ -4,6 +4,7 @@ import email
 import email.header
 import email.quoprimime
 import email.utils
+import html
 import re
 from datetime import timezone
 from email.message import Message
@@ -734,11 +735,26 @@ def parse_email(
         body_plain = _strip_quotes_and_signature(body_plain)
         body_plain = _truncate(body_plain, max_length)
 
-    if body_format != "full":
-        # HTML är ofta 100+ KB (nyhetsbrev) — samma gräns som body_plain, så att
-        # förvalda parametrar inte spräcker klientens kontext. Hela HTML:en
-        # finns i "full" eller med max_length=None.
-        body_html = _truncate(body_html, max_length)
+    has_html = bool(body_html)
+    html_reasons: list[str] = []
+    if body_format == "full":
+        # Rå HTML följer med; gömt innehåll i den flaggas, eftersom det når
+        # modellen här (men inte i body_plain)
+        if html_report.hidden_elements:
+            html_reasons.append(
+                f"gömd HTML-text i body_html: {html_report.hidden_elements} element "
+                "(syns inte för läsaren men finns i den råa HTML:en)"
+            )
+        if n := sanitize_text(html.unescape(body_html)).removed.get("tag"):
+            html_reasons.append(
+                f"osynliga Unicode-taggtecken som HTML-entiteter i body_html: {n} "
+                "(kan bära dolda instruktioner)"
+            )
+    else:
+        # I "text" och "stripped" returneras ingen HTML: dess synliga text
+        # finns redan i body_plain (när textdelen saknas), och det är i rå
+        # HTML som gömd text finns. Rå HTML ges av body_format="full".
+        body_html = None
 
     # Visningsnamnen rensas. Ur adresserna tas inget bort: osynliga tecken
     # visas som [U+XXXX] och flaggas, så att visningen avslöjar exakt vad
@@ -787,6 +803,7 @@ def parse_email(
         "date_iso": iso_date(date),
         "body_plain": body_plain,
         "body_html": body_html,
+        "has_html": has_html,
         "attachments": parts["attachments"],
         "in_reply_to": clean.add("in_reply_to", clean_msg_ids(_raw_header(msg, "In-Reply-To"))),
         "references": clean.add("references", clean_msg_ids(_raw_header(msg, "References"))),
@@ -796,7 +813,9 @@ def parse_email(
     # rensats bort (antal tecken per fält, bara fält där något togs bort)
     result["untrusted_content_notice"] = UNTRUSTED_CONTENT_NOTICE
     result["sanitized"] = dict(clean.counts)
-    result["suspicious_content"] = suspicious_reasons([subject, full_plain], clean, html_report)
+    result["suspicious_content"] = (
+        suspicious_reasons([subject, full_plain], clean, html_report) + html_reasons
+    )
     # Gömda HTML-element (finns kvar i body_html men inte i body_plain) och
     # vit text utan bakgrundsfärg, som antal
     result["hidden_html"] = _hidden_html(html_report)
