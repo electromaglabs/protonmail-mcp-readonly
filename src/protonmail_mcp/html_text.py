@@ -40,9 +40,18 @@ _IMPLIED_END = {
     "tr": {"tr"},
     "option": {"option"},
 }
-# Högst så många nästlade element med font-size/visibility/color/bakgrund följs;
-# djupare nästling ignoreras, så varje tagg kostar högst så mycket
-_MAX_STYLE_STACK = 40
+# Starttagg → de öppna element den stänger (inversen av _IMPLIED_END)
+_CLOSED_BY: dict[str, frozenset[str]] = {}
+for _open, _closers in _IMPLIED_END.items():
+    for _closer in _closers:
+        _CLOSED_BY[_closer] = _CLOSED_BY.get(_closer, frozenset()) | {_open}
+# Element som avgränsar sökningen efter ett implicit stängt element: ett <li>
+# i en inre lista stänger inte den yttre listans <li>, en <td> i en inre
+# tabell inte den yttre tabellens cell (HTML:s "scope")
+_SCOPE_BOUNDARY = frozenset({"table", "ul", "ol", "dl", "td", "th", "caption", "button", "html", "body"})
+# Så djupt i stacken söks ett implicit stängt element — längre ned räknas det
+# som inte öppet, så att varje starttagg kostar högst så mycket
+_MAX_IMPLIED_SCAN = 64
 _FONT_SIZE_RE = re.compile(r"font-size:([0-9]*\.?[0-9]+)(px|pt|em|rem|%)?")
 _OPACITY_RE = re.compile(r"(?:^|;)opacity:([0-9]*\.?[0-9]+)(%)?")
 _VISIBILITY_RE = re.compile(r"(?:^|;)visibility:(hidden|collapse|visible)")
@@ -99,6 +108,15 @@ def _soft_style(attrs, style: str) -> dict[str, bool]:
     return props
 
 
+# Ärvt tillstånd för ett öppet element:
+# (gömt för gott, font-size 0, visibility:hidden, vit text, ljus/ingen bakgrund)
+_ROOT = (False, False, False, False, True)
+
+
+def _visible_state(state: tuple) -> bool:
+    return not (state[0] or state[1] or state[2])
+
+
 @dataclass
 class HtmlText:
     """Resultatet av html_to_text_report.
@@ -130,13 +148,12 @@ class _TextExtractor(HTMLParser):
         self.in_head = False
         self.pre = 0
         self.quote = 0
-        # Gömt innehåll: hard = (taggnamn, djup) för ett element som display:none
-        self.hard: list = [None, 0]
-        # Ärvda stilar: [taggnamn, djup, egenskaper]; se _soft_style
-        self.styles: list[list] = []
-        self.style_tags: dict[str, int] = {}  # taggnamn → antal poster i styles
-        self.soft_hidden = False
-        self.white = False
+        # Öppna element som (taggnamn, tillstånd); tillståndet är det ärvda
+        # (se _State) och beräknas ur förälderns när elementet öppnas, så en
+        # tagg kostar O(1) oavsett djup. stack_tags räknar taggnamn i stacken.
+        self.stack: list[tuple[str, tuple]] = []
+        self.stack_tags: dict[str, int] = {}
+        self.state = _ROOT
         self.hidden_parts: list[str] = []
         self.white_parts: list[str] = []
         self.hidden_elements = 0
@@ -176,69 +193,80 @@ class _TextExtractor(HTMLParser):
         self.hidden_elements += 1
         self.hidden_reasons[reason] = self.hidden_reasons.get(reason, 0) + 1
 
-    def _restyle(self) -> None:
-        """Räkna om de ärvda stilarna: det innersta elementet som sätter en
-        egenskap gäller."""
-        found: dict[str, bool] = {}
-        for _, _, props in reversed(self.styles):
-            for key, value in props.items():
-                found.setdefault(key, value)
-        self.soft_hidden = found.get("font_zero", False) or found.get("vis_hidden", False)
-        self.white = found.get("white", False) and found.get("light_bg", True)
+    def _pop_to(self, index: int) -> None:
+        """Stäng elementet på plats index och allt innanför det."""
+        for tag, _ in self.stack[index:]:
+            self.stack_tags[tag] -= 1
+        del self.stack[index:]
+        self.state = self.stack[-1][1] if self.stack else _ROOT
 
     def _close_tracked(self, tag: str) -> None:
-        """Ett sluttagg (äkta eller underförstått) för de spårade elementen."""
-        if self.hard[0] == tag:
-            self.hard[1] -= 1
-            if self.hard[1] == 0:
-                self.hard = [None, 0]
-        if not self.style_tags.get(tag):
+        """Ett sluttagg: stäng närmaste öppna element med namnet och allt
+        innanför (som en webbläsare gör med ostängda barn). Ett sluttagg
+        utan öppet element ignoreras. Amorterat O(1): varje element stängs
+        en gång."""
+        if not self.stack_tags.get(tag):
             return
-        outermost = None
-        for i, entry in enumerate(self.styles):
-            if entry[0] == tag:
-                entry[1] -= 1
-                if entry[1] == 0 and outermost is None:
-                    outermost = i
-        if outermost is not None:
-            for entry in self.styles[outermost:]:  # allt innanför stängs också
-                self.style_tags[entry[0]] -= 1
-            del self.styles[outermost:]
-            self._restyle()
+        index = len(self.stack) - 1
+        while self.stack[index][0] != tag:
+            index -= 1
+        self._pop_to(index)
+
+    def _close_implied(self, tag: str) -> None:
+        """Starttaggar som stänger öppna element (<p> före ett block, <td>
+        före nästa cell …), inom samma "scope" och högst _MAX_IMPLIED_SCAN
+        element ned."""
+        closes = _CLOSED_BY.get(tag)
+        if not closes or not any(self.stack_tags.get(t) for t in closes):
+            return
+        target = None
+        for index in range(len(self.stack) - 1, max(-1, len(self.stack) - 1 - _MAX_IMPLIED_SCAN), -1):
+            open_tag = self.stack[index][0]
+            if open_tag in closes:
+                target = index
+            elif open_tag in _SCOPE_BOUNDARY:
+                break
+        if target is not None:
+            self._pop_to(target)
 
     def _track_start(self, tag: str, attrs) -> None:
-        for open_tag, closers in _IMPLIED_END.items():
-            if tag in closers and (self.hard[0] == open_tag or self.style_tags.get(open_tag)):
-                self._close_tracked(open_tag)
+        self._close_implied(tag)
         if tag in _VOID:
             return
-        if self.hard[0] is not None:
-            if tag == self.hard[0]:
-                self.hard[1] += 1
-            return  # inget i ett gömt element kan bli synligt
-        if self.style_tags.get(tag):
-            for entry in self.styles:
-                if entry[0] == tag:
-                    entry[1] += 1
-        style = _style(attrs)
-        reason = _hard_hidden(attrs, style)
-        if reason:
-            self.hard = [tag, 1]
-            self._hide(reason)
-            return
-        props = _soft_style(attrs, style)
-        if props and len(self.styles) < _MAX_STYLE_STACK:
-            was_hidden = self.soft_hidden
-            self.styles.append([tag, 1, props])
-            self.style_tags[tag] = self.style_tags.get(tag, 0) + 1
-            self._restyle()
-            if self.soft_hidden and not was_hidden:
-                self._hide("font-size:0" if props.get("font_zero") else "visibility:hidden")
+        parent = self.state
+        hard, font_zero, vis_hidden, white, light_bg = parent
+        reason = None
+        if not hard:
+            style = _style(attrs)
+            reason = _hard_hidden(attrs, style)
+            if reason:
+                hard = True
+            else:
+                props = _soft_style(attrs, style)
+                font_zero = props.get("font_zero", font_zero)
+                vis_hidden = props.get("vis_hidden", vis_hidden)
+                white = props.get("white", white)
+                light_bg = props.get("light_bg", light_bg)
+                if (font_zero or vis_hidden) and not (parent[1] or parent[2]):
+                    reason = "font-size:0" if font_zero and props.get("font_zero") else "visibility:hidden"
+            if reason and _visible_state(parent):
+                self._hide(reason)
+        state = (hard, font_zero, vis_hidden, white, light_bg)
+        self.stack.append((tag, state))
+        self.stack_tags[tag] = self.stack_tags.get(tag, 0) + 1
+        self.state = state
 
     def _visible(self) -> bool:
-        return self.hard[0] is None and not self.soft_hidden
+        return _visible_state(self.state)
 
     # --- HTMLParser-hooks -------------------------------------------------
+    def handle_startendtag(self, tag, attrs):
+        # "/>" gäller bara tomma element (och SVG/MathML); <div/> är en
+        # vanlig starttagg i HTML, som webbläsaren håller öppen
+        self.handle_starttag(tag, attrs)
+        if tag in _VOID:
+            self.handle_endtag(tag)
+
     def handle_starttag(self, tag, attrs):
         self._track_start(tag, attrs)
         if tag == "head":
@@ -293,7 +321,7 @@ class _TextExtractor(HTMLParser):
             if data.strip():
                 self.hidden_parts.append(data)
             return
-        if self.white and data.strip():
+        if self.state[3] and self.state[4] and data.strip():
             self.white_parts.append(data)
         if self.pre:
             first, *rest = data.split("\n")

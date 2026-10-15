@@ -42,7 +42,9 @@ class TestDoltInnehall:
         assert html_to_text('<p style="font-size:0">gömd<div>synlig</div>') == "synlig"
 
     def test_tomt_element_med_snedstreck(self):
-        assert html_to_text('<div style="display:none"/>synlig') == "synlig"
+        # Ändrat i efterfix-rensning (F8a): "/>" stänger inte en <div> i HTML —
+        # webbläsaren gömmer det som följer, och då gör modellen det också
+        assert html_to_text('<div style="display:none"/>gömd') == ""
 
     def test_void_element_doljer_inget(self):
         assert html_to_text('<img style="display:none" src="x">synlig') == "synlig"
