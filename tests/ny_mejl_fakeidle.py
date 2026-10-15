@@ -257,24 +257,21 @@ class FakeIdleBridge:
         """Som en riktig server: "n:*" ger alltid minst det sista mejlet (RFC 3501)."""
         if not box.messages:
             return []
-        top = max(m.uid for m in box.messages)
-        wanted: set[int] = set()
-        for part in uid_set.split(","):
-            lo, _, hi = part.partition(":")
-            lo_n = top if lo == "*" else int(lo)
-            hi_n = lo_n if not hi else (top if hi == "*" else int(hi))
-            lo_n, hi_n = sorted((lo_n, hi_n))
-            wanted |= set(range(lo_n, hi_n + 1))
-        return [m for m in box.messages if m.uid in wanted]
+        return FakeIdleBridge._in_set(box.messages, uid_set, max(m.uid for m in box.messages),
+                                      lambda i, m: m.uid)
 
     @staticmethod
     def _select_seqs(box: FakeBox, seq_set: str) -> list[FakeMessage]:
-        total = len(box.messages)
-        wanted: set[int] = set()
-        for part in seq_set.split(","):
+        return FakeIdleBridge._in_set(box.messages, seq_set, len(box.messages), lambda i, m: i)
+
+    @staticmethod
+    def _in_set(messages, message_set: str, top: int, number) -> list[FakeMessage]:
+        """Mejlen vars nummer ligger i mängden (intervall jämförs, byggs inte upp)."""
+        ranges = []
+        for part in message_set.split(","):
             lo, _, hi = part.partition(":")
-            lo_n = total if lo == "*" else int(lo)
-            hi_n = lo_n if not hi else (total if hi == "*" else int(hi))
-            lo_n, hi_n = sorted((lo_n, hi_n))
-            wanted |= set(range(lo_n, hi_n + 1))
-        return [m for i, m in enumerate(box.messages, 1) if i in wanted]
+            lo_n = top if lo == "*" else int(lo)
+            hi_n = lo_n if not hi else (top if hi == "*" else int(hi))
+            ranges.append(sorted((lo_n, hi_n)))
+        return [m for i, m in enumerate(messages, 1)
+                if any(lo <= number(i, m) <= hi for lo, hi in ranges)]

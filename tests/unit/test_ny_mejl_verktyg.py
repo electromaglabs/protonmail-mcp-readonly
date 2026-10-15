@@ -18,9 +18,9 @@ def _settings(**kw):
     return Settings(username="u", password="p", imap_port=1, _env_file=None, **kw)
 
 
-def _poll_result(messages=(), last_uid=3, uidvalidity=1, reset=False, has_more=False):
+def _poll_result(messages=(), last_uid=3, uidvalidity=1, reset=False, has_more=False, clamped=False):
     return {"messages": list(messages), "uidvalidity": uidvalidity, "last_uid": last_uid,
-            "has_more": has_more, "reset": reset}
+            "has_more": has_more, "reset": reset, "clamped": clamped}
 
 
 @pytest.fixture(autouse=True)

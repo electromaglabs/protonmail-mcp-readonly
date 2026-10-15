@@ -162,21 +162,26 @@ async def poll_new_messages(
     ett nytt vattenmärke (UIDNEXT - 1). Annars de äldsta `limit` mejlen över
     after (så att vattenmärket kan flyttas fram utan luckor), nyaste först.
 
+    Ligger after förbi det senaste mejlet (UIDNEXT - 1) blir last_uid
+    UIDNEXT - 1 och clamped True: ett vattenmärke får aldrig peka förbi
+    riktiga mejl.
+
     Returnerar dict med messages, uidvalidity, last_uid (nytt vattenmärke),
-    has_more och reset (True om UIDVALIDITY ändrats).
+    has_more, reset (True om UIDVALIDITY ändrats) och clamped.
     """
     _quote_mailbox(mailbox)
     await imap._ensure_connected()
     info = await select_info(imap, mailbox)
+    newest = info.uidnext - 1
     reset = uidvalidity is not None and info.uidvalidity != uidvalidity
-    if after is None or reset:
-        return {"messages": [], "uidvalidity": info.uidvalidity, "last_uid": info.uidnext - 1,
-                "has_more": False, "reset": reset}
+    if after is None or reset or after > newest:
+        return {"messages": [], "uidvalidity": info.uidvalidity, "last_uid": newest,
+                "has_more": False, "reset": reset, "clamped": after is not None and not reset}
     uids = await new_uids(imap, after)
     taken = uids[:limit]
     msgs = await fetch_metadata(imap, mailbox, taken) if taken else []
     return {"messages": msgs, "uidvalidity": info.uidvalidity, "last_uid": taken[-1] if taken else after,
-            "has_more": len(uids) > len(taken), "reset": False}
+            "has_more": len(uids) > len(taken), "reset": False, "clamped": False}
 
 
 @dataclass
@@ -306,11 +311,12 @@ class MailWatcher:
         """Mejl i kön med UID över after, nyaste först.
 
         None om kön inte kan svara säkert: mappen bevakas inte, after är
-        äldre än kön, eller UIDVALIDITY är ett annat.
+        äldre än kön eller högre än något UID bevakningen har sett, eller
+        UIDVALIDITY är ett annat.
         """
         state = self._state(mailbox)
         if (not self.enabled or state is None or state.floor is None
-                or state.uidvalidity != uidvalidity or after < state.floor):
+                or state.uidvalidity != uidvalidity or not state.floor <= after <= state.watermark):
             return None
         return [m for m in reversed(state.events) if int(m["uid"]) > after]
 
@@ -349,6 +355,7 @@ class MailWatcher:
             if len(state.events) == state.events.maxlen:
                 state.floor = max(state.floor or 0, int(state.events[0]["uid"]))
             state.events.append(msg)
+            state.watermark = max(state.watermark or 0, int(msg["uid"]))
         state.last_event = _now()
         self._wake(state)
 

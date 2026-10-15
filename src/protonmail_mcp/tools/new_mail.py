@@ -6,7 +6,11 @@ den delade anslutningen (UID SEARCH över vattenmärket), och svaret säger det
 (source "imap" och note). Metadatan kommer från samma parser som list_emails.
 
 Servern håller ett vattenmärke per mapp, (UIDVALIDITY, UID): det högsta UID
-som ett anrop har returnerat. Det flyttas aldrig bakåt.
+som ett anrop har returnerat. Det flyttas bara framåt och bara till UID som
+faktiskt returnerats (eller, första gången, till det senaste mejlet), och
+aldrig förbi det senaste mejlet i mappen (UIDNEXT - 1): ett märke som ändå
+gör det dras tillbaka. since_uid är en engångsfråga och ändrar det aldrig,
+så ett påhittat högt since_uid kan inte dölja kommande mejl.
 """
 import asyncio
 from typing import Annotated, Any
@@ -45,10 +49,11 @@ def _live(app, mailbox: str):
     return watcher if watcher is not None and watcher.is_watching(mailbox) else None
 
 
-def _advance(marks: dict, key: str, uidvalidity: int | None, uid: int) -> None:
+def _advance(marks: dict, key: str, result: dict[str, Any]) -> None:
+    uidvalidity, uid = result["uidvalidity"], result["last_uid"]
     old = marks.get(key)
-    if old is not None and old[0] == uidvalidity and old[1] >= uid:
-        return  # aldrig bakåt
+    if old is not None and old[0] == uidvalidity and old[1] >= uid and not result["clamped"]:
+        return  # aldrig bakåt, utom när märket pekade förbi det senaste mejlet
     marks[key] = (uidvalidity, uid)
 
 
@@ -73,14 +78,16 @@ async def _collect(app, mailbox: str, since_uid: str | None) -> dict[str, Any]:
         result = {
             "messages": taken, "uidvalidity": uidvalidity, "has_more": len(queued) > len(taken),
             "last_uid": max((int(m["uid"]) for m in taken), default=after), "reset": False,
-            "source": "watcher",
+            "clamped": False, "source": "watcher",
         }
     else:
         check_validity = uidvalidity if since_uid is None else None
         result = await poll_new_messages(app.imap, mailbox, after, check_validity, MAX_MESSAGES)
         result["source"] = "imap"
-    _advance(marks, key, result["uidvalidity"], result["last_uid"])
+    if since_uid is None:  # since_uid är en engångsfråga: märket rörs inte
+        _advance(marks, key, result)
     result["after"] = after
+    result["since_uid_given"] = since_uid is not None
     return result
 
 
@@ -103,6 +110,12 @@ def _note(app, mailbox: str, result: dict[str, Any]) -> str | None:
         notes.append(f"UIDVALIDITY för {mailbox} har ändrats (Bridge har synkat om mappen), så "
                      "de gamla UID:na gäller inte. Vattenmärket är satt om; mejl som kom under "
                      "bytet visas inte här — använd list_emails.")
+    elif result["clamped"] and result["since_uid_given"]:
+        notes.append(f"since_uid {result['after']} är högre än det senaste mejlet i {mailbox} "
+                     f"(UID {result['last_uid']}), så det finns inga mejl efter det.")
+    elif result["clamped"]:
+        notes.append(f"Vattenmärket för {mailbox} låg förbi det senaste mejlet och är satt till "
+                     f"UID {result['last_uid']}. Kontrollera med list_emails om något mejl har missats.")
     elif result["after"] is None:
         notes.append(f"Första anropet för {mailbox}: inga mejl visas, men vattenmärket är satt "
                      f"till UID {result['last_uid']}. Nästa anrop visar mejl som kommit efter det.")
@@ -153,8 +166,9 @@ async def check_new_emails(
     Args:
         mailbox: Mappen att kolla (standard: INBOX)
         since_uid: Visa mejl med UID över detta i stället för sedan förra
-            anropet. UID:t måste vara från samma mapp. Vattenmärket flyttas
-            fram om svaret går längre, men aldrig bakåt.
+            anropet. UID:t måste vara från samma mapp. En engångsfråga:
+            serverns vattenmärke ändras inte, så nästa anrop utan since_uid
+            fortsätter där det förra slutade.
 
     Returns:
         dict med mailbox, messages (nyaste först, samma fält som list_emails:
