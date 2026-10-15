@@ -21,6 +21,9 @@ Per mapp, i en bakgrundsuppgift:
    "ett nytt mejl kan ha kommit", och sökningen görs om innan nästa IDLE.
 4. Bryts anslutningen (Bridge startas om) görs ett nytt försök efter
    BACKOFF_INITIAL sekunder, sedan dubbelt så länge upp till BACKOFF_MAX.
+   Väntetiden börjar om först när en IDLE-omgång har gått klart: nekar
+   Bridge IDLE eller bryter den direkt växer den ändå. Mappen räknas som
+   bevakad (is_watching) först när Bridge har bekräftat IDLE.
    Vid återanslutning hämtas det som kom under avbrottet. Har UIDVALIDITY
    ändrats gäller inte de gamla UID:na: vattenmärket och kön nollställs och
    UIDNEXT - 1 blir nytt vattenmärke.
@@ -39,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from aioimaplib.aioimaplib import STOP_WAIT_SERVER_PUSH
+from aioimaplib.aioimaplib import STOP_WAIT_SERVER_PUSH, Abort
 
 from .config import Settings
 from .imap_client import (
@@ -409,6 +412,8 @@ class MailWatcher:
 
     async def _run(self, state: _MailboxState) -> None:
         delay = self._backoff_initial
+        # Senast loggade fel; samma fel om och om igen loggas bara första gången
+        logged_error: str | None = None
         while not self._stopping:
             imap = IMAPClient(self._settings)
             client = None
@@ -420,21 +425,21 @@ class MailWatcher:
                     raise ConnectionError("ProtonMail Bridge stöder inte IDLE")
                 info = await select_info(imap, state.name)
                 await self._sync(state, imap, info)
-                state.connected, state.last_error = True, None
-                delay = self._backoff_initial
                 logger.info("Bevakar %s efter nya mejl (IDLE)", state.name)
                 while not self._stopping:
-                    await self._idle(imap, client)
+                    await self._idle(imap, client, state)
                     if self._stopping:
                         break
                     await self._catch_up(state, imap, client)
+                    # En hel omgång gick klart: nästa avbrott är ett nytt fel
+                    delay, logged_error = self._backoff_initial, None
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — bevakningen får aldrig krascha servern
                 error = str(exc) or type(exc).__name__
                 # Samma fel om och om igen (Bridge nere) loggas bara första gången
-                log = logger.warning if error != state.last_error else logger.debug
-                state.last_error = error
+                log = logger.warning if error != logged_error else logger.debug
+                state.last_error = logged_error = error
                 log("Bevakningen av %s avbröts: %s — nytt försök om %g s", state.name, error, delay)
             finally:
                 state.connected = False
@@ -490,10 +495,11 @@ class MailWatcher:
         logger.info("%d nytt/nya mejl i %s", len(msgs), state.name)
         await self._notify(state.name, msgs)
 
-    async def _idle(self, imap: IMAPClient, client) -> bool:
+    async def _idle(self, imap: IMAPClient, client, state: _MailboxState | None = None) -> bool:
         """En IDLE-omgång. True vid nytt mejl, False när den ska förnyas.
 
-        Kastar om anslutningen bryts eller Bridge inte svarar.
+        När Bridge har bekräftat IDLE räknas state som ansluten. Kastar om
+        anslutningen bryts, Bridge nekar IDLE eller inte svarar.
         """
         if self._stopping:
             return False
@@ -505,6 +511,10 @@ class MailWatcher:
             raise asyncio.TimeoutError(
                 f"ProtonMail Bridge bekräftade inte IDLE inom {imap.timeout:g} s"
             ) from None
+        except Abort:
+            raise ConnectionError("ProtonMail Bridge nekade IDLE") from None
+        if state is not None:
+            state.connected, state.last_error = True, None
         new_mail = False
         push = None
         try:

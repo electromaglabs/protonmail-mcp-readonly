@@ -72,6 +72,9 @@ def _first_arg(rest: str) -> tuple[str, str]:
 class FakeIdleBridge:
     def __init__(self, *, idle: bool = True) -> None:
         self.idle_supported = idle
+        # None: IDLE fungerar. "no": IDLE nekas med NO. "close": anslutningen
+        # stängs direkt efter "+ idling".
+        self.idle_mode: str | None = None
         self.boxes: dict[str, FakeBox] = {}
         self.commands: list[tuple[int, str]] = []
         self.connections_total = 0
@@ -248,6 +251,12 @@ class FakeIdleBridge:
         elif cmd == "IDLE":
             if not self.idle_supported:
                 result = "BAD"
+            elif self.idle_mode == "no":
+                result = "NO"
+            elif self.idle_mode == "close":
+                self._write(conn, "+ idling\r\n")
+                conn.writer.close()
+                return None
             else:
                 conn.idle_tag = tag
                 self._write(conn, "+ idling\r\n" + self._flush(conn))
