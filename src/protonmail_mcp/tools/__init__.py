@@ -1,4 +1,5 @@
 import functools
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -60,7 +61,10 @@ def tool(
         wrapped = with_error_messages(fn, fn.__name__, open_world=open_world)
         if not read_only:
             wrapped = notify_after(wrapped, fn.__name__)
-        mcp.tool(name=fn.__name__, title=title, annotations=annotations)(wrapped)
+        # Samma beskrivning på alla Python-versioner: 3.13+ tar bort docstringens
+        # indrag vid kompileringen, 3.12 gör det inte
+        description = inspect.cleandoc(fn.__doc__ or "")
+        mcp.tool(name=fn.__name__, title=title, description=description, annotations=annotations)(wrapped)
         return fn
 
     return register

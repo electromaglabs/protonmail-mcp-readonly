@@ -1,5 +1,6 @@
 """BDD: MCP-kontraktet jämfört med facitfilen (karaktärisering inför SDK-byte)."""
 import asyncio
+import inspect
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -82,3 +83,11 @@ def refused(state, text):
 def no_prefix(state, prefix):
     result = state["result"]
     assert not (result.get("text") or result.get("mcp_error", "")).startswith(prefix)
+
+
+@then("ska ingen verktygsbeskrivning ha docstringens indrag eller tomma rader i slutet")
+def descriptions_are_clean(state):
+    # Python 3.13+ tar bort docstringens indrag vid kompileringen, 3.12 gör det inte;
+    # modellen ska få samma text oavsett vilken Python servern körs med
+    for tool in state["listing"]["tools"]:
+        assert tool["description"] == inspect.cleandoc(tool["description"]), tool["name"]

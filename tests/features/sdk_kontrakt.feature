@@ -21,3 +21,7 @@ Feature: MCP-kontraktet är detsamma efter byte av MCP-SDK
     When en MCP-klient anropar "send_email"
     Then ska anropet ge ett fel som nämner "skrivskydd"
     And ska felet inte börja med "Error executing tool"
+
+  Scenario: Verktygsbeskrivningarna är desamma på alla Python-versioner
+    When en MCP-klient ansluter och listar verktyg, resurser, resursmallar och promptar
+    Then ska ingen verktygsbeskrivning ha docstringens indrag eller tomma rader i slutet
