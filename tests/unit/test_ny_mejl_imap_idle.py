@@ -205,3 +205,29 @@ async def test_new_messages_fetched_with_peek_and_filtered_by_watermark():
     finally:
         await imap.disconnect()
         await fake.stop()
+
+
+async def test_stop_finishes_even_if_a_cancellation_is_swallowed():
+    """Python 3.10:s wait_for kan svälja en avbrytning (fixat i 3.12); stop() får ändå inte hänga."""
+    w = MailWatcher(_settings())
+    swallowed = asyncio.Event()
+
+    async def stubborn():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            swallowed.set()  # som wait_for i 3.10: avbrytningen försvinner
+        await asyncio.sleep(3600)  # väntar vidare som en ny IDLE-omgång
+
+    w._tasks["INBOX"] = asyncio.create_task(stubborn(), name="protonmail-watch:INBOX")
+    await asyncio.sleep(0)
+    await asyncio.wait_for(w.stop(), 3)
+    assert swallowed.is_set()
+    assert w._tasks == {}
+
+
+async def test_idle_not_started_when_stopping():
+    w = MailWatcher(_settings())
+    w._stopping = True
+    client = SimpleNamespace()  # inga attribut: ett IDLE-försök skulle ge AttributeError
+    assert await w._idle(SimpleNamespace(timeout=1), client) is False

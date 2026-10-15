@@ -252,10 +252,17 @@ class MailWatcher:
     async def stop(self) -> None:
         """Stoppa alla uppgifter och stäng anslutningarna. Kan anropas flera gånger."""
         self._stopping = True
-        tasks, self._tasks = list(self._tasks.values()), {}
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        pending, self._tasks = set(self._tasks.values()), {}
+        # Avbryt tills uppgiften verkligen är klar: asyncio.wait_for i Python
+        # 3.10–3.11 kan svälja en avbrytning som sammanfaller med att det den
+        # väntar på blir klart, och då skulle uppgiften gå vidare in i nästa IDLE.
+        while pending:
+            for task in pending:
+                task.cancel()
+            done, pending = await asyncio.wait(pending, timeout=0.5)
+            for task in done:
+                if not task.cancelled() and task.exception() is not None:
+                    logger.warning("Bevakningen avslutades med fel: %s", task.exception())
         for state in self._states.values():
             state.connected = False
             self._wake(state)
@@ -436,6 +443,8 @@ class MailWatcher:
 
         Kastar om anslutningen bryts eller Bridge inte svarar.
         """
+        if self._stopping:
+            return False
         queue = client.protocol.idle_queue
         while not queue.empty():  # t.ex. en försenad förnyelsesignal
             queue.get_nowait()
