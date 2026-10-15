@@ -24,8 +24,11 @@ async def get_thread(
     get_email(uid, mailbox="All Mail").
 
     Mejl som svarar utan In-Reply-To/References (t.ex. ett nytt mejl med samma
-    ämne) kommer inte med. Sökningen i All Mail tar några sekunder per runda
-    (3–8 s på ett konto med ~30 000 mejl), och görs i högst sex rundor.
+    ämne) kommer inte med. Varje sökning i All Mail tar några sekunder
+    (3–8 s på ett konto med ~30 000 mejl). Ett anrop gör högst tio sökningar,
+    följer högst 200 Message-ID:n (de närmaste mejlet först) och startar
+    ingen ny sökning efter 60 s; nås ett tak blir complete False och note
+    säger varför. Andra verktyg kan köras mellan sökningarna.
 
     Args:
         uid: Mejlets UID i mailbox
@@ -36,8 +39,8 @@ async def get_thread(
     Returns:
         dict med mailbox ("All Mail"), messages (äldst först; uid i All Mail,
         mailbox, from, to, cc, subject, date, message_id, in_reply_to, flags),
-        total (antal hittade mejl), complete (False om taket nåddes eller
-        startmejlet saknar Message-ID) och note.
+        total (antal hittade mejl), complete (False om något tak nåddes
+        eller startmejlet saknar Message-ID) och note.
 
     Raises:
         ValueError: ogiltigt UID eller mappnamn, mappen finns inte, inget mejl

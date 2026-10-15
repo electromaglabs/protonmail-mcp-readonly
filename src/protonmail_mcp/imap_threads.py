@@ -10,10 +10,16 @@ mottagna och skickade mejl.
 Verifierat live (läs-endast): HEADER Message-ID/In-Reply-To/References-sökning
 fungerar i All Mail och tar 3–8 s per SEARCH på ~32 000 mejl; en OR-kedja med
 flera ID:n tar ungefär lika lång tid som ett enda.
+
+References styrs av avsändaren och kan innehålla tusentals påhittade ID:n.
+Därför finns tak på antal ID:n som följs, antal SEARCH och total tid per
+anrop, och IMAP-låset hålls bara under en sökning åt gången (SELECT + SEARCH
++ FETCH), så att andra verktygsanrop kan köras mellan sökningarna.
 """
 from __future__ import annotations
 
 import re
+import time
 from datetime import timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -34,6 +40,20 @@ ALL_MAIL = "All Mail"
 _MAX_ROUNDS = 6
 # Så många ID:n per SEARCH; varje ID ger tre HEADER-nycklar i OR-kedjan
 _IDS_PER_SEARCH = 20
+# Tak per anrop. En vanlig konversation behöver 1–5 SEARCH (startmejlets ID:n,
+# sedan de nya ID:na från träffarna); 10 SEARCH är 30–80 s i All Mail och
+# räcker för 200 ID:n, lika många som max_messages tillåter mejl.
+_MAX_SEARCHES = 10
+_MAX_IDS = 200
+# Ingen ny SEARCH startas efter så här lång tid (varje SEARCH har dessutom
+# klientens egen timeout), så att ett anrop aldrig tar mer än ungefär en minut
+_TIME_BUDGET_S = 60.0
+_clock = time.monotonic
+# Så många av varje mejls ID:n (eget, In-Reply-To, roten och de närmaste i
+# References) söks före resten av References. Annars kan ett enda mejl med
+# tusentals påhittade ID:n förbruka hela budgeten innan de ID:n som de
+# riktiga mejlen i konversationen ger hinner sökas.
+_NEAREST_IDS = 10
 _MAX_LIMIT = 200
 _THREAD_FIELDS = "DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES"
 _EXTRA = ("cc", "in-reply-to", "references")
@@ -49,15 +69,17 @@ _MAX_ID_LENGTH = 998
 def _message_ids(*values: str | None) -> list[str]:
     """Alla msg-id i värdena, i ordning och utan dubbletter."""
     ids: list[str] = []
+    seen: set[str] = set()
     for value in values:
         for msg_id in _MSG_ID_RE.findall(value or ""):
             if (
-                msg_id not in ids
+                msg_id not in seen
                 and len(msg_id) <= _MAX_ID_LENGTH
                 and not _CONTROL_CHAR_RE.search(msg_id)
                 and not msg_id.lower().endswith(_PROTON_INTERNAL_SUFFIX)
             ):
                 ids.append(msg_id)
+                seen.add(msg_id)
     return ids
 
 
@@ -77,10 +99,16 @@ def _thread_criteria(ids: list[str]) -> list[str]:
 
 
 def _ids_of(meta: dict[str, Any]) -> list[str]:
-    return _message_ids(meta["message_id"], meta.get("in_reply_to"), meta.get("references"))
+    """Mejlets ID:n, de närmaste först: eget, In-Reply-To, roten, sedan References bakifrån.
+
+    När taket för antal ID:n nås är det de avlägsnaste (och avsändarens
+    eventuella skräp mitt i References) som inte söks.
+    """
+    refs = _message_ids(meta.get("references"))
+    return _message_ids(meta["message_id"], meta.get("in_reply_to"), *refs[:1], *refs[:0:-1])
 
 
-def _belongs(meta: dict[str, Any], known: set[str]) -> bool:
+def _belongs(meta: dict[str, Any], known) -> bool:
     """Exakt kontroll: servern söker delsträngar, så "<a@x>" träffar även "<ba@x>"."""
     return any(msg_id in known for msg_id in _ids_of(meta))
 
@@ -116,30 +144,52 @@ async def _fetch_thread_metadata(imap, seqnums: list[str]) -> list[dict[str, Any
 
 
 @_serialized
+async def _read_start(imap, uid: str, mailbox: str) -> dict[str, Any]:
+    await imap._ensure_connected()
+    await imap._select(mailbox)
+    resp = await imap._uid("fetch", uid, f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_THREAD_FIELDS})])")
+    _require_ok(resp, f"Hämtningen av UID {uid} i {mailbox}")
+    start = next((m for m in _parse_fetch_metadata(resp.lines, extra_headers=_EXTRA) if m["uid"] == uid), None)
+    if start is None:
+        raise ValueError(
+            f"Inget meddelande med UID {uid} i {mailbox}. "
+            "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
+        )
+    return start
+
+
+@_serialized
+async def _search_step(imap, ids: list[str]) -> list[dict[str, Any]]:
+    """En SEARCH i All Mail och metadata för träffarna, under låset.
+
+    All Mail väljs om varje gång: mellan stegen kan andra anrop ha valt en
+    annan mapp, och sekvensnumren gäller bara inom samma steg.
+    """
+    await imap._ensure_connected()
+    await imap._select(ALL_MAIL)
+    seqnums = await imap._search_seqnums(_thread_criteria(ids))
+    return await _fetch_thread_metadata(imap, seqnums)
+
+
 async def get_thread(imap, uid: str, mailbox: str, max_messages: int = 50) -> dict[str, Any]:
     """Hämtar konversationen som mejlet uid i mailbox ingår i, sorterad på datum.
 
-    Returnerar dict med mailbox ("All Mail"), messages (metadata: uid i All
-    Mail, mailbox, from, to, cc, subject, date, message_id, in_reply_to,
-    flags; äldst först), total (antal hittade mejl), complete och note.
+    Returnerar dict med mailbox, messages (metadata: uid, mailbox, from, to,
+    cc, subject, date, message_id, in_reply_to, flags; äldst först), total
+    (antal hittade mejl), complete och note. Varje mejls uid gäller i dess
+    eget mailbox-fält: All Mail, utom när startmejlet saknar Message-ID —
+    då returneras bara startmejlet, med uid och mailbox som det angavs.
     Med fler än max_messages träffar returneras startmejlet och de senaste.
+
+    Låset tas per steg (startmejlet, sedan en SEARCH i taget), inte för
+    hela anropet; se taken _MAX_IDS, _MAX_SEARCHES och _TIME_BUDGET_S.
     """
     safe_uid = _validate_uid(uid)
     _quote_mailbox(mailbox)
     if isinstance(max_messages, bool) or not isinstance(max_messages, int) or not 1 <= max_messages <= _MAX_LIMIT:
         raise ValueError(f"max_messages måste vara ett heltal 1–{_MAX_LIMIT} (fick {max_messages!r})")
 
-    await imap._ensure_connected()
-    await imap._select(mailbox)
-    resp = await imap._uid("fetch", safe_uid, f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_THREAD_FIELDS})])")
-    _require_ok(resp, f"Hämtningen av UID {safe_uid} i {mailbox}")
-    start = next((m for m in _parse_fetch_metadata(resp.lines, extra_headers=_EXTRA) if m["uid"] == safe_uid), None)
-    if start is None:
-        raise ValueError(
-            f"Inget meddelande med UID {safe_uid} i {mailbox}. "
-            "UID:n gäller per mapp — kontrollera att mailbox är samma mapp som UID:t kom från."
-        )
-
+    start = await _read_start(imap, safe_uid, mailbox)
     own_id = _message_ids(start["message_id"])
     if not own_id:
         return {
@@ -153,35 +203,50 @@ async def get_thread(imap, uid: str, mailbox: str, max_messages: int = 50) -> di
             ),
         }
 
-    await imap._select(ALL_MAIL)
-    known: list[str] = _ids_of(start)
+    deadline = _clock() + _TIME_BUDGET_S
+    # ID → (nivå, runda, ordning): nivå 0 för de närmaste ID:na i varje mejl,
+    # 1 för resten av References; runda = hur många led från startmejlet
+    known: dict[str, tuple[int, int, int]] = {}
+    # Fler ID:n än _MAX_IDS från ett mejl kan aldrig sökas; de räknas bara
+    dropped: set[str] = set()
+
+    def learn(meta: dict[str, Any], round_no: int) -> None:
+        ids = _ids_of(meta)
+        for rank, msg_id in enumerate(ids[:_MAX_IDS]):
+            if msg_id not in known:
+                known[msg_id] = (0 if rank < _NEAREST_IDS else 1, round_no, len(known))
+        dropped.update(msg_id for msg_id in ids[_MAX_IDS:] if msg_id not in known)
+
+    learn(start, 1)
     searched: set[str] = set()
-    seen_seqnums: set[str] = set()
     found: dict[str, dict[str, Any]] = {}
-    limited = False
-    for _ in range(_MAX_ROUNDS):
-        pending = [msg_id for msg_id in known if msg_id not in searched]
+    searches = 0
+    stopped: str | None = None
+    while len(found) <= max_messages:
+        pending = sorted(
+            (key, msg_id) for msg_id, key in known.items()
+            if msg_id not in searched and key[1] <= _MAX_ROUNDS
+        )
         if not pending:
             break
-        hits: set[str] = set()
-        for i in range(0, len(pending), _IDS_PER_SEARCH):
-            hits |= set(await imap._search_seqnums(_thread_criteria(pending[i:i + _IDS_PER_SEARCH])))
-        searched.update(pending)
-        new = sorted(hits - seen_seqnums, key=int)
-        seen_seqnums.update(new)
-        known_set = set(known)
-        for meta in await _fetch_thread_metadata(imap, new):
-            if not _belongs(meta, known_set):
+        if searches >= _MAX_SEARCHES or len(searched) >= _MAX_IDS:
+            stopped = f"Sökningen avbröts efter {searches} sökningar i {ALL_MAIL} (taket per anrop)."
+            break
+        if _clock() >= deadline:
+            stopped = f"Sökningen avbröts vid tidsgränsen på {_TIME_BUDGET_S:.0f} s."
+            break
+        batch = [msg_id for _, msg_id in pending[:min(_IDS_PER_SEARCH, _MAX_IDS - len(searched))]]
+        metas = await _search_step(imap, batch)
+        searches += 1
+        searched.update(batch)
+        for meta in metas:
+            if meta["uid"] in found or not _belongs(meta, known.keys()):
                 continue
             found[meta["uid"]] = meta
-            for msg_id in _ids_of(meta):
-                if msg_id not in known_set:
-                    known.append(msg_id)
-                    known_set.add(msg_id)
-        if len(found) > max_messages:
-            limited = True
-            break
-    unsearched = [msg_id for msg_id in known if msg_id not in searched]
+            # Mejlet hittades via det ID i det som ligger närmast startmejlet
+            via = min(known[msg_id][1] for msg_id in _ids_of(meta) if msg_id in known)
+            learn(meta, via + 1)
+    unsearched = len(known) - len(searched) + len(dropped - known.keys())
 
     messages = sorted(found.values(), key=_date_key)
     start_in_all_mail = next((m for m in messages if own_id[0] in _message_ids(m["message_id"])), None)
@@ -195,7 +260,10 @@ async def get_thread(imap, uid: str, mailbox: str, max_messages: int = 50) -> di
             f"Konversationen har fler mejl än max_messages ({max_messages}); "
             "startmejlet och de senaste returneras."
         )
-    elif limited or unsearched:
+    elif stopped or dropped:
+        reason = stopped or f"Ett mejl har fler än {_MAX_IDS} ID:n i References; bara de närmaste söktes."
+        notes.append(f"{reason} {unsearched} ID:n söktes inte, så fler mejl kan finnas.")
+    elif unsearched:
         notes.append("Sökningen avbröts efter maximalt antal rundor; fler mejl kan finnas.")
     if start_in_all_mail is None:
         notes.append(f"Startmejlet hittades inte i {ALL_MAIL}.")
@@ -204,6 +272,6 @@ async def get_thread(imap, uid: str, mailbox: str, max_messages: int = 50) -> di
         "mailbox": ALL_MAIL,
         "messages": [_public(m, ALL_MAIL) for m in messages],
         "total": len(found),
-        "complete": not (limited or unsearched or len(found) > max_messages),
+        "complete": not (unsearched or len(found) > max_messages),
         "note": " ".join(notes) or None,
     }
