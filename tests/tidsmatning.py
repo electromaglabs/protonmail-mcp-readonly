@@ -16,7 +16,10 @@ Varje mätning görs flera gånger och den snabbaste räknas: en tillfällig
 fördröjning (GC, en annan process) gör bara en enstaka mätning långsammare.
 Korta mätningar upprepas tills de tillsammans tagit MIN_TOTAL sekunder (högst
 MAX_RUNS gånger), eftersom ett enda schemaläggningsavbrott på en belastad
-maskin annars kan vara lika långt som hela mätningen.
+maskin annars kan vara lika långt som hela mätningen. Blir kvoten för hög
+mäts båda storlekarna om (högst ATTEMPTS omgångar) och de snabbaste tiderna
+hittills jämförs: tillfällig last ger en hög kvot en gång, kvadratisk kod
+ger den varje gång.
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ MAX_RATIO = 8.0
 REPEATS = 3
 MIN_TOTAL = 0.25
 MAX_RUNS = 50
+ATTEMPTS = 3
 # Kortare tider än så här mäts inte tillräckligt exakt för en kvot
 FLOOR = 0.005
 
@@ -59,10 +63,9 @@ async def best_time_async(func: Callable[[], Awaitable[Any]], repeats: int = REP
     return best
 
 
-def _check_ratio(n: int, small: float, big: float, factor: int, max_ratio: float) -> None:
+def _ratio_message(n: int, small: float, big: float, factor: int) -> str:
     ratio = big / max(small, FLOOR)
-    print(f"tidsmätning: n={n} {small:.4f} s, {factor}n {big:.4f} s, kvot {ratio:.1f}")
-    assert ratio < max_ratio, (
+    return (
         f"{factor} gånger så stor indata tog {ratio:.1f} gånger så lång tid "
         f"({small:.3f} s för n={n}, {big:.3f} s för n={n * factor}) — "
         f"linjärt ≈ {factor}, kvadratiskt ≈ {factor * factor}"
@@ -85,9 +88,14 @@ def assert_linear(
     på en snabb maskin; annars dominerar fasta kostnader och mätbrus.
     """
     small_input, big_input = make_input(n), make_input(n * factor)
-    small = best_time(lambda: func(small_input), repeats)
-    big = best_time(lambda: func(big_input), repeats)
-    _check_ratio(n, small, big, factor, max_ratio)
+    small = big = float("inf")
+    for _ in range(ATTEMPTS):
+        small = min(small, best_time(lambda: func(small_input), repeats))
+        big = min(big, best_time(lambda: func(big_input), repeats))
+        print("tidsmätning:", _ratio_message(n, small, big, factor))
+        if big / max(small, FLOOR) < max_ratio:
+            return
+    raise AssertionError(_ratio_message(n, small, big, factor))
 
 
 async def assert_linear_async(
@@ -101,9 +109,14 @@ async def assert_linear_async(
 ) -> None:
     """Som ``assert_linear`` för en korutinfunktion."""
     small_input, big_input = make_input(n), make_input(n * factor)
-    small = await best_time_async(lambda: func(small_input), repeats)
-    big = await best_time_async(lambda: func(big_input), repeats)
-    _check_ratio(n, small, big, factor, max_ratio)
+    small = big = float("inf")
+    for _ in range(ATTEMPTS):
+        small = min(small, await best_time_async(lambda: func(small_input), repeats))
+        big = min(big, await best_time_async(lambda: func(big_input), repeats))
+        print("tidsmätning:", _ratio_message(n, small, big, factor))
+        if big / max(small, FLOOR) < max_ratio:
+            return
+    raise AssertionError(_ratio_message(n, small, big, factor))
 
 
 def assert_cheaper_than(elapsed: float, reference: float, max_ratio: float, what: str) -> None:
