@@ -141,8 +141,12 @@ async def flag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bulk
 async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Ta bort stjärnmärkningen från ett mejl (Starred i Proton).
 
-    Tar bort IMAP-flaggan \\Flagged, så att mejlet inte längre syns under
-    Starred. Mejlet ligger kvar i sin mapp och raderas inte. Är det inte
+    Tar bort IMAP-flaggan \\Flagged, vilket tar bort stjärnan i Proton direkt.
+    Bridges Starred-vy uppdateras annars först när Bridge hämtar nästa
+    händelse från Proton (var 20:e–40:e sekund), så verktyget tar också bort
+    mejlet ur Starred-vyn (bara Starred — mejlet ligger kvar i sin mapp och
+    raderas inte). Går det inte är stjärnan ändå borta, men mejlet kan synas
+    i Starred, utan \\Flagged, upp till en knapp minut. Är det inte
     stjärnmärkt händer inget.
 
     Avvisas med fel (inget ändras): UID:t finns inte i mailbox (UID:n gäller

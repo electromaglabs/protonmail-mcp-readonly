@@ -9,6 +9,7 @@ Bridge-semantik (se rapport-proton.md, "Sammanfattning: Bridge-semantik"):
 Funktionerna är modulnivåfunktioner med IMAPClient som första argument och
 körs under klientens lås (_serialized), som IMAPClient:s egna metoder.
 """
+import logging
 import re
 from email.parser import HeaderParser
 from typing import Any
@@ -44,7 +45,10 @@ from .imap_client import (
 )
 from .imap_threads import _MAX_ID_LENGTH, _MSG_ID_RE
 
+logger = logging.getLogger(__name__)
+
 LABEL_PREFIX = "Labels/"
+STARRED = "Starred"
 # Systemmappar (och behållarna Folders/Labels) som inte är etiketter
 _NOT_LABELS = ("inbox", "archive", "sent", "spam", "trash", "drafts", "all mail", "folders", "labels")
 # Mejlets identitet i en vy. Samma mejl har samma värden i alla vyer (verifierat
@@ -346,9 +350,46 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
 
 
 
+async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -> None:
+    """Tar bort avmarkerade mejl ur Starred-vyn (UID EXPUNGE på just deras UID:n där).
+
+    -FLAGS \\Flagged tar bort stjärnan i Proton direkt (Bridge anropar
+    UnlabelMessages med Starred), men Bridges Starred-vy uppdateras först när
+    Bridge hämtar händelserna från Proton, var 20:e–40:e sekund
+    (internal/user/user.go: EventPeriod + EventJitter). Till dess ligger mejlet
+    kvar i Starred utan \\Flagged. EXPUNGE i Starred tar bara bort Starred,
+    som för en etikett. Bästa försök: stjärnan är redan borta, så ett fel här
+    loggas men ändrar inte svaret.
+    """
+    try:
+        if _mailbox_key(mailbox) == "starred":
+            mapping = {uid: uid for uid in uids}
+        else:
+            identities = await _fetch_identities_by_uid(imap, mailbox, uids)
+            sources = {uid: info for uid, info in identities.items() if uid in uids and info["message_id"]}
+            if not sources:
+                return
+            await imap._select(STARRED)
+            mapping, _ = await _find_in_label(imap, STARRED, sources)
+        if mapping:
+            await imap._select(STARRED)
+            _, errors = await _expunge_in_label(imap, STARRED, list(mapping.values()))
+            if errors:
+                logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", next(iter(errors.values())))
+    except ValueError as exc:
+        logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", exc)
+
+
 @_serialized
 @policy.write_operation("set_starred")
 async def set_starred(imap: IMAPClient, mailbox: str, uids: list[str], starred: bool) -> BulkResult:
-    """Stjärnmärker (\\Flagged) eller avmarkerar mejlen; gäller i alla vyer hos Proton."""
+    """Stjärnmärker (\\Flagged) eller avmarkerar mejlen; gäller i alla vyer hos Proton.
+
+    Vid avmarkering tas mejlen också bort ur Starred-vyn, som annars visar dem
+    tills Bridge hämtat nästa händelse från Proton (se _leave_starred_view).
+    """
     what = "Stjärnmärkningen" if starred else "Borttagningen av stjärnmärkningen"
-    return await store_flags(imap, mailbox, uids, r"(\Flagged)", starred, what)
+    res = await store_flags(imap, mailbox, uids, r"(\Flagged)", starred, what)
+    if not starred and res["ok"]:
+        await _leave_starred_view(imap, mailbox, res["ok"])
+    return res
