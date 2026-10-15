@@ -35,7 +35,7 @@ startar `MailWatcher` (egna IDLE-anslutningar). Loggning går bara till stderr �
 | `audit.py` | Granskningslogg: en JSON-rad per skick och skrivande IMAP-operation, maskerad på stderr, fullständig i `PROTONMAIL_AUDIT_LOG` |
 | `imap_client.py` | `IMAPClient`: den delade anslutningen med lås (`_serialized`), `_BridgeProtocol`, validering och kvotering, läsning, sökning, flaggor, flytt, radering, mappar |
 | `imap_bulk.py` | Massoperationer (1–100 UID:n i en mapp): flaggor, flytt, radering med svar per UID (`ok`/`failed`) |
-| `imap_labels.py` | Etiketter (`add_label` med UID COPY, `remove_label` via Message-ID i etikettvyn) och stjärna (`\Flagged`) |
+| `imap_labels.py` | Etiketter (`add_label` med UID COPY, `remove_label` via X-Pm-Internal-Id i etikettvyn) och stjärna (`\Flagged`); identitetsjämförelsen `_find_in_label` som flytt, radering och svar också använder |
 | `imap_drafts.py` | Utkast i Drafts: APPEND, ersättning (gamla till Trash) och borttagning efter skick |
 | `imap_threads.py` | Trådar ur Message-ID/In-Reply-To/References-kedjan i All Mail, med tak på sökningar, ID:n och tid |
 | `imap_idle.py` | `MailWatcher`: en egen IDLE-anslutning per bevakad mapp (`_WatchProtocol`), vattenmärken, händelsekö, lyssnare som egna uppgifter, återanslutning med växande väntetid, återhämtning efter UIDVALIDITY-byte |
@@ -138,22 +138,41 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
 - **Ett mejl, flera vyer.** Ett mejl till sig själv är ETT Proton-mejl med både Inbox och Sent (inte två): det syns i
   INBOX och Sent med var sitt UID men samma Message-ID, tid och storlek, och en gång i All Mail. Skickas ett utkast
   till sig själv blir utkastet självt det skickade mejlet (samma Proton-id och Message-ID).
+- **Mejlets identitet = `X-Pm-Internal-Id`.** Bridge sätter rubriken (Protons mejl-id, 88 tecken base64url) på varje
+  mejl i alla vyer (INBOX, Sent, Trash, Spam, All Mail; aldrig upprepad), och samma Proton-mejl har samma värde i
+  alla vyer. `SEARCH HEADER X-Pm-Internal-Id "<id>"` fungerar och ger exakt det mejlet. Message-ID + tid + storlek
+  räcker INTE: live finns två olika mejl i Trash med samma tre värden. Allt som letar upp "samma mejl" i en annan
+  vy (`imap_labels._find_in_label`: L7-kontrollen, `remove_label`, Starred, kontrollen i All Mail efter 2501,
+  svar på egna mejl) jämför därför id:t; utan id används de tre värdena som reserv, och flera träffar är då
+  tvetydiga och ger fel i stället för ok.
+- **`X-Pm-Origin`.** `internal` på mejl skickade inom Proton (alla egna mejl i Sent, och mejl från andra
+  Proton-konton), `external` på mejl utifrån, `import` på importerade. `reply_to_email` räknar ett mejl som eget
+  skickat bara om From är kontot OCH (exakt en `X-Pm-Origin: internal` eller samma id finns i Sent) — From kan
+  förfalskas.
 - **Vyerna släpar 20–40 s.** Bridge hämtar händelser från Proton var 20:e–40:e sekund (`EventPeriod` 20 s +
   `EventJitter` 20 s i `internal/user/user.go`). Vyer som beror på Protons tillstånd — Starred, Sent, All Mail och en
   mapp som mejlet just flyttats ur via en annan vy — visar det gamla läget så länge. `-FLAGS \Flagged` tar bort
   stjärnan i Proton direkt men mejlet ligger kvar i Starred-vyn; `unflag_email` tar därför bort det därifrån med
-  UID EXPUNGE i Starred (bästa försök).
+  UID EXPUNGE i Starred (bästa försök: fel, även timeout, redovisas i `note`). EXPUNGE i Starred tar bort stjärnan i
+  Proton, så bara UID:n med samma X-Pm-Internal-Id som redan saknar `\Flagged` tas bort.
 - **Code=2501 ("Message does not exist").** Flyttas ett mejl till Trash som redan ligger där — typiskt Sent-kopian av
   ett mejl till sig själv inom 20–40 s efter att INBOX-kopian lagts i Trash — svarar Bridge `NO labeling messages:
   … (Code=2501)`, men mejlet är då raderat permanent. `move_email`/`delete_email` letar därför först upp mejlen i
-  Trash/Drafts via Message-ID, tid och storlek (`imap_bulk.already_in_target`, en SEARCH per 20 Message-ID) och
-  skickar ingenting för dem som redan ligger där; de räknas som ok med en förklaring i `note`. Vid permanent radering
-  kan Bridge svara `NO failed to unlabel messages … (Code=2501)` och ändå radera vid nästa händelsehämtning;
-  `permanent_delete_found` väntar då upp till 45 s (`_GONE_TIMEOUT`) och räknar försvunna mejl som raderade.
-- **Föräldralösa utkast.** Innehåller en omgång permanenta raderingar i Trash ett mejl som ger 2501 avbryter Bridge
-  före DeleteMessage: utkasten i samma omgång tappar Trash men raderas inte, och blir kvar osynliga i All Mail utan
-  mapp. `permanent_delete_found` letar upp dem i All Mail via Message-ID, lägger dem i Trash igen med UID COPY och
-  raderar dem där med UID STORE `\Deleted` + UID EXPUNGE. `send_draft` tar bort sitt utkast utan att vänta.
+  Trash/Drafts via X-Pm-Internal-Id (`imap_bulk.already_in_target`, en SEARCH per 20 id) och skickar ingenting för
+  dem som redan ligger där; de räknas som ok med en förklaring i `note`. Går det inte att avgöra (inget id och
+  flera likadana mejl i målet) flyttas mejlet inte och hamnar i `failed`. Vid permanent radering kan Bridge svara
+  `NO failed to unlabel messages … (Code=2501)`; mejlen försvinner då ur mappen vid nästa händelsehämtning.
+  `permanent_delete_found` väntar upp till 45 s (`_GONE_TIMEOUT`) — utan IMAP-låset mellan kontrollerna, så att
+  andra verktyg inte blockeras — och räknar ett försvunnet mejl som raderat först när det inte heller finns i All
+  Mail (se nästa punkt).
+- **Föräldralösa mejl efter 2501.** Bridge (`connector.go`, `removeMessagesFromMailboxWithUnlabelCallOnFolders`) gör
+  UnlabelMessages för hela omgången och avbryter vid felet FÖRE DeleteMessage. Mejlet som redan var raderat i Proton
+  ger 2501; alla andra mejl i omgången — vanliga som utkast, inget i koden gäller bara utkast — tappar Trash men
+  raderas inte, och blir kvar osynliga i All Mail utan mapp (sett live för ett utkast). `permanent_delete_found`
+  hämtar därför identiteten medan mejlen syns, letar upp de försvunna i All Mail, lägger dem som finns kvar i Trash
+  igen med UID COPY och raderar dem där med UID STORE `\Deleted` + UID EXPUNGE. Går det inte att avgöra (ingen
+  identitet, sökningen nekas eller hänger, flera likadana) blir mejlet `failed` med förklaring, aldrig `ok`.
+  `send_draft` tar bort sitt utkast utan att vänta.
 - **Stjärna = `\Flagged`**, globalt i alla vyer. Flytt till Starred skulle ta bort mejlet ur källmappen.
 - **Mappnamn i modified UTF-7.** LIST-namnen avkodas; `_quote_mailbox` kodar alltid. Verktygen tar alltså bara emot
   läsbara namn (`Labels/Näs Samfällighet`), och den kodade formen blir dubbelkodad.
@@ -161,7 +180,8 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   OK utan data; `FETCH 1:n` utanför vyn nekas.
 - **Sökning.** Bridge söker i okodade rubriker (RFC 2047-ord matchas inte) och textdelarna ligger quoted-printable,
   så ämne/avsändare/mottagare filtreras lokalt mot avkodade värden och åäö-ord i text/body söks även i QP-form.
-  `HEADER Message-ID` är delsträngsmatchning — kontrollera exakt lokalt. En SEARCH i All Mail tar 3–8 s (~30 000 mejl).
+  `HEADER Message-ID` och `HEADER X-Pm-Internal-Id` är delsträngsmatchning — kontrollera exakt lokalt. En SEARCH i
+  All Mail tar 3–8 s (~30 000 mejl).
 - **Köade uppdateringar.** Bridge (Gluon) skickar `* n EXISTS` i svaret på *nästa* kommando i vald mapp och aldrig
   igen; aioimaplib kastar sådana rader utanför IDLE. Bevakningen söker därför efter varje IDLE-omgång och igen om en
   EXISTS kom i ett svar. Bridge kopplar ner en IDLE efter 29 minuter; den förnyas var 25:e.
@@ -186,8 +206,10 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   igenom — rätta attrappen. En ren `AsyncMock()` som `_client` duger inte: den behöver `select`/`login` som svarar
   OK och `protocol.state` (se `_imap_mock()` i `tests/unit/test_imap_client.py`).
 - **Fejk-servrar i `tests/`** i stället för mockar där semantiken spelar roll: `fix_flytta_bridge.py`
-  (flytt/radering/mappar), `feat_etiketter_bridge.py` (etiketter), `efterfix_live_bridge.py` (Code=2501 vid permanent
-  radering, föräldralösa utkast, Starred som släpar), `efterfix_l7_bridge.py` (ett mejl i INBOX och Sent, flytt till
+  (flytt/radering/mappar), `feat_etiketter_bridge.py` (etiketter; X-Pm-Internal-Id med `internal_ids = True`),
+  `efterfix_live_bridge.py` (Code=2501 vid permanent radering som i connector.go: bara `phantoms` raderas, övriga
+  blir kvar i All Mail; Starred som släpar), `efterfix_slut_bridge.py` (X-Pm-Internal-Id påslaget, tvillingmejl
+  med samma Message-ID/tid/storlek), `efterfix_l7_bridge.py` (ett mejl i INBOX och Sent, flytt till
   Trash av ett mejl som redan ligger där raderar permanent), `feat_utkast_bridge.py` (utkast),
   `feat_sok_fakebridge.py` och `fix_sok_fakebox.py` (SEARCH/FETCH som Gluon), `fix_imapkarna_fakeimap.py` (hängande
   och nekande Bridge), `efterfix_imap_avbrott.py` och `ny_mejl_fakeidle.py` (riktiga TCP-servrar: avbrott, IDLE),
