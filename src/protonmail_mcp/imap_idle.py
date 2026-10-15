@@ -57,6 +57,7 @@ from .imap_client import (
     _parse_seqnums,
     _quote_mailbox,
     _require_ok,
+    _response_text,
     _serialized,
     _sort_newest_first,
 )
@@ -81,6 +82,8 @@ _UIDVALIDITY_RE = re.compile(r"\[UIDVALIDITY\s+(\d+)\]", re.IGNORECASE)
 _UIDNEXT_RE = re.compile(r"\[UIDNEXT\s+(\d+)\]", re.IGNORECASE)
 _PUSH_RE = re.compile(r"^(?:\*\s+)?\d+\s+(?:EXISTS|RECENT)\b", re.IGNORECASE)
 _UID_ITEM_RE = re.compile(r"\bUID\s+(\d+)", re.IGNORECASE)
+# Bridges svar på UID SEARCH UID n:* i en mapp utan mejl (i stället för OK)
+_NO_SUCH_MESSAGE_RE = re.compile(r"\bno such message\b", re.IGNORECASE)
 
 Listener = Callable[[str, list[dict[str, Any]]], Awaitable[None]]
 
@@ -164,9 +167,12 @@ async def new_uids(imap: IMAPClient, after: int) -> list[int]:
     """UID:n över after i vald mapp, stigande.
 
     "n:*" ger enligt RFC 3501 alltid minst det sista mejlet, även när dess
-    UID är lägre än n, därför filtreras svaret.
+    UID är lägre än n, därför filtreras svaret. I en tom mapp svarar Bridge
+    "NO no such message" i stället för ett tomt svar; det betyder inga mejl.
     """
     resp = await imap._client.uid_search("UID", f"{after + 1}:*")
+    if resp.result == "NO" and _NO_SUCH_MESSAGE_RE.search(_response_text(resp)):
+        return []
     _require_ok(resp, "Sökningen efter nya mejl")
     # aioimaplib tar bort "* SEARCH": första raden är bara UID:na
     return sorted({u for u in map(int, _parse_seqnums(resp)) if u > after})
@@ -212,7 +218,8 @@ async def poll_new_messages(
     if after is None or reset or after > newest:
         return {"messages": [], "uidvalidity": info.uidvalidity, "last_uid": newest,
                 "has_more": False, "reset": reset, "clamped": after is not None and not reset}
-    uids = await new_uids(imap, after)
+    # En tom mapp söks inte alls (Bridge svarar NO på sökningen där)
+    uids = await new_uids(imap, after) if info.exists else []
     taken = uids[:limit]
     msgs = await fetch_metadata(imap, mailbox, taken) if taken else []
     return {"messages": msgs, "uidvalidity": info.uidvalidity, "last_uid": taken[-1] if taken else after,
@@ -462,7 +469,7 @@ class MailWatcher:
         state.uidvalidity = info.uidvalidity
         if state.watermark is None:
             state.watermark = state.baseline = state.floor = info.uidnext - 1
-        else:
+        elif info.exists:  # en tom mapp har inget nytt (och Bridge svarar NO på sökningen)
             await self._fetch_new(state, imap)
 
     async def _catch_up(self, state: _MailboxState, imap: IMAPClient, client) -> None:

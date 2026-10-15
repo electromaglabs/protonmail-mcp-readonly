@@ -3,7 +3,8 @@
 Startas på en slumpport på 127.0.0.1 (testspärren i tests/conftest.py stoppar
 1143/1026). Stöder det bevakningen och verktygen behöver: CAPABILITY, LOGIN,
 SELECT (EXISTS, UIDVALIDITY, UIDNEXT), LIST, STATUS, NOOP, LOGOUT, IDLE/DONE,
-UID SEARCH UID n:*, FETCH och UID FETCH av UID, FLAGS och rubriker.
+UID SEARCH UID n:*, FETCH och UID FETCH av UID, FLAGS och rubriker. Som
+Bridge svarar UID SEARCH med en UID-mängd ``NO no such message`` i en tom mapp.
 
 Allt som tas emot sparas i ``commands`` som (anslutningsnummer, rad), så att
 testerna kan se t.ex. hur många IDLE som skickats på en anslutning och att
@@ -110,6 +111,11 @@ class FakeIdleBridge:
             else:
                 conn.pending_exists = True  # skickas i svaret på nästa kommando
         return uid
+
+    def remove(self, mailbox: str, uid: int) -> None:
+        """Mejlet försvinner ur mappen (t.ex. ett Proton-filter flyttar det)."""
+        box = self.boxes[mailbox]
+        box.messages = [m for m in box.messages if m.uid != uid]
 
     def during(self, command: str, action) -> None:
         """Kör action() en gång mitt i nästa kommando command (t.ex. "UID FETCH",
@@ -265,8 +271,12 @@ class FakeIdleBridge:
             box = self.boxes[conn.selected]
             words = args.split()
             uid_set = words[words.index("UID") + 1] if "UID" in words else "1:*"
-            hits = self._select_uids(box, uid_set)
-            out.append("* SEARCH" + "".join(f" {m.uid}" for m in hits) + "\r\n")
+            if "UID" in words and not box.messages:
+                # Som Bridge: en UID-mängd i en tom mapp ger NO, inte ett tomt svar
+                result = "NO"
+            else:
+                hits = self._select_uids(box, uid_set)
+                out.append("* SEARCH" + "".join(f" {m.uid}" for m in hits) + "\r\n")
         elif cmd in ("FETCH", "UID FETCH"):
             box = self.boxes[conn.selected]
             message_set, _, items = args.partition(" ")
@@ -293,7 +303,10 @@ class FakeIdleBridge:
             result = "BAD"
         self._run_hooks(cmd)
         out.append(self._flush(conn))
-        out.append(f"{tag} {result} {cmd} completed\r\n")
+        if result == "NO" and cmd == "UID SEARCH":
+            out.append(f"{tag} NO no such message\r\n")
+        else:
+            out.append(f"{tag} {result} {cmd} completed\r\n")
         self._write(conn, b"".join(o if isinstance(o, bytes) else o.encode() for o in out))
         return "logout" if cmd == "LOGOUT" else None
 
