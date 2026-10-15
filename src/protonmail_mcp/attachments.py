@@ -19,6 +19,8 @@ kommer från klienten (en AI-modell). Båda behandlas som opålitliga:
   fil som kontrollerades, så att den inte kan bytas ut däremellan. Hårda
   länkar, andra filtyper än vanliga filer och filer som ser ut att innehålla
   hemligheter (nycklar, .env, .netrc, nyckelringar) skickas aldrig.
+- En sparad fil får com.apple.quarantine på macOS, som filer från Mail och
+  Safari, så att Gatekeeper och Terminal varnar innan den körs.
 """
 from __future__ import annotations
 
@@ -28,6 +30,8 @@ import mimetypes
 import os
 import re
 import stat
+import sys
+import time
 import unicodedata
 from collections.abc import Sequence
 from email.message import EmailMessage
@@ -170,6 +174,48 @@ def _refuse_secret(name: str, why: str) -> ValueError:
     )
 
 
+_QUARANTINE_ATTR = b"com.apple.quarantine"
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def _quarantine_value(now: float | None = None) -> bytes:
+    """Värdet som Safari och Mail skriver: flaggor;tid (hex);program;(uuid)."""
+    stamp = int(time.time() if now is None else now)
+    return f"0083;{stamp:x};protonmail-mcp;".encode("ascii")
+
+
+def _fsetxattr(fd: int, name: bytes, value: bytes) -> None:
+    """fsetxattr(2) på macOS via ctypes — os.setxattr finns inte där."""
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    func = libc.fsetxattr  # AttributeError om symbolen saknas
+    func.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int,
+    ]
+    func.restype = ctypes.c_int
+    if func(fd, name, value, len(value), 0, 0) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+
+
+def _mark_quarantined(fd: int, path: Path) -> None:
+    """Sätt com.apple.quarantine på en nysparad fil (bara macOS).
+
+    Ett fel stoppar inte sparningen; det loggas som varning.
+    """
+    if not _is_macos():
+        return
+    try:
+        _fsetxattr(fd, _QUARANTINE_ATTR, _quarantine_value())
+    except (OSError, AttributeError) as exc:
+        logger.warning("Kunde inte sätta karantänmärkning på %s: %s", path, exc)
+
+
 class _CheckedFile(NamedTuple):
     path: Path  # upplöst, utan symlänkar
     stat: os.stat_result  # lstat vid kontrollen
@@ -284,7 +330,7 @@ class AttachmentStore:
 
         Skriver aldrig över: finns namnet redan (även som symlänk) prövas
         "namn (1).ext", "namn (2).ext" och så vidare. Filen skapas med O_EXCL
-        och O_NOFOLLOW och rättigheterna 0600.
+        och O_NOFOLLOW och rättigheterna 0600, och karantänmärks på macOS.
         """
         root = self._checked_root(create=True)
         base = sanitize_filename(filename, content_type)
@@ -302,6 +348,7 @@ class AttachmentStore:
                     continue
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(data)
+                    _mark_quarantined(fh.fileno(), path)
                 return path
         finally:
             os.close(dir_fd)

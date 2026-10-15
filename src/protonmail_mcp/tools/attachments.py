@@ -31,7 +31,9 @@ async def get_attachment(
     den är en symlänk, ligger under en symlänk, ägs av någon annan eller är
     skrivbar för andra. Filnamnet kommer från avsändaren och saneras
     (ingen sökväg, inga kontrolltecken). En befintlig fil skrivs aldrig
-    över: vid namnkrock blir det "namn (1).ext". Svaret anger sökväg,
+    över: vid namnkrock blir det "namn (1).ext". På macOS får filen
+    karantänmärkningen com.apple.quarantine, som filer från Mail och Safari,
+    så att Gatekeeper varnar innan den körs. Svaret anger sökväg,
     storlek, content_type och sha256 — inte innehållet.
 
     save=False: innehållet returneras direkt, som text för text/*-bilagor
