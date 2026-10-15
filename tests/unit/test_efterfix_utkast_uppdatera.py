@@ -1,9 +1,11 @@
 """Enhetstester: update_draft behåller trådning och bilagor och flyttar det gamla till Trash."""
+import asyncio
 import email
 import email.policy
 from email.message import EmailMessage
 from unittest.mock import MagicMock
 
+import aioimaplib
 import pytest
 
 from protonmail_mcp import imap_drafts
@@ -109,3 +111,48 @@ class TestUpdateDraftKeepsParts:
             await _update(imap, uid, to="inte-en-adress")
         assert "APPEND" not in bridge.names() and "UID MOVE" not in bridge.names()
         assert list(bridge.messages("Drafts")) == [int(uid)]
+
+
+class TestReplaceDraftInterrupted:
+    """K4: avbrott när det gamla utkastet flyttas efter att det nya sparats."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error", [
+        asyncio.TimeoutError(),
+        ConnectionResetError("Connection lost"),
+        aioimaplib.AioImapException("protokollfel"),
+    ], ids=["timeout", "anslutning", "aioimaplib"])
+    async def test_error_says_new_draft_exists_and_drops_connection(self, error):
+        imap, bridge = make_imap()
+        old = bridge.add("Drafts", b"Subject: gammal\r\n\r\nx\r\n")
+        inner = bridge.client.uid.side_effect
+
+        async def uid(command, *args):
+            if command.upper() == "MOVE":
+                raise error
+            return await inner(command, *args)
+
+        bridge.client.uid.side_effect = uid
+        with pytest.raises(ValueError) as excinfo:
+            await imap_drafts.replace_draft(imap, old, RAW, "<abc@proton.me>")
+        text = str(excinfo.value)
+        assert "Det nya utkastet sparades i Drafts (UID 2, Message-ID <abc@proton.me>)" in text
+        assert f"UID {old}" in text and "Kör inte update_draft igen" in text
+        assert isinstance(excinfo.value.__cause__, type(error))
+        # Protokollets tillstånd är okänt efter avbrottet: nästa anrop ansluter på nytt
+        assert imap._client is None
+
+    @pytest.mark.asyncio
+    async def test_cancellation_is_not_rewritten(self):
+        imap, bridge = make_imap()
+        old = bridge.add("Drafts", b"Subject: gammal\r\n\r\nx\r\n")
+        inner = bridge.client.uid.side_effect
+
+        async def uid(command, *args):
+            if command.upper() == "MOVE":
+                raise asyncio.CancelledError()
+            return await inner(command, *args)
+
+        bridge.client.uid.side_effect = uid
+        with pytest.raises(asyncio.CancelledError):
+            await imap_drafts.replace_draft(imap, old, RAW, "<abc@proton.me>")

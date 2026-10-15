@@ -157,3 +157,34 @@ def result_moved_to(outcome, draft, mailbox):
     result = _ok(outcome)
     assert result["replaced_uid"] == draft["uid"]
     assert result["replaced_moved_to"] == mailbox
+
+
+@given(parsers.parse("att Bridge {avbrott} vid UID MOVE"))
+def bridge_breaks_on_move(bridge, avbrott):
+    errors = {
+        "inte svarar i tid": asyncio.TimeoutError(),
+        "tappar anslutningen": ConnectionResetError("Connection lost"),
+    }
+    inner = bridge.client.uid.side_effect
+
+    async def uid(command, *args):
+        if command.upper() == "MOVE":
+            bridge.commands.append(("UID MOVE", *args))
+            raise errors[avbrott]
+        return await inner(command, *args)
+
+    bridge.client.uid.side_effect = uid
+
+
+@then("felet ska ange det nya utkastets UID och Message-ID")
+def error_names_new_draft(bridge, outcome, draft):
+    text = str(outcome["error"])
+    new_uid = max(bridge.messages("Drafts"))
+    assert f"UID {new_uid}" in text
+    assert bridge.parsed("Drafts", new_uid)["Message-ID"] in text
+    assert f"UID {draft['uid']}" in text
+
+
+@then("felet ska säga att update_draft inte ska köras igen")
+def error_says_do_not_retry(outcome):
+    assert "Kör inte update_draft igen" in str(outcome["error"])

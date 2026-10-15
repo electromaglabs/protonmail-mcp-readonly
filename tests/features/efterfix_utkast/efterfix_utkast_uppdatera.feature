@@ -46,3 +46,17 @@ Feature: Uppdatera svars- och vidarebefordringsutkast utan att något går förl
     When jag uppdaterar utkastet till "anna@example.se" med ämnet "Re: Offert" och texten "Ny svarstext"
     Then ska det nya utkastets "References" vara "<orig-1@example.se> <orig-pm@protonmail.internalid>"
     And ska det nya utkastets "In-Reply-To" vara "<orig-1@example.se>"
+
+  Scenario Outline: Avbryts flytten av det gamla utkastet sägs det att det nya redan är sparat
+    Given ett svarsutkast på mejlet i INBOX
+    And att Bridge <avbrott> vid UID MOVE
+    When jag uppdaterar utkastet till "anna@example.se" med ämnet "Re: Offert" och texten "Ny svarstext"
+    Then ska anropet misslyckas med meddelandet "Det nya utkastet sparades i Drafts"
+    And felet ska ange det nya utkastets UID och Message-ID
+    And felet ska säga att update_draft inte ska köras igen
+    And ska Drafts innehålla 2 utkast
+
+    Examples:
+      | avbrott                   |
+      | inte svarar i tid         |
+      | tappar anslutningen       |

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import re
 
+import aioimaplib
+
 from .imap_client import (
     IMAPClient,
     _UID_RE,
@@ -102,13 +104,14 @@ async def _move_to_trash(imap: IMAPClient, uid: str) -> None:
     await imap._move(DRAFTS, uid, TRASH)
 
 
-def _both_remain(new_uid: str | None, message_id: str | None, old_uid: str, exc: Exception) -> str:
+def _new_draft_saved(new_uid: str | None, message_id: str | None) -> str:
     return (
         f"Det nya utkastet sparades i {DRAFTS} (UID {new_uid or 'okänt'}, "
-        f"Message-ID {message_id or 'okänt'}), men det gamla (UID {old_uid}) kunde inte "
-        f"flyttas till {TRASH}, så båda finns kvar i {DRAFTS}: {exc}. Kör inte "
-        "update_draft igen — då blir det ett utkast till."
+        f"Message-ID {message_id or 'okänt'})"
     )
+
+
+_RETRY_WARNING = "Kör inte update_draft igen — då blir det ett utkast till."
 
 
 @_serialized
@@ -120,8 +123,10 @@ async def replace_draft(
     Ordningen gör att inget går förlorat: först kontrolleras att det gamla
     utkastet finns, sedan sparas det nya med APPEND, och först när det lyckats
     flyttas det gamla till Trash (inte permanent raderat — det går att
-    återställa därifrån). Misslyckas APPEND rörs det gamla inte.
-    Returnerar det nya utkastets UID (None om Bridge inte angav det).
+    återställa därifrån). Misslyckas APPEND rörs det gamla inte. Misslyckas
+    eller avbryts flytten (timeout, bruten anslutning) kastas ValueError som
+    anger det nya utkastets UID och Message-ID, så att ingen tror att inget
+    sparades. Returnerar det nya utkastets UID (None om Bridge inte angav det).
     """
     safe_uid = _validate_uid(old_uid)
     await imap._ensure_connected()
@@ -131,5 +136,21 @@ async def replace_draft(
     try:
         await _move_to_trash(imap, safe_uid)
     except ValueError as exc:
-        raise ValueError(_both_remain(new_uid, message_id, safe_uid, exc)) from exc
+        raise ValueError(
+            f"{_new_draft_saved(new_uid, message_id)}, men det gamla (UID {safe_uid}) kunde "
+            f"inte flyttas till {TRASH}, så båda finns kvar i {DRAFTS}: {exc}. {_RETRY_WARNING}"
+        ) from exc
+    except (asyncio.TimeoutError, OSError, aioimaplib.AioImapException) as exc:
+        # Det nya utkastet finns redan: ett fel som ser ut som "inget hände"
+        # får Claude att köra update_draft igen och skapa ett tredje. Efter
+        # avbrottet är protokollets tillstånd okänt, så anslutningen släpps
+        # här (_serialized gör det bara för de här undantagstyperna).
+        imap._discard_connection()
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        raise ValueError(
+            f"{_new_draft_saved(new_uid, message_id)}, men flytten av det gamla (UID "
+            f"{safe_uid}) till {TRASH} avbröts ({detail}). Det gamla kan "
+            f"ligga kvar i {DRAFTS} eller redan i {TRASH} — kontrollera med "
+            f'list_emails(mailbox="{DRAFTS}"). {_RETRY_WARNING}'
+        ) from exc
     return new_uid

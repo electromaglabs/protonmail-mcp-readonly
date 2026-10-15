@@ -333,8 +333,10 @@ async def update_draft(
     Raises:
         ValueError: utkastet finns inte i Drafts, ogiltig adress eller
             ämnesrad (inget ändras), Bridge vägrar spara (det gamla ligger
-            kvar), eller det gamla gick inte att flytta till Trash (båda
-            ligger kvar; felet anger UID:n — kör då inte update_draft igen).
+            kvar), eller det gamla gick inte att flytta till Trash — nekat,
+            timeout eller bruten anslutning. Då är det nya utkastet redan
+            sparat: felet anger dess UID och Message-ID samt det gamla UID:t.
+            Kör då INTE update_draft igen (det skapar ett utkast till).
     """
     if mailbox != DRAFTS:
         raise ValueError(f"Bara utkast i {DRAFTS} kan uppdateras, inte i {mailbox!r}")
