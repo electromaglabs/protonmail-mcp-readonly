@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from mcp.server.fastmcp import Context
+from tests import sdk_support as sdk
 
 from protonmail_mcp.config import Settings
 from protonmail_mcp.imap_client import IMAPClient
@@ -110,11 +110,8 @@ async def call_tool(name: str, arguments: dict[str, Any], app: Any, settings: Se
         threads,
     )
 
-    request_context = SimpleNamespace(lifespan_context=app)
-    with patch.object(config, "get_settings", return_value=settings), patch.object(
-        mcp, "get_context", return_value=Context(request_context=request_context, fastmcp=mcp)
-    ):
-        return await mcp.call_tool(name, arguments)
+    with patch.object(config, "get_settings", return_value=settings):
+        return await sdk.call_tool(mcp, name, arguments, app)
 
 
 def registered_tools() -> set[str]:
@@ -124,7 +121,7 @@ def registered_tools() -> set[str]:
         threads,
     )
 
-    return {tool.name for tool in mcp._tool_manager.list_tools()}
+    return {tool.name for tool in sdk.list_tools(mcp)}
 
 
 __all__ = [

@@ -12,17 +12,13 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+from tests import sdk_support as sdk
 from tests.mcp_resurser_support import client_session, fake_imap, read_or_error
-from tests.release_support import capture_initialize
 
 SNAPSHOT = Path(__file__).parent / "snapshots" / "mcp_kontrakt.json"
 
 # Prefix som SDK:n lägger på fel som inte är serverns egna (engelska, utan råd)
 SDK_PREFIXES = ("Error executing tool", "Error reading resource", "Error creating resource")
-
-
-def wire(model) -> dict:
-    return model.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 def _failing_imap() -> AsyncMock:
@@ -33,15 +29,13 @@ def _failing_imap() -> AsyncMock:
 
 
 async def _call(session, name: str, arguments: dict) -> dict:
-    from mcp.shared.exceptions import McpError
-
     try:
-        result = await session.call_tool(name, arguments)
-    except McpError as exc:
-        return {"mcp_error": exc.error.message}
+        result = sdk.wire(await session.call_tool(name, arguments))
+    except sdk.MCPError as exc:
+        return {"mcp_error": sdk.error_message(exc)}
     return {
-        "isError": bool(result.isError),
-        "text": " ".join(getattr(c, "text", "") for c in result.content),
+        "isError": bool(result.get("isError")),
+        "text": " ".join(c.get("text", "") for c in result["content"]),
     }
 
 
@@ -52,23 +46,18 @@ async def _read(session, uri: str) -> dict:
 
 async def listing(monkeypatch) -> dict:
     """serverInfo, instruktioner, förmågor, verktyg, resurser, mallar och promptar."""
-    async with capture_initialize(monkeypatch) as captured:
-        async with client_session(monkeypatch) as session:
-            tools = (await session.list_tools()).tools
-            resources = (await session.list_resources()).resources
-            templates = (await session.list_resource_templates()).resourceTemplates
-            prompts = (await session.list_prompts()).prompts
-    init = captured["result"]
+    async with client_session(monkeypatch) as session:
+        server = sdk.init_info(session)
+        tools = sdk.wire(await session.list_tools())["tools"]
+        resources = sdk.wire(await session.list_resources())["resources"]
+        templates = sdk.wire(await session.list_resource_templates())["resourceTemplates"]
+        prompts = sdk.wire(await session.list_prompts())["prompts"]
     return {
-        "server": {
-            "serverInfo": {"name": init.serverInfo.name, "version": init.serverInfo.version},
-            "instructions": init.instructions,
-            "capabilities": wire(init.capabilities),
-        },
-        "tools": sorted((wire(t) for t in tools), key=lambda t: t["name"]),
-        "resources": sorted((wire(r) for r in resources), key=lambda r: r["uri"]),
-        "resourceTemplates": sorted((wire(t) for t in templates), key=lambda t: t["uriTemplate"]),
-        "prompts": sorted((wire(p) for p in prompts), key=lambda p: p["name"]),
+        "server": server,
+        "tools": sorted(tools, key=lambda t: t["name"]),
+        "resources": sorted(resources, key=lambda r: r["uri"]),
+        "resourceTemplates": sorted(templates, key=lambda t: t["uriTemplate"]),
+        "prompts": sorted(prompts, key=lambda p: p["name"]),
     }
 
 

@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError
 import pytest
 
 from tests import release_support as rel
+from tests import sdk_support as sdk
 
 
 def test_package_version_is_pyproject_version():
@@ -16,9 +17,9 @@ def test_server_reports_package_version_not_mcp_library_version():
     import protonmail_mcp
     from protonmail_mcp.server import mcp
 
-    options = mcp._mcp_server.create_initialization_options()
-    assert options.server_name == "protonmail"
-    assert options.server_version == protonmail_mcp.__version__
+    options = sdk.init_options(mcp)
+    assert options["name"] == "protonmail"
+    assert options["version"] == protonmail_mcp.__version__
 
 
 def test_version_without_installed_metadata_is_marked_unknown(monkeypatch):

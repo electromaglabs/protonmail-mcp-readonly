@@ -6,6 +6,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests import release_support as rel
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session
 
 scenarios("release_version.feature")
@@ -34,22 +35,20 @@ def readme(context):
 @when("en MCP-klient ansluter till servern")
 def connect(context, monkeypatch):
     async def run():
-        async with rel.capture_initialize(monkeypatch) as captured:
-            async with client_session(monkeypatch):
-                pass
-        return captured["result"]
+        async with client_session(monkeypatch) as session:
+            return sdk.init_info(session)
 
     context["init"] = asyncio.run(run())
 
 
 @then(parsers.parse('ska serverInfo ha namnet "{name}"'))
 def server_name(context, name):
-    assert context["init"].serverInfo.name == name
+    assert context["init"]["serverInfo"]["name"] == name
 
 
 @then("ska serverInfo ha versionen ur pyproject.toml, inte MCP-bibliotekets")
 def server_version(context):
-    reported = context["init"].serverInfo.version
+    reported = context["init"]["serverInfo"]["version"]
     assert reported == context["version"], (
         f"serverInfo.version är {reported!r} (mcp-biblioteket är {package_version('mcp')!r}), "
         f"pyproject.toml säger {context['version']!r}"

@@ -6,10 +6,7 @@ som ändrats i den.
 """
 import re
 import tomllib
-from contextlib import asynccontextmanager
 from pathlib import Path
-
-from mcp.client.session import ClientSession
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
@@ -41,17 +38,3 @@ def changelog_links(text: str) -> dict[str, str]:
 def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
-
-@asynccontextmanager
-async def capture_initialize(monkeypatch):
-    """Fångar InitializeResult när en MCP-klient ansluter (serverInfo m.m.)."""
-    captured = {}
-    original = ClientSession.initialize
-
-    async def initialize(self):
-        result = await original(self)
-        captured["result"] = result
-        return result
-
-    monkeypatch.setattr(ClientSession, "initialize", initialize)
-    yield captured

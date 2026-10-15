@@ -1,6 +1,6 @@
 """Hjälp för mcp-resurser-testerna: ett riktigt MCP-klientpass (in-memory).
 
-Anropen går klient → FastMCP → resurs/prompt som för en riktig klient, så att
+Anropen går klient → servern → resurs/prompt som för en riktig klient, så att
 URI:er, fel och notiser testas som klienten ser dem. Lifespan byts mot
 attrapper; ingenting når Bridge.
 """
@@ -8,9 +8,8 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from mcp.shared.memory import create_connected_server_and_client_session
-
 from protonmail_mcp.server import AppContext, mcp, register_tools
+from tests import sdk_support as sdk
 
 RAW_EMAIL = (
     "From: Anna <anna@example.com>\r\n"
@@ -62,22 +61,17 @@ async def client_session(monkeypatch, imap=None, smtp=None, message_handler=None
     async def lifespan(_server):
         yield app
 
-    monkeypatch.setattr(mcp._mcp_server, "lifespan", lifespan)
-    async with create_connected_server_and_client_session(
-        mcp._mcp_server, message_handler=message_handler
-    ) as session:
+    sdk.set_lifespan(monkeypatch, mcp, lifespan)
+    async with sdk.connect(mcp, message_handler=message_handler) as session:
         yield session
 
 
 async def read_or_error(session, uri: str):
     """(innehållstext, None) eller (None, felmeddelande) för en resursläsning."""
-    from mcp.shared.exceptions import McpError
-    from pydantic import AnyUrl
-
     try:
-        result = await session.read_resource(AnyUrl(uri))
-    except McpError as exc:
-        return None, exc.error.message
+        result = await session.read_resource(uri)
+    except sdk.MCPError as exc:
+        return None, sdk.error_message(exc)
     return text_of_resource(result), None
 
 

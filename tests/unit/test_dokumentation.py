@@ -1,8 +1,9 @@
 """Enhetstester för jämförelsen mellan dokumentation och kod (dokumentation)."""
-from types import SimpleNamespace
+
 
 import pytest
 
+from protonmail_mcp._sdk import ToolAnnotations
 from tests import dokumentation_support as docs
 
 SAMPLE = """\
@@ -67,7 +68,7 @@ def test_settings_default_is_first_code_word_or_whole_cell():
     ],
 )
 def test_effect_from_annotations(hints, expected):
-    assert docs.effect(SimpleNamespace(**hints)) == expected
+    assert docs.effect(ToolAnnotations(**hints)) == expected
 
 
 def test_expected_settings_cover_every_field_with_rendered_defaults():

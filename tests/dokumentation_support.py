@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic_core import PydanticUndefined
 
+from tests.sdk_support import wire
+
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 CLAUDE_MD = ROOT / "CLAUDE.md"
@@ -82,11 +84,12 @@ def documented_tools(readme: str) -> dict[str, str]:
 
 def effect(annotations: Any) -> str:
     """Effekten som README ska ange, ur verktygets MCP-annoteringar."""
-    if annotations.openWorldHint:
+    hints = wire(annotations)
+    if hints.get("openWorldHint"):
         return SENDS
-    if annotations.readOnlyHint:
+    if hints.get("readOnlyHint"):
         return READ_ONLY
-    if annotations.destructiveHint:
+    if hints.get("destructiveHint"):
         return DESTRUCTIVE
     return WRITES
 
@@ -104,7 +107,7 @@ async def registered_resources() -> set[str]:
 
     server.register_tools()
     uris = {str(r.uri) for r in await server.mcp.list_resources()}
-    return uris | {t.uriTemplate for t in await server.mcp.list_resource_templates()}
+    return uris | {wire(t)["uriTemplate"] for t in await server.mcp.list_resource_templates()}
 
 
 async def registered_prompts() -> set[str]:
