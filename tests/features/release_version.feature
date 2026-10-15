@@ -23,3 +23,10 @@ Feature: Versionen anges på ett ställe och stämmer överallt
   Scenario: README hänvisar till ändringsloggen
     Given README.md
     Then ska README.md länka till CHANGELOG.md
+
+  Scenario: Installationsinstruktionerna installerar den aktuella versionen
+    Given versionen i pyproject.toml
+    And README.md
+    Then ska README.md ha ett installationskommando som installerar taggen för versionen ur pyproject.toml
+    And ska README.md visa hur en befintlig installation uppgraderas till den versionen
+    And ska release-notes för versionen finnas och ha samma installationskommando

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15
+
+The server now runs on version 2 of the MCP Python SDK. Tools, parameters, resources, prompts and error messages are unchanged; the README has new installation and upgrade instructions.
+
+### Breaking changes / upgrade notes
+
+- **Requires `mcp` 2.3 or newer** (`mcp>=2.3,<3`). Upgrade with `uv tool install --force --python 3.12 "git+https://github.com/mattias242/protonmail-mcp-server@v0.4.0"`, then restart Claude Desktop or reconnect the server in Claude Code (`/mcp`). An install from a clone needs `git pull && uv sync`.
+- **Resource subscriptions need a client on an MCP protocol version before 2026-07-28** (`resources/subscribe`), which Claude Code and Claude Desktop use today. Clients on 2026-07-28 use `subscriptions/listen`, which is not supported yet; the server does not advertise subscriptions to them. Everything else works on both protocol versions.
+
 ### Changed
 
 - **The server runs on the MCP Python SDK 2.x** (`mcp>=2.3,<3`, `MCPServer` instead of `FastMCP`). Tools, parameters, schemas, resources, prompts and error texts are unchanged; a recorded contract of everything a client sees (`tests/snapshots/mcp_kontrakt.json`) is identical before and after, except that the empty `experimental` capability is no longer sent.
@@ -13,9 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A tool refused by policy** (`PROTONMAIL_READ_ONLY`, `PROTONMAIL_SEND_MODE`) is logged as an expected refusal instead of with a stack trace. The client sees the same text.
 - **Resource errors** no longer write a stack trace to stderr; the client gets the same text as before.
 
-### Known limitations
+### Documentation
 
-- **Subscriptions need a client on a protocol version before 2026-07-28** (`resources/subscribe`). `subscriptions/listen` from protocol 2026-07-28 is not supported yet, and the server does not advertise subscriptions to such clients.
+- **Installation instructions** in the README: install as a tool with `uv tool install` (recommended) or run from a clone, how to add the server to Claude Code and Claude Desktop, how to upgrade and uninstall, and troubleshooting.
 
 ## [0.3.1] - 2026-10-15
 
@@ -212,7 +221,8 @@ Initial release.
 - Configuration through `PROTONMAIL_*` environment variables or `.env`.
 - Unit, BDD and integration tests, GPL v3 licence and community files.
 
-[Unreleased]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.1.0...v0.2.0

@@ -26,6 +26,68 @@ What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Upgrading from 
 
 ## Installation
 
+There are two ways to install the server. Most people want the first.
+
+| | Install as a tool | Run from a clone |
+|---|---|---|
+| For | Using the server with Claude | Changing the code, running the tests |
+| Command | `protonmail-mcp` on your `PATH` | `uv --directory /path/to/clone run protonmail-mcp` |
+| Credentials | In the client's MCP configuration (`env`) | In `.env` in the clone |
+| Upgrade | Re-run the install command with the new tag | `git pull && uv sync` |
+
+Before either: install and start [ProtonMail Bridge](https://proton.me/mail/bridge), sign in, and copy the **Bridge password** for your account from the Bridge app (it is not your Proton password).
+
+### Option 1: install as a tool (recommended)
+
+**1. Install** a released version with uv. uv installs it in its own environment with the dependency versions it was tested with, and puts `protonmail-mcp` in `~/.local/bin`:
+
+```bash
+uv tool install --python 3.12 "git+https://github.com/mattias242/protonmail-mcp-server@v0.4.0"
+```
+
+If uv says `~/.local/bin` is not on your `PATH`, run `uv tool update-shell` and open a new terminal. Check the installation with `uv tool list`; it should show `protonmail-mcp v0.4.0`.
+
+**2. Add it to your client** with your Proton address and the Bridge password. Use the full path to the command (`which protonmail-mcp`, usually `/Users/<you>/.local/bin/protonmail-mcp` on macOS), because Claude Desktop does not read your shell's `PATH`.
+
+Claude Code:
+
+```bash
+claude mcp add protonmail -s user \
+  -e PROTONMAIL_USERNAME=user@proton.me \
+  -e PROTONMAIL_PASSWORD=bridge-generated-password \
+  -- /Users/<you>/.local/bin/protonmail-mcp
+```
+
+Claude Desktop — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows), then restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "protonmail": {
+      "command": "/Users/<you>/.local/bin/protonmail-mcp",
+      "env": {
+        "PROTONMAIL_USERNAME": "user@proton.me",
+        "PROTONMAIL_PASSWORD": "bridge-generated-password"
+      }
+    }
+  }
+}
+```
+
+Any other setting (see [Configuration](#configuration)) goes in the same `env` object, or as another `-e` before `--`. The client stores these values in its configuration file in plain text, readable by your user account.
+
+**3. Check it works:** in Claude Code, run `/mcp` and look for `protonmail` as connected. In either client, ask Claude to list your mail folders; it should call `list_mailboxes` and show the folders from Bridge.
+
+**Upgrading** from an earlier version: run the install command for the new version with `--force`, then restart Claude Desktop, or reconnect the server in Claude Code with `/mcp`. Your client configuration stays as it is.
+
+```bash
+uv tool install --force --python 3.12 "git+https://github.com/mattias242/protonmail-mcp-server@v0.4.0"
+```
+
+Read the upgrade notes for every version you skip in [CHANGELOG.md](CHANGELOG.md) first. To remove the server: `uv tool uninstall protonmail-mcp` and delete it from the client's configuration.
+
+### Option 2: run from a clone (development)
+
 ```bash
 git clone https://github.com/mattias242/protonmail-mcp-server
 cd protonmail-mcp-server
@@ -42,9 +104,13 @@ PROTONMAIL_PASSWORD=bridge-generated-password  # from the Bridge app, not your P
 
 The server reads `.env` from the project root even when it is started from another directory; a `.env` in the current working directory takes precedence, and environment variables override both. Keep `.env` out of version control (it is in `.gitignore`).
 
-## Claude Desktop
+Claude Code:
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+```bash
+claude mcp add protonmail -s user -- uv --directory /path/to/protonmail-mcp-server run protonmail-mcp
+```
+
+Claude Desktop:
 
 ```json
 {
@@ -57,23 +123,20 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Replace `/path/to/protonmail-mcp-server` with the absolute path to your clone. Credentials are read from `.env`; you can instead put `PROTONMAIL_USERNAME`, `PROTONMAIL_PASSWORD` and any other setting in an `"env": {…}` object next to `"args"`. If Claude Desktop cannot find `uv`, use its full path (`which uv`) as `"command"`.
-
-## Claude Code
-
-```bash
-claude mcp add protonmail -s user -- uv --directory /path/to/protonmail-mcp-server run protonmail-mcp
-```
-
-Credentials are read from `.env` in the project root. To pass settings explicitly instead, add `-e PROTONMAIL_USERNAME=… -e PROTONMAIL_PASSWORD=…` (and any other `PROTONMAIL_*` setting) before `--`.
-
-The server can also be started with `python -m protonmail_mcp` (or `python -m protonmail_mcp.server`) inside the project environment.
+Replace `/path/to/protonmail-mcp-server` with the absolute path to your clone. If Claude Desktop cannot find `uv`, use its full path (`which uv`) as `"command"`. The server can also be started with `python -m protonmail_mcp` (or `python -m protonmail_mcp.server`) inside the project environment.
 
 To try the server interactively, use the MCP Inspector and open the URL it prints:
 
 ```bash
 npx @modelcontextprotocol/inspector uv --directory /path/to/protonmail-mcp-server run protonmail-mcp
 ```
+
+### Troubleshooting
+
+- **The server does not start, or `/mcp` shows it as failed**: run the command from the client configuration in a terminal with the same `PROTONMAIL_*` variables. The error is printed on stderr (for example a missing `PROTONMAIL_USERNAME`).
+- **"Kan inte nå ProtonMail Bridge"** (cannot reach Bridge): Bridge is not running or not signed in, or `PROTONMAIL_IMAP_HOST`/`PROTONMAIL_IMAP_PORT` do not match the ports shown in Bridge's settings (default IMAP 1143, SMTP 1026).
+- **Login fails**: use the password Bridge shows for the account, not your Proton password.
+- **`ModuleNotFoundError: mcp.server.fastmcp`**: an old version (0.3.0) installed against mcp 2.x. Upgrade as above.
 
 ## Tools
 

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 from tests import sdk_support as sdk
 from tests.mcp_resurser_support import client_session, fake_imap, read_or_error
+from tests.release_support import pyproject_version
 
 SNAPSHOT = Path(__file__).parent / "snapshots" / "mcp_kontrakt.json"
 
@@ -48,6 +49,10 @@ async def listing(monkeypatch) -> dict:
     """serverInfo, instruktioner, förmågor, verktyg, resurser, mallar och promptar."""
     async with client_session(monkeypatch) as session:
         server = sdk.init_info(session)
+        # Versionen ändras vid varje release och kontrolleras av release-testerna
+        # (tests/features/release_version.feature); facit ska inte behöva skrivas om då
+        if server["serverInfo"]["version"] == pyproject_version():
+            server["serverInfo"]["version"] = "<version ur pyproject.toml>"
         tools = sdk.wire(await session.list_tools())["tools"]
         resources = sdk.wire(await session.list_resources())["resources"]
         templates = sdk.wire(await session.list_resource_templates())["resourceTemplates"]

@@ -88,3 +88,27 @@ def newest_first(context):
 @then("ska README.md länka till CHANGELOG.md")
 def readme_links_changelog(context):
     assert "](CHANGELOG.md)" in context["readme"]
+
+
+def _install_command(version: str) -> str:
+    return f'uv tool install --python 3.12 "git+https://github.com/mattias242/protonmail-mcp-server@v{version}"'
+
+
+@then("ska README.md ha ett installationskommando som installerar taggen för versionen ur pyproject.toml")
+def readme_installs_current_tag(context):
+    assert _install_command(context["version"]) in context["readme"], (
+        f"README.md saknar {_install_command(context['version'])}"
+    )
+
+
+@then("ska README.md visa hur en befintlig installation uppgraderas till den versionen")
+def readme_shows_upgrade(context):
+    upgrade = _install_command(context["version"]).replace("uv tool install", "uv tool install --force")
+    assert upgrade in context["readme"], f"README.md saknar {upgrade}"
+
+
+@then("ska release-notes för versionen finnas och ha samma installationskommando")
+def release_notes_install(context):
+    notes = rel.ROOT / "release-notes" / f"v{context['version']}.md"
+    assert notes.exists(), f"{notes.name} saknas"
+    assert _install_command(context["version"]) in notes.read_text(encoding="utf-8")
