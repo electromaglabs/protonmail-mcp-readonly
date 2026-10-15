@@ -14,7 +14,6 @@ from typing import Any, Literal
 from mcp.server.fastmcp import Context
 
 from .. import imap_drafts
-from ..server import mcp
 from ..smtp_client import (
     _build_message,
     prepared_recipients,
@@ -23,7 +22,7 @@ from ..smtp_client import (
     _validate_email_addr,
     _validate_subject,
 )
-from . import _get_app
+from . import _get_app, ADDS, DESTRUCTIVE, SENDS, tool
 from ._types import OptionalStr
 from .reply import _MSGID_RE, _forward_parts, _msg_ids, _parse_original, build_forward, build_reply
 
@@ -102,7 +101,7 @@ async def _save(app, msg: EmailMessage) -> dict[str, Any]:
     return _draft_result(uid, msg)
 
 
-@mcp.tool()
+@tool("Skapa utkast", **ADDS)
 async def create_draft(
     ctx: Context,
     to: str | list[str],
@@ -148,7 +147,7 @@ async def create_draft(
     return await _save(app, msg)
 
 
-@mcp.tool()
+@tool("Skapa svarsutkast", **ADDS)
 async def create_reply_draft(
     ctx: Context,
     uid: str,
@@ -195,7 +194,7 @@ async def create_reply_draft(
     return await _save(app, _build_draft(app, **fields, bcc=bcc))
 
 
-@mcp.tool()
+@tool("Skapa vidarebefordringsutkast", **ADDS)
 async def create_forward_draft(
     ctx: Context,
     uid: str,
@@ -293,7 +292,7 @@ def _kept_from_old(old_raw: bytes, body_html: str | None) -> tuple[dict[str, Any
     return fields, summary
 
 
-@mcp.tool()
+@tool("Ersätt utkast", **DESTRUCTIVE)
 async def update_draft(
     ctx: Context,
     uid: str,
@@ -376,7 +375,7 @@ async def update_draft(
     }
 
 
-@mcp.tool()
+@tool("Skicka utkast", **SENDS)
 async def send_draft(
     ctx: Context,
     uid: str,

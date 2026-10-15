@@ -3,8 +3,7 @@ from typing import Annotated
 from mcp.server.fastmcp import Context
 from pydantic import Field
 
-from ..server import mcp
-from . import _get_app
+from . import _get_app, READ_ONLY, tool
 from ._types import OptionalStr
 from .messages import _with_mailbox
 
@@ -13,7 +12,7 @@ _Size = Annotated[int | None, Field(ge=0, strict=True)]
 _Tristate = Annotated[bool | None, Field(strict=True)]
 
 
-@mcp.tool()
+@tool("Sök mejl", **READ_ONLY)
 async def search_emails(
     ctx: Context,
     mailbox: str = "INBOX",

@@ -5,15 +5,14 @@ from pydantic import Field
 
 from .. import imap_labels
 from ..imap_bulk import BulkResult, single
-from ..server import mcp
-from . import _get_app
+from . import _get_app, SETS_STATE, tool
 from ._uids import UidArg
 
 Mailbox = Annotated[str, Field(min_length=1, max_length=255)]
 Label = Annotated[str, Field(min_length=1, max_length=255)]
 
 
-@mcp.tool()
+@tool("Lägg till etikett", **SETS_STATE)
 async def add_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -> bool | BulkResult:
     """Lägg till en etikett (Labels/…) på ett mejl. Mejlet ligger kvar i sin mapp.
 
@@ -58,7 +57,7 @@ async def add_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -
     return single(await imap_labels.add_label(app.imap, mailbox, [uid], label))
 
 
-@mcp.tool()
+@tool("Ta bort etikett", read_only=False, destructive=True, idempotent=True, open_world=False)
 async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -> bool | BulkResult:
     """Ta bort en etikett (Labels/…) från ett mejl utan att röra mejlet i övrigt.
 
@@ -106,7 +105,7 @@ async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label
     return single(await imap_labels.remove_label(app.imap, mailbox, [uid], label))
 
 
-@mcp.tool()
+@tool("Stjärnmärk mejl", **SETS_STATE)
 async def flag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Stjärnmärk ett mejl (Starred i Proton).
 
@@ -138,7 +137,7 @@ async def flag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bulk
     return single(await imap_labels.set_starred(app.imap, mailbox, [uid], True))
 
 
-@mcp.tool()
+@tool("Ta bort stjärnmärkning", **SETS_STATE)
 async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | BulkResult:
     """Ta bort stjärnmärkningen från ett mejl (Starred i Proton).
 

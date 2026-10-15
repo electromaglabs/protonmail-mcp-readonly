@@ -3,9 +3,8 @@ from typing import Annotated, Literal
 from mcp.server.fastmcp import Context
 from pydantic import Field
 
-from ..server import mcp
 from ..email_parser import parse_email
-from . import _get_app
+from . import _get_app, READ_ONLY, tool
 
 
 def _with_mailbox(messages: list[dict], mailbox: str) -> list[dict]:
@@ -21,7 +20,7 @@ def _not_found(uid: str, mailbox: str) -> ValueError:
     )
 
 
-@mcp.tool()
+@tool("Läs ett mejls rubriker", **READ_ONLY)
 async def get_email_headers(
     ctx: Context,
     uid: str,
@@ -45,7 +44,7 @@ async def get_email_headers(
     return {**{k.replace("-", "_"): v for k, v in headers.items()}, "mailbox": mailbox}
 
 
-@mcp.tool()
+@tool("Lista mejl i en mapp", **READ_ONLY)
 async def list_emails(
     ctx: Context,
     mailbox: str = "INBOX",
@@ -72,7 +71,7 @@ async def list_emails(
     }
 
 
-@mcp.tool()
+@tool("Läs ett mejl", **READ_ONLY)
 async def get_email(
     ctx: Context,
     uid: str,

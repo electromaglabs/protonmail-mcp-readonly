@@ -1,10 +1,9 @@
 from mcp.server.fastmcp import Context
 
-from ..server import mcp
-from . import _get_app
+from . import _get_app, ADDS, DESTRUCTIVE, tool
 
 
-@mcp.tool()
+@tool("Skapa mapp eller etikett", **ADDS)
 async def create_folder(ctx: Context, name: str) -> bool:
     """Skapa en ny mapp eller etikett i Proton.
 
@@ -26,7 +25,7 @@ async def create_folder(ctx: Context, name: str) -> bool:
     return await app.imap.create_folder(name)
 
 
-@mcp.tool()
+@tool("Ta bort mapp eller etikett", **DESTRUCTIVE)
 async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
     """Ta bort en egen mapp (Folders/…) eller etikett (Labels/…).
 
@@ -48,7 +47,7 @@ async def delete_folder(ctx: Context, name: str, force: bool = False) -> bool:
     return await app.imap.delete_folder(name, force=force)
 
 
-@mcp.tool()
+@tool("Byt namn på mapp eller etikett", **DESTRUCTIVE)
 async def rename_folder(ctx: Context, old_name: str, new_name: str) -> bool:
     """Byt namn på en egen mapp (Folders/…) eller etikett (Labels/…).
 

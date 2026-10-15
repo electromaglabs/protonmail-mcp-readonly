@@ -11,8 +11,7 @@ from mcp.server.fastmcp import Context
 
 from ..attachments import AttachmentPaths, load_for_sending
 from ..email_parser import parse_addresses
-from ..server import mcp
-from . import _get_app
+from . import _get_app, SENDS, tool
 from ._types import OptionalStr
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
@@ -388,7 +387,7 @@ def _insert_before_body_end(document: str, fragment: str) -> str:
     return f"{document[:end]}{fragment}\n{document[end:]}"
 
 
-@mcp.tool()
+@tool("Svara på mejl", **SENDS)
 async def reply_to_email(
     ctx: Context,
     uid: str,
@@ -524,7 +523,7 @@ def _escape_lines(text: str) -> str:
     return html.escape(text).replace("\n", "<br>\n")
 
 
-@mcp.tool()
+@tool("Vidarebefordra mejl", **SENDS)
 async def forward_email(
     ctx: Context,
     uid: str,

@@ -7,12 +7,11 @@ from pydantic import Field
 
 from .. import attachments as attachment_files
 from ..email_parser import _decode_bytes, get_attachment_part
-from ..server import mcp
-from . import _get_app
+from . import _get_app, ADDS, tool
 from .messages import _not_found
 
 
-@mcp.tool()
+@tool("Hämta bilaga", **ADDS)
 async def get_attachment(
     ctx: Context,
     uid: str,

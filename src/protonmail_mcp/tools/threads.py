@@ -4,11 +4,10 @@ from mcp.server.fastmcp import Context
 from pydantic import Field
 
 from ..imap_threads import get_thread as fetch_thread
-from ..server import mcp
-from . import _get_app
+from . import _get_app, READ_ONLY, tool
 
 
-@mcp.tool()
+@tool("Visa konversation", **READ_ONLY)
 async def get_thread(
     ctx: Context,
     uid: str,

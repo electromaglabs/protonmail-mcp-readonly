@@ -1,10 +1,9 @@
 from mcp.server.fastmcp import Context
 
-from ..server import mcp
-from . import _get_app
+from . import _get_app, READ_ONLY, tool
 
 
-@mcp.tool()
+@tool("Lista mappar och etiketter", **READ_ONLY)
 async def list_mailboxes(ctx: Context) -> list[dict]:
     """Lista alla mappar/etiketter i brevlådan.
 
@@ -22,7 +21,7 @@ async def list_mailboxes(ctx: Context) -> list[dict]:
     return await app.imap.list_mailboxes()
 
 
-@mcp.tool()
+@tool("Antal mejl i en mapp", **READ_ONLY)
 async def get_mailbox_status(ctx: Context, mailbox: str = "INBOX") -> dict:
     """Hämta antal meddelanden och olästa i en mapp.
 

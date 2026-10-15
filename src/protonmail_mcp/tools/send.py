@@ -1,12 +1,11 @@
 from mcp.server.fastmcp import Context
 
 from ..attachments import AttachmentPaths, load_for_sending
-from ..server import mcp
-from . import _get_app
+from . import _get_app, SENDS, tool
 from ._types import OptionalStr
 
 
-@mcp.tool()
+@tool("Skicka mejl", **SENDS)
 async def send_email(
     ctx: Context,
     to: str | list[str],

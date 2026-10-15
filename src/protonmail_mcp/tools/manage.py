@@ -2,12 +2,11 @@ from mcp.server.fastmcp import Context
 
 from .. import imap_bulk
 from ..imap_bulk import BulkResult
-from ..server import mcp
-from . import _get_app
+from . import _get_app, DESTRUCTIVE, SETS_STATE, tool
 from ._uids import UidArg
 
 
-@mcp.tool()
+@tool("Markera som läst", **SETS_STATE)
 async def mark_email_read(ctx: Context, uid: UidArg, mailbox: str) -> bool | BulkResult:
     """Markera ett eller flera e-post som lästa.
 
@@ -33,7 +32,7 @@ async def mark_email_read(ctx: Context, uid: UidArg, mailbox: str) -> bool | Bul
     return await app.imap.set_flags(mailbox, uid, r"(\Seen)", add=True)
 
 
-@mcp.tool()
+@tool("Markera som oläst", **SETS_STATE)
 async def mark_email_unread(ctx: Context, uid: UidArg, mailbox: str) -> bool | BulkResult:
     """Markera ett eller flera e-post som olästa.
 
@@ -59,7 +58,7 @@ async def mark_email_unread(ctx: Context, uid: UidArg, mailbox: str) -> bool | B
     return await app.imap.set_flags(mailbox, uid, r"(\Seen)", add=False)
 
 
-@mcp.tool()
+@tool("Flytta mejl", **DESTRUCTIVE)
 async def move_email(
     ctx: Context, uid: UidArg, target_mailbox: str, mailbox: str
 ) -> bool | BulkResult:
@@ -106,7 +105,7 @@ async def move_email(
     return await app.imap.move_message(mailbox, uid, target_mailbox)
 
 
-@mcp.tool()
+@tool("Radera mejl", **DESTRUCTIVE)
 async def delete_email(
     ctx: Context, uid: UidArg, mailbox: str, permanent: bool = False
 ) -> bool | BulkResult:
