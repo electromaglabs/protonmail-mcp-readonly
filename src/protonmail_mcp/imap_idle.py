@@ -66,6 +66,7 @@ from .imap_client import (
     _response_text,
     _serialized,
     _sort_newest_first,
+    _with_timeout,
 )
 
 logger = logging.getLogger(__name__)
@@ -474,7 +475,7 @@ class MailWatcher:
             if remaining <= 0:
                 return []
             try:
-                await asyncio.wait_for(self._state(mailbox).signal.wait(), remaining)
+                await _with_timeout(self._state(mailbox).signal.wait(), remaining)
             except asyncio.TimeoutError:
                 return self.messages_since(mailbox, after, uidvalidity) or []
 
@@ -648,7 +649,7 @@ class MailWatcher:
         if _drain(client):
             return True  # ett mejl som ingen har hämtat än: sök innan IDLE
         try:
-            idle = await asyncio.wait_for(client.idle_start(timeout=self._renew), imap.timeout)
+            idle = await _with_timeout(client.idle_start(timeout=self._renew), imap.timeout)
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(
                 f"ProtonMail Bridge bekräftade inte IDLE inom {imap.timeout:g} s"
@@ -678,7 +679,7 @@ class MailWatcher:
         if client.has_pending_idle():
             client.idle_done()
             try:
-                await asyncio.wait_for(idle, imap.timeout)
+                await _with_timeout(idle, imap.timeout)
             except asyncio.TimeoutError:
                 raise asyncio.TimeoutError(
                     f"ProtonMail Bridge avslutade inte IDLE inom {imap.timeout:g} s"

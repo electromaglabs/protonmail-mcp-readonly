@@ -82,8 +82,8 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   skrivning, så att ett UID från fel mapp ger fel i stället för att ändra fel mejl). Validera med `_validate_mailbox`,
   `_validate_uid` och `_imap_quoted`, kvotera mappnamn med `_quote_mailbox` (kodar även modified UTF-7) — innan
   `_ensure_connected`, så att ogiltiga värden aldrig når Bridge. Allt som använder den delade anslutningen körs under
-  `_serialized`, som även kastar anslutningen vid timeout eller avbrott. Tidsgränser i `imap_client.py` sätts med
-  `_with_timeout`, inte `asyncio.wait_for`: i Python 3.10/3.11 sväljer `wait_for` ett avbrott som kommer just när
+  `_serialized`, som även kastar anslutningen vid timeout eller avbrott. Tidsgränser (även i `imap_drafts.py` och
+  `imap_idle.py`) sätts med `_with_timeout`, inte `asyncio.wait_for`: i Python 3.10/3.11 sväljer `wait_for` ett avbrott som kommer just när
   det inre anropet blir klart (bpo-42130), och ett avbrutet verktygsanrop höll då låset till nästa tidsgräns.
 - **Inga nya metoder i `IMAPClient` för nya funktioner.** Skriv dem som modulnivåfunktioner i en egen modul
   (`imap_drafts.py`, `imap_labels.py` …) med `IMAPClient` som första argument, dekorerade med `_serialized`.

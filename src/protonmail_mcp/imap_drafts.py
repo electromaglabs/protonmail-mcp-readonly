@@ -23,6 +23,7 @@ from .imap_client import (
     _require_ok,
     _serialized,
     _validate_uid,
+    _with_timeout,
 )
 
 DRAFTS = "Drafts"
@@ -36,7 +37,7 @@ _APPENDUID_RE = re.compile(r"\[APPENDUID\s+\d+\s+(\d+)\]", re.IGNORECASE)
 async def _append(imap: IMAPClient, message: bytes):
     """APPEND till Drafts med timeout (aioimaplib har ingen egen för APPEND)."""
     try:
-        return await asyncio.wait_for(
+        return await _with_timeout(
             imap._client.append(message, mailbox=_quote_mailbox(DRAFTS), flags=_DRAFT_FLAGS),
             imap.uid_timeout,
         )
