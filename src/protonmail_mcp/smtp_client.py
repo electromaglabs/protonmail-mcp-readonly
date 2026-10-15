@@ -32,12 +32,18 @@ _MAX_SUBJECT_LENGTH = 10_000
 
 
 def _validate_email_addr(addr: str) -> str:
-    """Kastar ValueError om adressen innehåller CRLF eller är ogiltig."""
+    """Kastar ValueError om adressen innehåller CRLF eller är ogiltig.
+
+    Adressen byggs också som ett Address-objekt (_to_address), så att en
+    adress som klarar mönstret men inte går att lägga i ett mejl vägras här
+    som ogiltig, innan något byggs eller skickas.
+    """
     if '\r' in addr or '\n' in addr:
         raise ValueError(f"Ogiltig e-postadress (CRLF): {addr!r}")
     _, parsed = parseaddr(addr)
     if not parsed or not _EMAIL_RE.match(parsed):
         raise ValueError(f"Ogiltig e-postadress: {addr!r}")
+    _to_address(addr)
     return addr
 
 
@@ -76,9 +82,15 @@ def _to_address(addr: str) -> Address:
     if not domain.isascii():
         try:
             domain = idna_domain(domain)
-        except UnicodeError as exc:
-            raise ValueError(f"Ogiltig e-postadress (domän): {addr!r}") from exc
-    return Address(display_name=name, addr_spec=f"{local}@{domain}")
+        except UnicodeError:
+            raise ValueError(f"Ogiltig e-postadress (domän): {addr!r}") from None
+    try:
+        return Address(display_name=name, addr_spec=f"{local}@{domain}")
+    except Exception:
+        # email.headerregistry kastar HeaderParseError (inte ValueError) för
+        # t.ex. en oavslutad citerad lokaldel. Utan kedjan (from None): ett
+        # stackspår med adressen (kanske Bcc) får inte hamna i stderr-loggen.
+        raise ValueError(f"Ogiltig e-postadress: {addr!r}") from None
 
 
 def _set_unstructured(msg: EmailMessage, name: str, value: str) -> None:
