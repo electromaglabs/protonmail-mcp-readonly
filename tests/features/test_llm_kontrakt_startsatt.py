@@ -3,10 +3,10 @@ import runpy
 import warnings
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 from pytest_bdd import parsers, scenarios, then, when
 
 from protonmail_mcp import server
+from tests import sdk_support as sdk
 
 scenarios("llm_kontrakt_startsatt.feature")
 
@@ -14,17 +14,11 @@ scenarios("llm_kontrakt_startsatt.feature")
 @pytest.fixture
 def started(monkeypatch):
     """Fångar servern som run() anropas på, i stället för att starta stdio."""
-    captured = {}
-
-    def fake_run(self, *args, **kwargs):
-        captured["server"] = self
-
-    monkeypatch.setattr(FastMCP, "run", fake_run)
-    return captured
+    return sdk.patch_run(monkeypatch)
 
 
-def _names(mcp_server: FastMCP) -> set[str]:
-    return {t.name for t in mcp_server._tool_manager.list_tools()}
+def _names(mcp_server: sdk.MCPServer) -> set[str]:
+    return {t.name for t in sdk.list_tools(mcp_server)}
 
 
 @when(parsers.parse('servern startas med "python -m protonmail_mcp.server"'))

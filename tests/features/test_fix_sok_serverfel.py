@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from mcp.server.fastmcp.exceptions import ToolError
+from tests.sdk_support import ToolError
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktyget
 from tests.fix_sok_fakebox import imap_mock
@@ -50,7 +51,7 @@ def fetch_fails(imap, result, text):
 
 @when("jag söker efter olästa brev i INBOX", target_fixture="outcome")
 def do_search(mock_ctx):
-    tool = mcp._tool_manager.get_tool("search_emails")
+    tool = sdk.get_tool(mcp, "search_emails")
     try:
         return {"result": asyncio.run(tool.run({"unseen": True}, context=mock_ctx)), "error": None}
     except ToolError as e:

@@ -3,9 +3,9 @@ import asyncio
 import re
 
 import pytest
-from mcp.shared.exceptions import McpError
 from pytest_bdd import parsers, scenarios, then, when
 
+from tests import sdk_support as sdk
 from tests.mcp_resurser_support import client_session
 
 scenarios("mcp_resurser_promptar.feature")
@@ -39,8 +39,8 @@ def get_prompt(monkeypatch, state, prompt, args):
         async with client_session(monkeypatch) as session:
             try:
                 return _text_of(await session.get_prompt(prompt, arguments)), None
-            except McpError as exc:
-                return None, exc.error.message
+            except sdk.MCPError as exc:
+                return None, sdk.error_message(exc)
 
     state["text"], state["error"] = asyncio.run(run())
 

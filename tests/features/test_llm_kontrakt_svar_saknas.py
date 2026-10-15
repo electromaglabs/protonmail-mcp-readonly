@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session, text_of
 
 scenarios("llm_kontrakt_svar_saknas.feature")
@@ -36,7 +37,7 @@ def call(monkeypatch, mocks, tool, uid, mailbox):
 
 @then(parsers.parse('ska anropet misslyckas med texten "{text}"'))
 def fails_with(result, text):
-    assert result.isError, text_of(result)
+    assert sdk.wire(result).get("isError"), text_of(result)
     assert text in text_of(result)
 
 

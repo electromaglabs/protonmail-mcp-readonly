@@ -3,16 +3,17 @@ import asyncio
 
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from mcp.server.fastmcp.exceptions import ToolError
+from tests.sdk_support import ToolError
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.tools import messages  # noqa: F401 — registrerar verktygen
 
 scenarios("fix_verktyg_body_format.feature")
 
 
 def _call(mock_ctx, args):
-    tool = mcp._tool_manager.get_tool("get_email")
+    tool = sdk.get_tool(mcp, "get_email")
     try:
         return {"result": asyncio.run(tool.run(args, context=mock_ctx)), "error": None}
     except ToolError as e:

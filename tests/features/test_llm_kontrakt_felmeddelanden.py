@@ -10,6 +10,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp.imap_client import IMAPAuthenticationError
 from protonmail_mcp.smtp_client import SMTPPartialDeliveryError
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session, text_of
 
 scenarios("llm_kontrakt_felmeddelanden.feature")
@@ -92,7 +93,7 @@ def send_one(monkeypatch, mocks, to):
 
 @then(parsers.parse('ska anropet misslyckas med texten "{text}"'))
 def fails_with(result, text):
-    assert result.isError, text_of(result)
+    assert sdk.wire(result).get("isError"), text_of(result)
     assert text in text_of(result)
 
 

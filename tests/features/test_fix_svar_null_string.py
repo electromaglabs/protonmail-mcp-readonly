@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.tools import reply, send  # noqa: F401 — registrerar verktygen
 
 scenarios("fix_svar_null_string.feature")
@@ -26,13 +27,13 @@ def ctx():
 @when(parsers.parse('jag anropar verktyget send_email med HTML-texten "{html}"'))
 def call_send(ctx, html):
     args = {"to": "b@x.se", "subject": "s", "body": "b", "body_html": html}
-    asyncio.run(mcp._tool_manager.get_tool("send_email").run(args, context=ctx))
+    asyncio.run(sdk.get_tool(mcp, "send_email").run(args, context=ctx))
 
 
 @when(parsers.parse('jag anropar verktyget reply_to_email med HTML-texten "{html}"'))
 def call_reply(ctx, html):
     args = {"uid": "1", "mailbox": "INBOX", "body": "b", "body_html": html}
-    asyncio.run(mcp._tool_manager.get_tool("reply_to_email").run(args, context=ctx))
+    asyncio.run(sdk.get_tool(mcp, "reply_to_email").run(args, context=ctx))
 
 
 def _html(ctx):

@@ -7,12 +7,10 @@ import asyncio
 from contextlib import AsyncExitStack
 
 import pytest
-from mcp import types
-from mcp.shared.exceptions import McpError
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import resources, subscriptions
+from tests import sdk_support as sdk
 from tests.mcp_resurser_support import client_session
 
 scenarios("mcp_resurser_prenumeration.feature")
@@ -38,10 +36,9 @@ class _Client:
         self.received = received.setdefault(name, [])
 
     async def handler(self, message):
-        if isinstance(message, types.ServerNotification) and isinstance(
-            message.root, types.ResourceUpdatedNotification
-        ):
-            self.received.append(str(message.root.params.uri))
+        uri = sdk.resource_updated_uri(message)
+        if uri is not None:
+            self.received.append(uri)
 
 
 def _run_plan(monkeypatch, state, notify_uri):
@@ -59,12 +56,12 @@ def _run_plan(monkeypatch, state, notify_uri):
 
             for step, name, uri in state["plan"]:
                 if step == "subscribe":
-                    await (await session_for(name)).subscribe_resource(AnyUrl(uri))
+                    await (await session_for(name)).subscribe_resource(uri)
                 elif step == "unsubscribe":
-                    await (await session_for(name)).unsubscribe_resource(AnyUrl(uri))
+                    await (await session_for(name)).unsubscribe_resource(uri)
                 elif step == "disconnected":
                     async with client_session(monkeypatch) as gone:
-                        await gone.subscribe_resource(AnyUrl(uri))
+                        await gone.subscribe_resource(uri)
                 elif step == "break-first":
                     first, *_ = subscriptions.registry.sessions()
 
@@ -126,7 +123,7 @@ def first_fails(state):
 def connects(monkeypatch, state):
     async def run():
         async with client_session(monkeypatch) as session:
-            return session.get_server_capabilities()
+            return sdk.init_info(session)["capabilities"]
 
     state["capabilities"] = asyncio.run(run())
 
@@ -141,9 +138,9 @@ def try_subscribe(monkeypatch, state, uri):
     async def run():
         async with client_session(monkeypatch) as session:
             try:
-                await session.subscribe_resource(AnyUrl(uri))
-            except McpError as exc:
-                return exc.error.message
+                await session.subscribe_resource(uri)
+            except sdk.MCPError as exc:
+                return sdk.error_message(exc)
         return None
 
     state["error"] = asyncio.run(run())
@@ -154,8 +151,8 @@ def try_subscribe(monkeypatch, state, uri):
 
 @then("ska serverns förmågor ha resources.subscribe satt")
 def subscribe_capability(state):
-    assert state["capabilities"].resources is not None
-    assert state["capabilities"].resources.subscribe is True
+    assert state["capabilities"].get("resources") is not None
+    assert state["capabilities"]["resources"].get("subscribe") is True
 
 
 @then(parsers.parse('ska klienten få en notis om att "{uri}" har ändrats'))

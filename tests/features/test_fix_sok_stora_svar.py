@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from mcp.server.fastmcp.exceptions import ToolError
+from tests.sdk_support import ToolError
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktyget
 from tests.fix_sok_fakebox import imap_mock
@@ -78,7 +79,7 @@ def chunked(imap, n):
 
 @when("jag läser schemat för search_emails", target_fixture="prop")
 def schema():
-    return mcp._tool_manager.get_tool("search_emails").parameters["properties"]["max_results"]
+    return sdk.get_tool(mcp, "search_emails").parameters["properties"]["max_results"]
 
 
 @then("ska max_results ha standardvärdet 50 och vara begränsat till 1–200")
@@ -90,7 +91,7 @@ def bounded(prop):
 
 @when(parsers.parse("jag anropar search_emails med max_results {n:d}"), target_fixture="outcome")
 def call_tool(mock_ctx, n):
-    tool = mcp._tool_manager.get_tool("search_emails")
+    tool = sdk.get_tool(mcp, "search_emails")
     try:
         return {"result": asyncio.run(tool.run({"max_results": n}, context=mock_ctx)), "error": None}
     except ToolError as e:

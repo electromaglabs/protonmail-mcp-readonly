@@ -8,6 +8,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import imap_labels
 from protonmail_mcp.tools import reply, send, threads
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session, text_of
 
 scenarios("llm_kontrakt_parametertyper.feature")
@@ -117,4 +118,4 @@ def call_with_string_value(monkeypatch, state, tool, param, value):
 
 @then("ska anropet inte avvisas av valideringen")
 def not_rejected(result):
-    assert not result.isError, text_of(result)
+    assert not sdk.wire(result).get("isError"), text_of(result)

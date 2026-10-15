@@ -17,6 +17,7 @@ from protonmail_mcp.imap_idle import MailWatcher
 from protonmail_mcp.server import AppContext
 from protonmail_mcp.tools import new_mail
 from protonmail_mcp.tools.messages import list_emails
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session, text_of
 from tests.ny_mejl_fakeidle import FakeIdleBridge
 
@@ -236,7 +237,7 @@ def listed_during_wait(env):
 
 @then("ska anropet avvisas utan att Bridge kontaktas")
 def rejected(env):
-    assert env.result.isError
+    assert sdk.wire(env.result).get("isError")
     assert "timeout_seconds" in text_of(env.result)
     # client_session gör bool(imap); inga andra anrop får ha skett
     assert [c for c in env.imap_mock.mock_calls if c[0] != "__bool__"] == []

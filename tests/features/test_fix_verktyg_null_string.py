@@ -4,6 +4,7 @@ import asyncio
 from pytest_bdd import scenarios, given, when, then, parsers
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktygen
 
 scenarios("fix_verktyg_null_string.feature")
@@ -16,13 +17,13 @@ def connected(mock_ctx):
 
 @when(parsers.parse('jag söker i INBOX med {field} "{value}"'))
 def search_with_string(mock_ctx, field, value):
-    tool = mcp._tool_manager.get_tool("search_emails")
+    tool = sdk.get_tool(mcp, "search_emails")
     asyncio.run(tool.run({"mailbox": "INBOX", field: value}, context=mock_ctx))
 
 
 @when(parsers.parse("jag söker i INBOX med {field} satt till JSON-null"))
 def search_with_null(mock_ctx, field):
-    tool = mcp._tool_manager.get_tool("search_emails")
+    tool = sdk.get_tool(mcp, "search_emails")
     asyncio.run(tool.run({"mailbox": "INBOX", field: None}, context=mock_ctx))
 
 

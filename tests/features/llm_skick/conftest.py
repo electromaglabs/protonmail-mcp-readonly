@@ -7,11 +7,11 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 from pytest_bdd import given, parsers, then, when
 
 from protonmail_mcp.smtp_client import SMTPClient
 from tests.llm_skick_support import BridgeSpy, call_tool, make_app, make_settings, record_smtp, spy_imap
+from tests.sdk_support import ToolError
 
 # Rimliga argument per verktyg. Vägran ska komma innan argumenten ens tolkas,
 # men scenarierna blir lättare att läsa med verkliga anrop.

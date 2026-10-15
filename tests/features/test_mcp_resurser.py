@@ -8,6 +8,7 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import resources
+from tests import sdk_support as sdk
 from tests.mcp_resurser_support import (
     RAW_EMAIL,
     client_session,
@@ -118,7 +119,7 @@ def list_resources(monkeypatch, state):
 
     listed, templates = _run(monkeypatch, state, action)
     state["resources"] = [str(r.uri) for r in listed.resources]
-    state["templates"] = [t.uriTemplate for t in templates.resourceTemplates]
+    state["templates"] = [t["uriTemplate"] for t in sdk.wire(templates)["resourceTemplates"]]
 
 
 @when(parsers.parse('klienten läser resursen "{uri}"'))

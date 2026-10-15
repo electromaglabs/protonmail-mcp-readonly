@@ -1,6 +1,6 @@
 """BDD: notiser efter lyckade skrivverktyg (efterfix-resurser, R4-2).
 
-Verktygen anropas via en riktig MCP-klientsession i minnet (klient → FastMCP →
+Verktygen anropas via en riktig MCP-klientsession i minnet (klient → MCPServer →
 verktyg), med attrapper i stället för Bridge och SMTP.
 """
 import asyncio
@@ -9,11 +9,10 @@ from unittest.mock import AsyncMock
 
 import anyio
 import pytest
-from mcp.shared.exceptions import McpError
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import imap_bulk, subscriptions
+from tests import sdk_support as sdk
 from tests.efterfix_resurser_support import Collector, client_session
 from tests.mcp_resurser_support import fake_imap
 
@@ -77,13 +76,13 @@ def _call(monkeypatch, state, tool, arguments):
             monkeypatch, imap=state["imap"], smtp=state["smtp"], message_handler=collector
         ) as session:
             for uri in state["subscribe"]:
-                await session.subscribe_resource(AnyUrl(uri))
+                await session.subscribe_resource(uri)
             started = time.monotonic()
             try:
                 result = await asyncio.wait_for(session.call_tool(tool, arguments), 3)
-                state["error"] = result.content[0].text if result.isError else None
-            except McpError as exc:
-                state["error"] = exc.error.message
+                state["error"] = result.content[0].text if sdk.wire(result).get("isError") else None
+            except sdk.MCPError as exc:
+                state["error"] = sdk.error_message(exc)
             state["elapsed"] = time.monotonic() - started
             if "hang" in state:
                 state["hang"].set()
@@ -133,9 +132,9 @@ def call_list(monkeypatch, state, mailbox):
 def list_templates(monkeypatch, state):
     async def run():
         async with client_session(monkeypatch) as session:
-            templates = (await session.list_resource_templates()).resourceTemplates
-            resources = (await session.list_resources()).resources
-            return {t.name: t.description for t in [*templates, *resources]}
+            templates = sdk.wire(await session.list_resource_templates())["resourceTemplates"]
+            resources = sdk.wire(await session.list_resources())["resources"]
+            return {t["name"]: t.get("description") for t in [*templates, *resources]}
 
     state["descriptions"] = asyncio.run(run())
 

@@ -5,6 +5,7 @@ import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.tools import manage, messages, search  # noqa: F401  registrerar verktygen
 
 scenarios("efterfix_verktyg_mailbox_kravs.feature")
@@ -22,7 +23,7 @@ def _imap(mock_ctx):
 
 
 def _tool(name):
-    return mcp._tool_manager.get_tool(name)
+    return sdk.get_tool(mcp, name)
 
 
 def _args(verktyg, uid, mailbox=None):

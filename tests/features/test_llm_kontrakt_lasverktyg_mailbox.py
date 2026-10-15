@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session, text_of
 
 scenarios("llm_kontrakt_lasverktyg_mailbox.feature")
@@ -58,7 +59,7 @@ def read_schema(monkeypatch, tool):
 
 @then("ska anropet avvisas för att mailbox saknas")
 def rejected(result):
-    assert result.isError
+    assert sdk.wire(result).get("isError")
     assert "mailbox" in text_of(result)
 
 
@@ -70,15 +71,16 @@ def nothing_read(imap):
 
 @then(parsers.parse('ska mejlet med UID "{uid}" ha lästs i "{mailbox}"'))
 def read_in(imap, result, uid, mailbox):
-    assert not result.isError, text_of(result)
+    assert not sdk.wire(result).get("isError"), text_of(result)
     calls = imap.get_message.call_args_list + imap.get_message_headers.call_args_list
     assert [c.args for c in calls] == [(mailbox, uid)]
 
 
 @then("ska mailbox vara obligatorisk utan standardvärde")
 def mailbox_required(tool):
-    assert "mailbox" in tool.inputSchema["required"]
-    assert "default" not in tool.inputSchema["properties"]["mailbox"]
+    schema = sdk.wire(tool)["inputSchema"]
+    assert "mailbox" in schema["required"]
+    assert "default" not in schema["properties"]["mailbox"]
 
 
 @then("ska beskrivningen säga att UID:t gäller per mapp")

@@ -6,9 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from mcp.server.fastmcp.exceptions import ToolError
+from tests.sdk_support import ToolError
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.tools import messages  # noqa: F401 — registrerar verktygen
 
@@ -50,7 +51,7 @@ def mailbox_with_messages(mock_ctx, settings, exists):
     target_fixture="outcome",
 )
 def call_list_emails(mock_ctx, page, page_size):
-    tool = mcp._tool_manager.get_tool("list_emails")
+    tool = sdk.get_tool(mcp, "list_emails")
     try:
         result = asyncio.run(
             tool.run({"mailbox": "INBOX", "page": page, "page_size": page_size}, context=mock_ctx)

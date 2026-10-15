@@ -4,11 +4,10 @@ import logging
 
 import anyio
 import pytest
-from mcp import types
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import resources, subscriptions
+from tests import sdk_support as sdk
 from tests.efterfix_resurser_support import Collector, client_session
 
 scenarios("efterfix_resurser_hangande_session.feature")
@@ -54,15 +53,15 @@ def notify_until_forgotten(monkeypatch, state, caplog, mailbox):
     release = anyio.Event()
 
     async def stuck(message):
-        if isinstance(message, types.ServerNotification):
+        if sdk.resource_updated_uri(message) is not None:
             await release.wait()
 
     async def run():
         async with client_session(monkeypatch, message_handler=stuck) as slow_client, \
                 client_session(monkeypatch, message_handler=fast) as fast_client:
-            await slow_client.subscribe_resource(AnyUrl(uri))
+            await slow_client.subscribe_resource(uri)
             (slow_session,) = subscriptions.registry.sessions()
-            await fast_client.subscribe_resource(AnyUrl(uri))
+            await fast_client.subscribe_resource(uri)
             sent = 0
             # Minnesströmmen buffrar några notiser innan sändningen börjar vänta
             with caplog.at_level(logging.INFO, logger="protonmail_mcp.subscriptions"):

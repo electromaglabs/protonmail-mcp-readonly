@@ -7,14 +7,12 @@ import asyncio
 import time
 
 import pytest
-from mcp import types
-from mcp.shared.memory import create_connected_server_and_client_session
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import config
 from protonmail_mcp.config import Settings
 from protonmail_mcp.server import mcp, register_tools
+from tests import sdk_support as sdk
 from tests.ny_mejl_fakeidle import FakeIdleBridge
 
 scenarios("ny_mejl_notiser.feature")
@@ -57,10 +55,9 @@ def _run(state, mailbox):
                         watch_mailboxes=state["mailboxes"], _env_file=None)
 
     async def handler(message):
-        if isinstance(message, types.ServerNotification) and isinstance(
-            message.root, types.ResourceUpdatedNotification
-        ):
-            state["notes"].append(str(message.root.params.uri))
+        uri = sdk.resource_updated_uri(message)
+        if uri is not None:
+            state["notes"].append(uri)
 
     async def scenario():
         fake = FakeIdleBridge()
@@ -70,10 +67,8 @@ def _run(state, mailbox):
         state["monkeypatch"].setattr(config, "get_settings",
                                      lambda: settings.model_copy(update={"imap_port": port}))
         try:
-            async with create_connected_server_and_client_session(
-                mcp._mcp_server, message_handler=handler
-            ) as session:
-                await session.subscribe_resource(AnyUrl(state["subscribe"]))
+            async with sdk.connect(mcp, message_handler=handler) as session:
+                await session.subscribe_resource(state["subscribe"])
                 # Vänta tills varje bevakad mapp ligger i IDLE
                 watched = len(state["mailboxes"].split(","))
                 deadline = time.monotonic() + 5

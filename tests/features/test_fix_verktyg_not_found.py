@@ -3,9 +3,10 @@ import asyncio
 
 from pytest_bdd import scenarios, given, when, then, parsers
 
-from mcp.server.fastmcp.exceptions import ToolError
+from tests.sdk_support import ToolError
 
 from protonmail_mcp.server import mcp
+from tests import sdk_support as sdk
 from protonmail_mcp.tools import messages  # noqa: F401 — registrerar verktygen
 
 scenarios("fix_verktyg_not_found.feature")
@@ -23,7 +24,7 @@ def no_such_message(mock_ctx, mailbox, uid):
     target_fixture="outcome",
 )
 def call_tool(mock_ctx, tool_name, uid, mailbox):
-    tool = mcp._tool_manager.get_tool(tool_name)
+    tool = sdk.get_tool(mcp, tool_name)
     try:
         return {"result": asyncio.run(tool.run({"uid": uid, "mailbox": mailbox}, context=mock_ctx)),
                 "error": None}

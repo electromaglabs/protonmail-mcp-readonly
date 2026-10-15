@@ -2,7 +2,6 @@
 import asyncio
 
 import pytest
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import subscriptions
@@ -34,7 +33,7 @@ def _run(monkeypatch, state, notify):
         collector = Collector()
         async with client_session(monkeypatch, message_handler=collector) as session:
             for uri in state["subscribe"]:
-                await session.subscribe_resource(AnyUrl(uri))
+                await session.subscribe_resource(uri)
             await notify()
             await session.send_ping()  # notiser före svaret har då nått klienten
         state["received"] = collector.uris

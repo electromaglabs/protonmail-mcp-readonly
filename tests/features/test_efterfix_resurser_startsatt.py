@@ -3,11 +3,10 @@ import runpy
 import warnings
 
 import pytest
-from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel.server import NotificationOptions
 from pytest_bdd import parsers, scenarios, then, when
 
 from protonmail_mcp import server
+from tests import sdk_support as sdk
 
 scenarios("efterfix_resurser_startsatt.feature")
 
@@ -15,9 +14,7 @@ scenarios("efterfix_resurser_startsatt.feature")
 @pytest.fixture
 def started(monkeypatch):
     """Fångar servern som run() anropas på, i stället för att starta stdio."""
-    captured = {}
-    monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: captured.setdefault("server", self))
-    return captured
+    return sdk.patch_run(monkeypatch)
 
 
 @when('servern startas med "python -m protonmail_mcp"')
@@ -29,7 +26,7 @@ def start_package(started):
 
 
 def _tool_names(srv):
-    return {t.name for t in srv._tool_manager.list_tools()}
+    return {t.name for t in sdk.list_tools(srv)}
 
 
 @then("ska den startade servern ha samma verktyg som med kommandot protonmail-mcp")
@@ -43,12 +40,11 @@ def same_tools(started):
 @then('ska den startade servern ha resursen "mailboxes://" och prenumerationer på resurser')
 def resources_and_subscribe(started):
     srv = started["server"]
-    assert "mailboxes://" in [str(r.uri) for r in srv._resource_manager.list_resources()]
-    caps = srv._mcp_server.get_capabilities(NotificationOptions(), {})
-    assert caps.resources.subscribe is True
+    assert "mailboxes://" in [str(r.uri) for r in sdk.list_resources(srv)]
+    assert sdk.capabilities(srv)["resources"]["subscribe"] is True
 
 
 @then(parsers.parse('ska den startade servern ha promptarna "{names}"'))
 def has_prompts(started, names):
-    listed = {p.name for p in started["server"]._prompt_manager.list_prompts()}
+    listed = {p.name for p in sdk.list_prompts(started["server"])}
     assert {n.strip() for n in names.split(",")} <= listed
