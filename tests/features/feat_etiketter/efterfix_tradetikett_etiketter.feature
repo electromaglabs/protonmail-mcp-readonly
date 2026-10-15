@@ -31,3 +31,28 @@ Feature: remove_label och add_label ger rätt svar per UID i svåra fall
     And att mejlet med Message-ID "<b@x>" har etiketten "Labels/Kvitton" med UID "8"
     When jag tar bort etiketten "Kvitton" från UID-listan "41, 42" i "INBOX"
     Then ska resultatet ha ok "42" och UID "41" misslyckat med "saknar Message-ID"
+
+  Scenario: En etikett som finns med annan versal används i stället för att en dubblett föreslås
+    Given att etiketten "Labels/Faktura" finns
+    And att mejlet med UID "42" och Message-ID "<a@x>" ligger i "INBOX"
+    When jag lägger till etiketten "faktura" på UID "42" i "INBOX" med efterfix-steget
+    Then ska verktyget svara att det lyckades
+    And ska mejlet med Message-ID "<a@x>" ligga i "Labels/Faktura"
+    And ska Bridge inte ha fått "CREATE"
+
+  Scenario: remove_label hittar också etiketten med annan versal
+    Given att etiketten "Labels/Faktura" finns
+    And att mejlet med UID "42" och Message-ID "<a@x>" ligger i "INBOX"
+    And att mejlet med Message-ID "<a@x>" har etiketten "Labels/Faktura" med UID "7"
+    When jag tar bort etiketten "FAKTURA" från UID-listan "42" i "INBOX"
+    Then ska resultatet ha ok "42" och inga misslyckade
+    And ska mejlet med Message-ID "<a@x>" inte ligga i "Labels/Faktura"
+
+  Scenario: Flera etiketter med annan versal ger fel som nämner dem, utan råd om att skapa en ny
+    Given att etiketten "Labels/Faktura" finns
+    And att etiketten "Labels/FAKTURA" finns
+    And att mejlet med UID "42" och Message-ID "<a@x>" ligger i "INBOX"
+    When jag lägger till etiketten "faktura" på UID "42" i "INBOX" med efterfix-steget
+    Then ska verktyget ge ett fel som nämner "Labels/Faktura"
+    And ska felet inte nämna "create_folder"
+    And ska Bridge inte ha fått något skrivkommando

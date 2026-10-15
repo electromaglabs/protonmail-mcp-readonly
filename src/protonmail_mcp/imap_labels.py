@@ -92,11 +92,27 @@ def label_mailbox(label: str) -> str:
     return name
 
 
-async def _require_label(imap: IMAPClient, label: str) -> None:
-    """Kontrollerar med LIST att etiketten finns; annars ValueError med hänvisning till create_folder."""
+async def _require_label(imap: IMAPClient, label: str) -> str:
+    """Kontrollerar med LIST att etiketten finns och returnerar dess exakta namn.
+
+    Bridge jämför namn exakt, men för en människa är "faktura" och "Faktura"
+    samma etikett. Finns ingen exakt träff men precis en etikett med samma
+    namn utan hänsyn till versaler används den — att i stället hänvisa till
+    create_folder skulle skapa en nästan-dubblett. Flera sådana ger fel som
+    räknar upp dem. Finns ingen alls: ValueError med hänvisning till create_folder.
+    """
     # "*" och "%" i namnet är jokertecken i LIST: bara exakt samma namn räknas
     if any(name == label for _, name in await imap._list(_quote_mailbox(label))):
-        return
+        return label
+    key = label.casefold()
+    variants = sorted({name for _, name in await imap._list("*") if name.casefold() == key})
+    if len(variants) == 1:
+        return variants[0]
+    if variants:
+        raise ValueError(
+            f"Etiketten {label} finns inte med exakt det namnet, men det finns flera med annan "
+            f"versal/gemen: {', '.join(variants)}. Ange vilken som avses med exakt namn."
+        )
     raise ValueError(
         f"Etiketten {label} finns inte. Skapa den först med create_folder(\"{label}\"); "
         "list_mailboxes visar vilka etiketter som finns."
@@ -254,7 +270,6 @@ async def add_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str)
     """Lägger till etiketten på mejlen med UID COPY; mejlen ligger kvar i mailbox."""
     uids = validate_uids(uids)
     target = label_mailbox(label)
-    quoted_target = _quote_mailbox(target)
     _quote_mailbox(mailbox)
     if _mailbox_key(mailbox) == _mailbox_key(target):
         raise ValueError(
@@ -262,12 +277,12 @@ async def add_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str)
             "(t.ex. INBOX) som mailbox."
         )
     await imap._ensure_connected()
-    await _require_label(imap, target)
+    target = await _require_label(imap, target)
     await imap._select(mailbox)
     found, failed = await existing_uids(imap, mailbox, uids)
     ok: list[str] = []
     if found:
-        resp = await imap._uid("copy", uid_set(found), quoted_target)
+        resp = await imap._uid("copy", uid_set(found), _quote_mailbox(target))
         if resp.result == "OK":
             ok = found
         else:
@@ -289,7 +304,7 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
     target = label_mailbox(label)
     _quote_mailbox(mailbox)
     await imap._ensure_connected()
-    await _require_label(imap, target)
+    target = await _require_label(imap, target)
 
     if _mailbox_key(mailbox) == _mailbox_key(target):
         await imap._select(target)

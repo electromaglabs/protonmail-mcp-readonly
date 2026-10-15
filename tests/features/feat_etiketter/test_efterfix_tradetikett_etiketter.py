@@ -1,7 +1,7 @@
 """BDD (efterfix-tradetikett): etikettverktygen svarar rätt per UID i svåra fall."""
-from pytest_bdd import given, parsers, scenarios, when
+from pytest_bdd import given, parsers, scenarios, then, when
 
-from protonmail_mcp.tools.labels import remove_label
+from protonmail_mcp.tools.labels import add_label, remove_label
 
 from .conftest import run_tool, uid_list
 
@@ -45,3 +45,13 @@ def blank_message_id(bridge, uid, mid, mailbox):
 @when(parsers.parse('jag tar bort etiketten "{label}" från UID-listan "{uids}" i "{mailbox}"'))
 def remove_label_list(mock_ctx, bridge, label, uids, mailbox):
     run_tool(bridge, remove_label(mock_ctx, uid=uid_list(uids), mailbox=mailbox, label=label))
+
+
+@when(parsers.parse('jag lägger till etiketten "{label}" på UID "{uid}" i "{mailbox}" med efterfix-steget'))
+def add_label_single(mock_ctx, bridge, label, uid, mailbox):
+    run_tool(bridge, add_label(mock_ctx, uid=uid, mailbox=mailbox, label=label))
+
+
+@then(parsers.parse('ska felet inte nämna "{text}"'))
+def error_does_not_mention(bridge, text):
+    assert bridge.errors and all(text not in e for e in bridge.errors), bridge.errors

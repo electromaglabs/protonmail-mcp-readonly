@@ -24,9 +24,12 @@ async def add_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label) -
 
     Etiketten måste finnas. Skapa den annars först med
     create_folder("Labels/Namn"); list_mailboxes visar vilka som finns.
+    Finns den bara med annan versal/gemen (t.ex. "Faktura" när label är
+    "faktura") används den befintliga; skapa ingen dubblett.
 
     Avvisas med fel (inget ändras):
-    - etiketten finns inte,
+    - etiketten finns inte, eller finns i flera varianter med olika
+      versaler men inte med exakt det namnet (felet räknar upp dem),
     - label är Starred (använd flag_email), en mapp (Folders/…, använd
       move_email) eller en systemmapp (INBOX, Trash …),
     - mailbox är etiketten själv,
@@ -69,7 +72,9 @@ async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label
 
     Avvisas med fel (inget ändras):
     - mejlet har inte etiketten,
-    - etiketten finns inte (create_folder("Labels/Namn") skapar den),
+    - etiketten finns inte (create_folder("Labels/Namn") skapar den); finns
+      den bara med annan versal/gemen används den befintliga, och finns
+      flera sådana varianter räknar felet upp dem,
     - label är Starred (använd unflag_email), en mapp eller en systemmapp,
     - UID:t finns inte i mailbox (UID:n gäller per mapp),
     - mejlet saknar ett Message-ID som går att söka på, eller går inte att

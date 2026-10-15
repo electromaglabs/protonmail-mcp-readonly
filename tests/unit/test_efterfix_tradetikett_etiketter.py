@@ -141,3 +141,64 @@ class TestUnusableMessageIdIsPerUid:
         assert result["ok"] == ["42"]
         assert [f["uid"] for f in result["failed"]] == ["41"]
         assert "saknar Message-ID" in result["failed"][0]["error"]
+
+
+class TestLabelCase:
+    async def test_add_label_uses_the_existing_label_with_other_case(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Faktura")
+        bridge.put("INBOX", "42", "<a@x>")
+        result = await imap_labels.add_label(imap, "INBOX", ["42"], "faktura")
+        assert result == {"ok": ["42"], "failed": []}
+        assert ("UID COPY", "42", '"Labels/Faktura"') in bridge.writes()
+        assert "Labels/faktura" not in bridge.views
+
+    async def test_remove_label_uses_the_existing_label_with_other_case(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Faktura")
+        bridge.put("INBOX", "42", "<a@x>")
+        bridge.put("Labels/Faktura", "7", "<a@x>")
+        result = await imap_labels.remove_label(imap, "INBOX", ["42"], "labels/FAKTURA")
+        assert result == {"ok": ["42"], "failed": []}
+        assert bridge.views["Labels/Faktura"] == {}
+
+    async def test_label_view_as_mailbox_with_other_case(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Faktura")
+        bridge.put("INBOX", "42", "<a@x>")
+        bridge.put("Labels/Faktura", "7", "<a@x>")
+        result = await imap_labels.remove_label(imap, "Labels/faktura", ["7"], "faktura")
+        assert result == {"ok": ["7"], "failed": []}
+
+    async def test_exact_match_wins(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Faktura")
+        bridge.add_label("Labels/faktura")
+        bridge.put("INBOX", "42", "<a@x>")
+        await imap_labels.add_label(imap, "INBOX", ["42"], "faktura")
+        assert ("UID COPY", "42", '"Labels/faktura"') in bridge.writes()
+
+    async def test_ambiguous_case_variants_are_refused_without_create_advice(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Faktura")
+        bridge.add_label("Labels/FAKTURA")
+        bridge.put("INBOX", "42", "<a@x>")
+        with pytest.raises(ValueError) as exc:
+            await imap_labels.add_label(imap, "INBOX", ["42"], "faktura")
+        assert "Labels/Faktura" in str(exc.value) and "Labels/FAKTURA" in str(exc.value)
+        assert "create_folder" not in str(exc.value)
+        assert bridge.writes() == []
+
+    async def test_missing_label_still_refers_to_create_folder(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/Kvitton")
+        bridge.put("INBOX", "42", "<a@x>")
+        with pytest.raises(ValueError, match=r'create_folder\("Labels/Faktura"\)'):
+            await imap_labels.add_label(imap, "INBOX", ["42"], "Faktura")
+
+    async def test_folder_with_same_name_is_not_a_label(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.views["Folders/faktura"] = {}
+        bridge.put("INBOX", "42", "<a@x>")
+        with pytest.raises(ValueError, match="create_folder"):
+            await imap_labels.add_label(imap, "INBOX", ["42"], "faktura")
