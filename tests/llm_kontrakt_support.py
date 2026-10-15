@@ -14,8 +14,15 @@ from protonmail_mcp.server import AppContext, mcp, register_tools
 
 @asynccontextmanager
 async def client_session(monkeypatch, imap=None, smtp=None):
-    """ClientSession mot servern med imap/smtp-attrapper (AsyncMock som standard)."""
+    """ClientSession mot servern med imap/smtp-attrapper (AsyncMock som standard).
+
+    Verktygsanropen läser konfigurationen (policy, granskningslogg, lösenords-
+    rensning i fel). Testerna får egna testinställningar i stället för att
+    förlita sig på att ett tidigare test råkat cacha get_settings() eller att
+    en .env finns, så att varje testfil kan köras ensam.
+    """
     register_tools()
+    use_test_settings(monkeypatch)
     app = AppContext(imap=imap or AsyncMock(), smtp=smtp or AsyncMock())
 
     @asynccontextmanager
@@ -25,6 +32,22 @@ async def client_session(monkeypatch, imap=None, smtp=None):
     monkeypatch.setattr(mcp._mcp_server, "lifespan", lifespan)
     async with create_connected_server_and_client_session(mcp._mcp_server) as session:
         yield session
+
+
+def use_test_settings(monkeypatch):
+    """Testinställningar för get_settings(), oberoende av .env och tidigare tester."""
+    from protonmail_mcp import config
+
+    monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
+    monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
+    # Ingen cachad Settings från ett tidigare test (eller en riktig .env) får läcka in
+    # (get_settings kan redan vara utbytt av testet; då finns ingen cache)
+    cache_clear = getattr(config.get_settings, "cache_clear", None)
+    if cache_clear is not None:
+        cache_clear()
+    settings = config.Settings()
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    return settings
 
 
 def text_of(result) -> str:
