@@ -2,7 +2,7 @@
 
 Den riktiga IMAPClient används; bara aioimaplib-anslutningen byts ut. Varje
 mapp håller UID → (råa bytes, flaggor), så att APPEND, UID FETCH BODY.PEEK[],
-SEARCH HEADER Message-ID, UID STORE och UID EXPUNGE beter sig som mot Bridge
+SEARCH HEADER Message-ID, UID STORE, UID EXPUNGE och UID MOVE beter sig som mot Bridge
 (Drafts: EXPUNGE raderar permanent). Alla kommandon loggas i ordning.
 """
 from __future__ import annotations
@@ -156,6 +156,14 @@ class FakeDraftsBridge:
             if uid in box and "\\Deleted" in box[uid]["flags"]:
                 del box[uid]
             return _ok(b"EXPUNGE completed")
+        if cmd == "MOVE":
+            uid, target = int(args[0]), _unquote(args[1])
+            if target not in self.mailboxes:
+                return _no("no such mailbox")
+            if uid in box:
+                entry = box.pop(uid)
+                self.add(target, entry["raw"], tuple(entry["flags"]))
+            return _ok(b"MOVE completed")
         return _ok(b"completed")
 
 

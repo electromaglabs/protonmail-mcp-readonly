@@ -12,7 +12,7 @@ Feature: Uppdatera ett utkast
     Then ska Drafts innehålla 1 utkast
     And utkastets ämne ska vara "Offert v2"
     And utkastets text ska innehålla "Andra versionen"
-    And det gamla utkastet ska vara permanent raderat med UID STORE och UID EXPUNGE på sitt UID
+    And det gamla utkastet ska ha flyttats till Trash med UID MOVE på sitt UID
     And inget mejl ska ha skickats
     And svaret ska ange mappen "Drafts", utkastets UID och dess Message-ID
 

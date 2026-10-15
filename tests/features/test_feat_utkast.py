@@ -323,14 +323,14 @@ def draft_has_attachment(bridge, filename):
     assert filename in [part.get_filename() for part in msg.iter_attachments()]
 
 
-@then("det gamla utkastet ska vara permanent raderat med UID STORE och UID EXPUNGE på sitt UID")
-def old_draft_expunged(bridge, draft):
+@then("det gamla utkastet ska ha flyttats till Trash med UID MOVE på sitt UID")
+def old_draft_trashed(bridge, draft):
     uid = draft["uid"]
     assert int(uid) not in bridge.messages("Drafts")
-    assert ("UID STORE", uid, "+FLAGS", r"(\Deleted)") in bridge.commands
-    assert ("UID EXPUNGE", uid) in bridge.commands
-    # Aldrig EXPUNGE på hela mappen
-    assert "EXPUNGE" not in bridge.names()
+    assert ("UID MOVE", uid, '"Trash"') in bridge.commands
+    assert len(bridge.messages("Trash")) == 1
+    # Ingen permanent radering
+    assert not {"UID STORE", "UID EXPUNGE", "EXPUNGE"} & set(bridge.names())
 
 
 @then("inget UID STORE eller UID EXPUNGE ska ha skickats")

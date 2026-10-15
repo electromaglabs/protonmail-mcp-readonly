@@ -2,7 +2,7 @@
 
 Bridge gör ett APPEND till Drafts till ett riktigt utkast i Proton, som syns
 och kan redigeras och skickas i Protons appar. EXPUNGE i Drafts raderar
-permanent. Funktionerna här tar IMAPClient som första argument och körs under
+permanent; därför flyttas ett ersatt utkast till Trash i stället. Funktionerna här tar IMAPClient som första argument och körs under
 klientens lås (``_serialized``), som metoderna i IMAPClient.
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from .imap_client import (
 )
 
 DRAFTS = "Drafts"
+TRASH = "Trash"
 # Bridge sätter alltid \Seen på utkast; \Draft gör det till ett utkast
 _DRAFT_FLAGS = r"(\Draft \Seen)"
 # Svarskod från UIDPLUS (RFC 4315): [APPENDUID <uidvalidity> <uid>]
@@ -92,15 +93,22 @@ async def append_draft(imap: IMAPClient, message: bytes, message_id: str | None)
     return await _store_draft(imap, message, message_id)
 
 
-async def _delete_permanently(imap: IMAPClient, uid: str) -> None:
-    """Radera ett utkast permanent med den befintliga vägen i IMAPClient.
+async def _move_to_trash(imap: IMAPClient, uid: str) -> None:
+    """Flytta ett utkast ur Drafts till Trash (UID MOVE på just det UID:t).
 
-    delete_message(permanent=True) gör UID STORE \\Deleted + UID EXPUNGE på
-    just det UID:t (aldrig EXPUNGE på hela mappen) och tar bort \\Deleted igen
-    om EXPUNGE misslyckas. Låset hålls redan här, så den odekorerade metoden
-    anropas (``_serialized`` använder functools.wraps, som sparar __wrapped__).
+    Bridge flyttar då utkastet till papperskorgen i Proton, där det går att
+    återställa. Låset hålls redan här, så klientens odekorerade _move används.
     """
-    await IMAPClient.delete_message.__wrapped__(imap, DRAFTS, uid, permanent=True)
+    await imap._move(DRAFTS, uid, TRASH)
+
+
+def _both_remain(new_uid: str | None, message_id: str | None, old_uid: str, exc: Exception) -> str:
+    return (
+        f"Det nya utkastet sparades i {DRAFTS} (UID {new_uid or 'okänt'}, "
+        f"Message-ID {message_id or 'okänt'}), men det gamla (UID {old_uid}) kunde inte "
+        f"flyttas till {TRASH}, så båda finns kvar i {DRAFTS}: {exc}. Kör inte "
+        "update_draft igen — då blir det ett utkast till."
+    )
 
 
 @_serialized
@@ -111,7 +119,8 @@ async def replace_draft(
 
     Ordningen gör att inget går förlorat: först kontrolleras att det gamla
     utkastet finns, sedan sparas det nya med APPEND, och först när det lyckats
-    raderas det gamla permanent. Misslyckas APPEND rörs det gamla inte.
+    flyttas det gamla till Trash (inte permanent raderat — det går att
+    återställa därifrån). Misslyckas APPEND rörs det gamla inte.
     Returnerar det nya utkastets UID (None om Bridge inte angav det).
     """
     safe_uid = _validate_uid(old_uid)
@@ -120,10 +129,7 @@ async def replace_draft(
     await imap._require_uid(DRAFTS, safe_uid)
     new_uid = await _store_draft(imap, message, message_id)
     try:
-        await _delete_permanently(imap, safe_uid)
+        await _move_to_trash(imap, safe_uid)
     except ValueError as exc:
-        raise ValueError(
-            f"Det nya utkastet sparades i {DRAFTS} (UID {new_uid}), men det gamla "
-            f"(UID {safe_uid}) kunde inte tas bort, så båda finns kvar: {exc}"
-        ) from exc
+        raise ValueError(_both_remain(new_uid, message_id, safe_uid, exc)) from exc
     return new_uid

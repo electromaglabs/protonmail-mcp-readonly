@@ -204,14 +204,21 @@ class TestUpdateDraft:
             return "9"
 
         monkeypatch.setattr(drafts.imap_drafts, "replace_draft", fake_replace)
-        ctx, _ = _ctx()
+        ctx, app = _ctx()
+        # efterfix-utkast: det gamla utkastet läses först, och svaret anger vad som behölls
+        app.imap.get_message = AsyncMock(
+            return_value=b"To: a@example.se\r\nSubject: Gammal\r\n\r\nx\r\n"
+        )
         result = await drafts.update_draft(ctx, uid="3", mailbox="Drafts", to="a@example.se",
                                            subject="Ny", body="b", bcc="h@example.se")
         msg = _parse(seen["raw"])
+        app.imap.get_message.assert_awaited_once_with("Drafts", "3")
         assert seen["old_uid"] == "3"
         assert msg["Subject"] == "Ny" and msg["Bcc"] == "h@example.se"
         assert result == {"uid": "9", "mailbox": "Drafts",
-                          "message_id": msg["Message-ID"], "replaced_uid": "3"}
+                          "message_id": msg["Message-ID"], "replaced_uid": "3",
+                          "replaced_moved_to": "Trash", "kept_headers": [],
+                          "kept_attachments": []}
 
     def test_mcp_schema_requires_drafts_mailbox(self):
         from protonmail_mcp.server import mcp
