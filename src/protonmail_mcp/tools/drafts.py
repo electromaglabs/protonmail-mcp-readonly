@@ -24,7 +24,7 @@ from ..smtp_client import (
 )
 from . import _get_app
 from ._types import OptionalStr
-from .reply import _forward_parts, _msg_ids, _parse_original, build_forward, build_reply
+from .reply import _MSGID_RE, _forward_parts, _msg_ids, _parse_original, build_forward, build_reply
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +232,24 @@ async def create_forward_draft(
     return await _save(app, _build_draft(app, **fields, bcc=bcc))
 
 
+def _own_internal_ids(msg: Message) -> set[str]:
+    """Utkastets eget Proton-id (X-Pm-Internal-Id), som Bridge sätter."""
+    return {
+        str(value).strip()
+        for key, value in msg.raw_items()
+        if key.lower() == "x-pm-internal-id" and str(value).strip()
+    }
+
+
+def _internal_ref_id(ref: str) -> str | None:
+    """Proton-id:t i en referens <id@protonmail.internalid>, annars None.
+
+    Id:t jämförs exakt (Proton-id:n är base64 och skiftlägeskänsliga).
+    """
+    local, _, domain = ref.strip("<>").rpartition("@")
+    return local if domain.lower() == _INTERNAL_ID_DOMAIN else None
+
+
 def _part_name(part: Message) -> str:
     return part.get_filename() or part.get_content_type()
 
@@ -251,14 +269,10 @@ def _kept_from_old(old_raw: bytes, body_html: str | None) -> tuple[dict[str, Any
       på med cid: läggs bredvid den; övriga blir vanliga bilagor.
     """
     old = _parse_original(old_raw)
-    own_ids = {
-        f"<{value.strip()}@{_INTERNAL_ID_DOMAIN}>".lower()
-        for key, value in old.raw_items()
-        if key.lower() == "x-pm-internal-id" and str(value).strip()
-    }
+    own_ids = _own_internal_ids(old)
     headers: dict[str, str] = {}
     in_reply_to = _msg_ids(old, "In-Reply-To")
-    references = [r for r in _msg_ids(old, "References") if r.lower() not in own_ids]
+    references = [r for r in _msg_ids(old, "References") if _internal_ref_id(r) not in own_ids]
     if in_reply_to:
         headers["In-Reply-To"] = " ".join(in_reply_to)
     if references:
@@ -372,9 +386,14 @@ async def send_draft(
     Använd först när utkastet är granskat och godkänt. Utkastet hämtas ur
     Drafts (med eventuella ändringar som gjorts i Proton) och skickas över
     SMTP till alla adresser i To, Cc och Bcc. Bcc-headern tas bort ur det
-    som skickas, så de hemliga mottagarna syns inte för de andra. Efter
-    skicket raderas utkastet permanent ur Drafts; Bridge lägger det skickade
-    mejlet i Sent. Hitta utkast med list_emails(mailbox="Drafts").
+    som skickas, så de hemliga mottagarna syns inte för de andra. Bridge
+    lägger det skickade mejlet i Sent.
+
+    Efter skicket tas utkastet bort ur Drafts. Ett utkast som Bridge visar
+    (med <id@protonmail.internalid> i References) tar Bridge själv bort när
+    skicket lyckats; finns utkastet då inte längre räknas det som borttaget.
+    Finns det kvar raderas det permanent härifrån. Hitta utkast med
+    list_emails(mailbox="Drafts").
 
     Misslyckas skicket ligger utkastet kvar orört. Vägrar servern bara några
     mottagare har mejlet ändå gått till de övriga: felet anger vilka, och
@@ -385,9 +404,10 @@ async def send_draft(
         mailbox: Alltid "Drafts" — anges för att bekräfta att UID:t kommer därifrån
 
     Returns:
-        {"sent": True, "message_id", "draft_deleted"}. Gick utkastet inte att
-        ta bort efter skicket är draft_deleted False och "warning" förklarar —
-        mejlet HAR då skickats och ska inte skickas igen.
+        {"sent": True, "message_id", "draft_deleted"}. "note" förklarar när
+        Bridge har tagit bort utkastet i Proton men Drafts ännu inte visar
+        det. Gick utkastet inte att ta bort är draft_deleted False och
+        "warning" förklarar — mejlet HAR då skickats och ska inte skickas igen.
 
     Raises:
         ValueError: utkastet finns inte i Drafts, saknar mottagare eller har
@@ -413,8 +433,17 @@ async def send_draft(
         "draft_deleted": True,
     }
     try:
-        await app.imap.delete_message(DRAFTS, uid, permanent=True)
+        await imap_drafts.remove_sent_draft(app.imap, uid)
     except Exception as exc:  # mejlet är redan skickat — det får inte se ut som ett fel
+        if _bridge_deletes_draft(msg):
+            # Bridge tog bort utkastet i Proton innan SMTP svarade OK; Drafts
+            # visar det tills Bridge har synkat, och raderingen därifrån nekas
+            logger.info("Utkastet UID %s togs bort av Bridge vid skicket: %s", uid, exc)
+            result["note"] = (
+                f"Bridge tog bort utkastet i Proton när det skickades. Det kan synas i "
+                f"{DRAFTS} en kort stund till, tills Bridge har synkat. Skicka inte igen."
+            )
+            return result
         logger.warning("Utkastet UID %s skickades men kunde inte tas bort: %s", uid, exc)
         result["draft_deleted"] = False
         result["warning"] = (
@@ -423,3 +452,20 @@ async def send_draft(
             f'delete_email(uid="{uid}", mailbox="Drafts", permanent=True).'
         )
     return result
+
+
+def _bridge_deletes_draft(msg: Message) -> bool:
+    """Tar Bridge själv bort utkastet när det här meddelandet skickas?
+
+    Ja om References innehåller utkastets eget Proton-id
+    (<X-Pm-Internal-Id@protonmail.internalid>): Bridge slår upp interna
+    referenser och tar bort de som är utkast efter ett lyckat skick
+    (internal/services/smtp/smtp.go, getParentID/draftsToDelete).
+    """
+    own_ids = _own_internal_ids(msg)
+    return bool(own_ids) and any(
+        _internal_ref_id(ref) in own_ids
+        for key, value in msg.raw_items()
+        if key.lower() == "references"
+        for ref in _MSGID_RE.findall(str(value))
+    )

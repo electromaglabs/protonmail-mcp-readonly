@@ -239,25 +239,29 @@ class TestSendDraft:
         app.imap.get_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_reads_drafts_and_deletes_permanently_after_send(self):
+    async def test_reads_drafts_and_removes_it_after_send(self, monkeypatch):
+        # efterfix-utkast: borttagningen går via imap_drafts.remove_sent_draft,
+        # som räknar med att Bridge kan ha tagit bort utkastet själv
+        remove = AsyncMock(return_value=True)
+        monkeypatch.setattr(drafts.imap_drafts, "remove_sent_draft", remove)
         ctx, app = _ctx()
         app.imap.get_message = AsyncMock(return_value=(
             b"From: me@proton.me\r\nTo: a@example.se\r\nSubject: s\r\n"
             b"Message-ID: <d@proton.me>\r\n\r\nText\r\n"
         ))
-        app.imap.delete_message = AsyncMock(return_value=True)
         app.smtp.send_prepared_message = AsyncMock(return_value=True)
         result = await drafts.send_draft(ctx, uid="3", mailbox="Drafts")
         app.imap.get_message.assert_awaited_once_with("Drafts", "3")
-        app.imap.delete_message.assert_awaited_once_with("Drafts", "3", permanent=True)
+        remove.assert_awaited_once_with(app.imap, "3")
         assert result == {"sent": True, "message_id": "<d@proton.me>", "draft_deleted": True}
 
     @pytest.mark.asyncio
-    async def test_failed_send_keeps_draft(self):
+    async def test_failed_send_keeps_draft(self, monkeypatch):
+        remove = AsyncMock()
+        monkeypatch.setattr(drafts.imap_drafts, "remove_sent_draft", remove)
         ctx, app = _ctx()
         app.imap.get_message = AsyncMock(return_value=b"To: a@example.se\r\n\r\nx\r\n")
-        app.imap.delete_message = AsyncMock()
         app.smtp.send_prepared_message = AsyncMock(side_effect=OSError("nere"))
         with pytest.raises(OSError):
             await drafts.send_draft(ctx, uid="3", mailbox="Drafts")
-        app.imap.delete_message.assert_not_called()
+        remove.assert_not_called()

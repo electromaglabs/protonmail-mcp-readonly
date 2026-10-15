@@ -154,3 +154,43 @@ async def replace_draft(
             f'list_emails(mailbox="{DRAFTS}"). {_RETRY_WARNING}'
         ) from exc
     return new_uid
+
+
+async def _has_uid(imap: IMAPClient, uid: str) -> bool:
+    """Finns UID:t i den valda mappen? (Bridge svarar OK utan data om inte.)"""
+    resp = await imap._uid("fetch", uid, "(UID)")
+    _require_ok(resp, f"Kontrollen av UID {uid} i {DRAFTS}")
+    return any(
+        (m := _UID_RE.search(_decode(line))) and int(m.group(1)) == int(uid)
+        for line in resp.lines
+    )
+
+
+@_serialized
+async def remove_sent_draft(imap: IMAPClient, uid: str) -> bool:
+    """Ta bort ett utkast ur Drafts efter att det skickats.
+
+    Bridge tar själv bort ett utkast som det skickade meddelandet refererar
+    till (<id@protonmail.internalid> i References, som Bridge lägger till när
+    utkastet hämtas; internal/services/smtp/smtp.go, getParentID). Därför:
+    finns UID:t inte längre räknas utkastet som borttaget; finns det raderas
+    det permanent (UID STORE \\Deleted + UID EXPUNGE på just det UID:t).
+    Nekas raderingen kontrolleras igen — har Bridge hunnit ta bort det är det
+    inget fel.
+
+    Returnerar True om utkastet raderades här, False om det redan var borta.
+    Kastar ValueError om det inte gick att radera och fortfarande finns kvar.
+    """
+    safe_uid = _validate_uid(uid)
+    await imap._ensure_connected()
+    await imap._select(DRAFTS)
+    if not await _has_uid(imap, safe_uid):
+        return False
+    try:
+        await IMAPClient.delete_message.__wrapped__(imap, DRAFTS, safe_uid, permanent=True)
+    except ValueError:
+        await imap._select(DRAFTS)
+        if not await _has_uid(imap, safe_uid):
+            return False
+        raise
+    return True
