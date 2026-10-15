@@ -52,56 +52,100 @@ _SCOPE_BOUNDARY = frozenset({"table", "ul", "ol", "dl", "td", "th", "caption", "
 # Så djupt i stacken söks ett implicit stängt element — längre ned räknas det
 # som inte öppet, så att varje starttagg kostar högst så mycket
 _MAX_IMPLIED_SCAN = 64
-_FONT_SIZE_RE = re.compile(r"font-size:([0-9]*\.?[0-9]+)(px|pt|em|rem|%)?")
-_OPACITY_RE = re.compile(r"(?:^|;)opacity:([0-9]*\.?[0-9]+)(%)?")
-_VISIBILITY_RE = re.compile(r"(?:^|;)visibility:(hidden|collapse|visible)")
-_COLOR_RE = re.compile(r"(?:^|;)color:([^;]+)")
-_BACKGROUND_RE = re.compile(r"(?:^|;)background(?:-color)?:([^;]+)")
-_WHITE_RE = re.compile(
-    r"(?:white|#fff|#f[ef]f[ef]f[ef]|rgba?\(25[0-5],25[0-5],25[0-5](?:,[0-9.]+)?\))(?:!important)?$"
-)
+_SIZE_RE = re.compile(r"([0-9]*\.?[0-9]+)(px|pt|em|rem|%)?$")
+_ZERO_LENGTH_RE = re.compile(r"0(?:\.0*)?(?:px|pt|em|rem|%)?$")
+_WHITE_RE = re.compile(r"(?:white|#fff|#f[ef]f[ef]f[ef]|rgba?\(25[0-5],25[0-5],25[0-5](?:,[0-9.]+)?\))$")
+_IMPORTANT_RE = re.compile(r"!\s*important\s*$")
 
 
-def _style(attrs) -> str:
-    """style-attributet i gemener utan blanktecken ("display : none" → "display:none")."""
+def _strip_comments(text: str) -> str:
+    """Ta bort /* … */ (en oavslutad kommentar slukar resten). Linjär tid."""
+    if "/*" not in text:
+        return text
+    out: list[str] = []
+    pos = 0
+    while (start := text.find("/*", pos)) != -1:
+        out.append(text[pos:start])
+        end = text.find("*/", start + 2)
+        if end == -1:
+            return "".join(out)
+        pos = end + 2
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _declarations(style: str) -> dict[str, tuple[str, bool]]:
+    """CSS-deklarationer → {egenskap: (värde, !important)}, i gemener och
+    med blanktecken hopslagna. Som i en webbläsare gäller den sista
+    deklarationen, utom att !important vinner över en senare utan."""
+    out: dict[str, tuple[str, bool]] = {}
+    for decl in _strip_comments(style.lower()).split(";"):
+        name, sep, value = decl.partition(":")
+        name = name.strip()
+        if not sep or not name:
+            continue
+        value, important = _IMPORTANT_RE.subn("", value)
+        value = " ".join(value.split())
+        if name not in out or important or not out[name][1]:
+            out[name] = (value, bool(important))
+    return out
+
+
+def _style(attrs) -> dict[str, str]:
+    """style-attributets deklarationer som {egenskap: värde} (se _declarations)."""
     for name, value in attrs:
         if name == "style" and value:
-            return "".join(value.lower().split())
-    return ""
+            return {k: v for k, (v, _) in _declarations(value).items()}
+    return {}
 
 
-def _hard_hidden(attrs, style: str) -> str | None:
+def _compact(value: str) -> str:
+    return value.replace(" ", "")
+
+
+def _number(value: str) -> float | None:
+    try:
+        return float(value.rstrip("%"))
+    except ValueError:
+        return None
+
+
+def _hard_hidden(attrs, style: dict[str, str]) -> str | None:
     """Skälet till att elementet och allt i det är osynligt, som inget
     barnelement kan ändra på (display:none, opacity:0 …), eller None."""
     if any(name == "hidden" for name, _ in attrs):
         return "hidden"
     if not style:
         return None
-    if "display:none" in style:
+    if style.get("display") == "none":
         return "display:none"
-    if "mso-hide:all" in style:
+    if style.get("mso-hide") == "all":
         return "mso-hide:all"
-    if (m := _OPACITY_RE.search(style)) and float(m.group(1)) == 0:
+    if (opacity := style.get("opacity")) is not None and _number(opacity) == 0:
         return "opacity:0"
-    if "overflow:hidden" in style and re.search(r"(?:^|;)(?:max-)?height:0(?:px)?(?:;|$|!)", style):
+    if style.get("overflow") == "hidden" and any(
+        _ZERO_LENGTH_RE.match(style.get(prop, "x")) for prop in ("height", "max-height")
+    ):
         return "max-height:0"
     return None
 
 
-def _soft_style(attrs, style: str) -> dict[str, bool]:
+def _soft_style(attrs, style: dict[str, str]) -> dict[str, bool]:
     """Ärvda egenskaper som ett barnelement kan ändra: font-size 0,
     visibility, vit textfärg och bakgrund (True = ljus eller ingen)."""
     props: dict[str, bool] = {}
     if style:
-        if m := _FONT_SIZE_RE.search(style):
+        if (m := _SIZE_RE.match(style.get("font-size", ""))):
             size, unit = float(m.group(1)), m.group(2)
             props["font_zero"] = size == 0 or (unit in ("px", "pt") and size < 1)
-        if m := _VISIBILITY_RE.search(style):
-            props["vis_hidden"] = m.group(1) != "visible"
-        if m := _COLOR_RE.search(style):
-            props["white"] = bool(_WHITE_RE.match(m.group(1)))
-        if m := _BACKGROUND_RE.search(style):
-            props["light_bg"] = bool(_WHITE_RE.match(m.group(1))) or m.group(1) in ("none", "transparent")
+        if (visibility := style.get("visibility")) in ("hidden", "collapse", "visible"):
+            props["vis_hidden"] = visibility != "visible"
+        if "color" in style:
+            props["white"] = bool(_WHITE_RE.match(_compact(style["color"])))
+        background = style.get("background-color", style.get("background"))
+        if background is not None:
+            background = _compact(background)
+            props["light_bg"] = bool(_WHITE_RE.match(background)) or background in ("none", "transparent")
     for name, value in attrs:
         if name == "bgcolor" and value:
             props["light_bg"] = bool(_WHITE_RE.match("".join(value.lower().split())))
