@@ -14,6 +14,9 @@ stället jämföra mätningar som görs på samma maskin i samma stund:
 
 Varje mätning görs flera gånger och den snabbaste räknas: en tillfällig
 fördröjning (GC, en annan process) gör bara en enstaka mätning långsammare.
+Korta mätningar upprepas tills de tillsammans tagit MIN_TOTAL sekunder (högst
+MAX_RUNS gånger), eftersom ett enda schemaläggningsavbrott på en belastad
+maskin annars kan vara lika långt som hela mätningen.
 """
 from __future__ import annotations
 
@@ -26,25 +29,33 @@ T = TypeVar("T")
 FACTOR = 4
 MAX_RATIO = 8.0
 REPEATS = 3
+MIN_TOTAL = 0.25
+MAX_RUNS = 50
 # Kortare tider än så här mäts inte tillräckligt exakt för en kvot
 FLOOR = 0.005
 
 
+def _more(runs: int, total: float, repeats: int) -> bool:
+    return runs < repeats or (total < MIN_TOTAL and runs < MAX_RUNS)
+
+
 def best_time(func: Callable[[], Any], repeats: int = REPEATS) -> float:
-    best = float("inf")
-    for _ in range(repeats):
+    best, total, runs = float("inf"), 0.0, 0
+    while _more(runs, total, repeats):
         start = time.perf_counter()
         func()
-        best = min(best, time.perf_counter() - start)
+        elapsed = time.perf_counter() - start
+        best, total, runs = min(best, elapsed), total + elapsed, runs + 1
     return best
 
 
 async def best_time_async(func: Callable[[], Awaitable[Any]], repeats: int = REPEATS) -> float:
-    best = float("inf")
-    for _ in range(repeats):
+    best, total, runs = float("inf"), 0.0, 0
+    while _more(runs, total, repeats):
         start = time.perf_counter()
         await func()
-        best = min(best, time.perf_counter() - start)
+        elapsed = time.perf_counter() - start
+        best, total, runs = min(best, elapsed), total + elapsed, runs + 1
     return best
 
 
