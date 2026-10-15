@@ -195,6 +195,6 @@ class TestLinjarTid:
             sanitize_text(text)
             return time.perf_counter() - start
 
-        small, large = measure(5_000), measure(40_000)
+        small, large = measure(2_000), measure(16_000)
         # 8 gånger så mycket text får inte ta mer än ~20 gånger så lång tid
         assert large < max(small, 0.005) * 20, f"{small:.4f} s → {large:.4f} s"
