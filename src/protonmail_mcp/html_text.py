@@ -52,9 +52,19 @@ _SCOPE_BOUNDARY = frozenset({"table", "ul", "ol", "dl", "td", "th", "caption", "
 # Så djupt i stacken söks ett implicit stängt element — längre ned räknas det
 # som inte öppet, så att varje starttagg kostar högst så mycket
 _MAX_IMPLIED_SCAN = 64
-_SIZE_RE = re.compile(r"([0-9]*\.?[0-9]+)(px|pt|em|rem|%)?$")
-_ZERO_LENGTH_RE = re.compile(r"0(?:\.0*)?(?:px|pt|em|rem|%)?$")
-_WHITE_RE = re.compile(r"(?:white|#fff|#f[ef]f[ef]f[ef]|rgba?\(25[0-5],25[0-5],25[0-5](?:,[0-9.]+)?\))$")
+_SIZE_RE = re.compile(r"(-?[0-9]*\.?[0-9]+)(px|pt|em|rem|%)?$")
+# Längd i px för enheterna (em/rem räknas mot 16px, som webbläsarens standard)
+_PX_PER = {"px": 1.0, "pt": 4 / 3, "em": 16.0, "rem": 16.0}
+_HEX_RE = re.compile(r"#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$")
+_RGB_RE = re.compile(r"rgba?\(([^()]*)\)$")
+_NAMED_COLORS = {"white": (255, 255, 255), "black": (0, 0, 0)}
+# Så nära varandra (per kanal) får text- och bakgrundsfärg vara innan texten
+# räknas som osynlig (#fdfdfd på #fff; #111 på #000)
+_SAME_COLOR = 16
+# Vitt nog för att inte synas på en vit sida (per kanal)
+_WHITE_MIN = 0xF0
+# Positionering så här långt utanför skärmen (px) gömmer elementet
+_OFFSCREEN = -1000
 _IMPORTANT_RE = re.compile(r"!\s*important\s*$")
 
 
@@ -110,9 +120,121 @@ def _number(value: str) -> float | None:
         return None
 
 
+def _length_px(value: str) -> float | None:
+    """En CSS-längd i px, eller None. Enhetslös bara för 0; % räknas inte."""
+    m = _SIZE_RE.match(value)
+    if not m or m.group(2) == "%":
+        return None
+    number, unit = float(m.group(1)), m.group(2)
+    if unit is None:
+        return 0.0 if number == 0 else None
+    return number * _PX_PER[unit]
+
+
+_TRANSPARENT = "transparent"
+_UNKNOWN = "unknown"
+
+
+def _color(value: str | None):
+    """En CSS-färg som (r, g, b), _TRANSPARENT, eller None om okänd."""
+    if not value:
+        return None
+    value = _compact(value)
+    if value == _TRANSPARENT:
+        return _TRANSPARENT
+    if value in _NAMED_COLORS:
+        return _NAMED_COLORS[value]
+    if m := _HEX_RE.match(value):
+        digits = m.group(1)
+        if len(digits) <= 4:
+            digits = "".join(ch * 2 for ch in digits)
+        if len(digits) == 8 and digits[6:] == "00":
+            return _TRANSPARENT
+        return tuple(int(digits[i:i + 2], 16) for i in (0, 2, 4))
+    if m := _RGB_RE.match(value):
+        parts = [p for p in re.split(r"[,/]", m.group(1)) if p]
+        if len(parts) in (3, 4):
+            try:
+                channels = [
+                    float(p[:-1]) * 2.55 if p.endswith("%") else float(p) for p in parts[:3]
+                ]
+                alpha = 1.0 if len(parts) == 3 else (
+                    float(parts[3][:-1]) / 100 if parts[3].endswith("%") else float(parts[3])
+                )
+            except ValueError:
+                return None
+            if alpha == 0:
+                return _TRANSPARENT
+            return tuple(max(0, min(255, round(c))) for c in channels)
+    return None
+
+
+def _background(value: str | None):
+    """Bakgrund ur background/background-color: (r, g, b), _UNKNOWN (bild,
+    gradient eller okänd färg) eller None (genomskinlig: förälderns syns)."""
+    if value is None:
+        return None
+    if "url(" in value or "gradient(" in value or "image-set(" in value:
+        return _UNKNOWN
+    for token in value.split(" "):
+        color = _color(token)
+        if color == _TRANSPARENT:
+            return None
+        if color is not None:
+            return color
+        if token in ("none", "initial", "inherit", "unset"):
+            return None
+    return _UNKNOWN if value else None
+
+
+def _font_zero(style: dict[str, str]) -> bool | None:
+    """Är teckenstorleken osynligt liten (≤ 1px, ≤ 0.1em/rem, ≤ 10 %)?
+    None om elementet inte sätter någon storlek."""
+    size = style.get("font-size")
+    if size is None and (font := style.get("font")):
+        # font: [stil] [vikt] storlek[/radhöjd] familj — storleken har enhet (eller är 0)
+        for token in font.split(" "):
+            candidate = token.split("/", 1)[0]
+            m = _SIZE_RE.match(candidate)
+            if m and (m.group(2) or float(m.group(1)) == 0):
+                size = candidate
+                break
+    if size is None or not (m := _SIZE_RE.match(size)):
+        return None
+    number, unit = float(m.group(1)), m.group(2)
+    if unit in ("em", "rem"):
+        return number <= 0.1
+    if unit == "%":
+        return number <= 10
+    return number <= 1
+
+
+def _offscreen(style: dict[str, str]) -> str | None:
+    if style.get("position") in ("absolute", "fixed"):
+        for prop in ("left", "top"):
+            if (px := _length_px(style.get(prop, ""))) is not None and px <= _OFFSCREEN:
+                return "utanför skärmen"
+        clip = _compact(style.get("clip", ""))
+        if clip.startswith("rect(") and clip.endswith(")"):
+            values = [v for v in re.split(r"[,\s]+", style["clip"][5:-1].strip()) if v]
+            lengths = [_length_px(v) for v in values]
+            if len(values) == 4 and all(px is not None and px <= 1 for px in lengths):
+                return "clip"
+    if (px := _length_px(style.get("text-indent", ""))) is not None and px <= _OFFSCREEN:
+        return "utanför skärmen"
+    clip_path = _compact(style.get("clip-path", ""))
+    if m := re.match(r"inset\(([0-9.]+)%", clip_path):
+        if float(m.group(1)) >= 50:
+            return "clip"
+    if re.match(r"(?:circle|ellipse)\(0(?:px|%)?(?:[)a-z ]|0)", clip_path):
+        return "clip"
+    return None
+
+
 def _hard_hidden(attrs, style: dict[str, str]) -> str | None:
     """Skälet till att elementet och allt i det är osynligt, som inget
-    barnelement kan ändra på (display:none, opacity:0 …), eller None."""
+    barnelement kan ändra på (display:none, opacity under 0.1, utanför
+    skärmen …), eller None."""
     if any(name == "hidden" for name, _ in attrs):
         return "hidden"
     if not style:
@@ -121,44 +243,72 @@ def _hard_hidden(attrs, style: dict[str, str]) -> str | None:
         return "display:none"
     if style.get("mso-hide") == "all":
         return "mso-hide:all"
-    if (opacity := style.get("opacity")) is not None and _number(opacity) == 0:
-        return "opacity:0"
-    if style.get("overflow") == "hidden" and any(
-        _ZERO_LENGTH_RE.match(style.get(prop, "x")) for prop in ("height", "max-height")
-    ):
-        return "max-height:0"
-    return None
+    if (opacity := style.get("opacity")) is not None:
+        number = _number(opacity)
+        if number is not None and (number / 100 if opacity.endswith("%") else number) < 0.1:
+            return "opacity:0"
+    if style.get("overflow") == "hidden":
+        if any(_length_px(style.get(prop, "x")) == 0 for prop in ("height", "max-height")):
+            return "max-height:0"
+        if any(_length_px(style.get(prop, "x")) == 0 for prop in ("width", "max-width")):
+            return "width:0"
+    return _offscreen(style)
 
 
-def _soft_style(attrs, style: dict[str, str]) -> dict[str, bool]:
-    """Ärvda egenskaper som ett barnelement kan ändra: font-size 0,
-    visibility, vit textfärg och bakgrund (True = ljus eller ingen)."""
-    props: dict[str, bool] = {}
+def _soft_style(attrs, style: dict[str, str]) -> dict:
+    """Ärvda egenskaper som ett barnelement kan ändra: font_zero,
+    vis_hidden, color ((r, g, b) eller _TRANSPARENT) och bg (bakgrund, se
+    _background). Bara de som elementet sätter finns med."""
+    props: dict = {}
     if style:
-        if (m := _SIZE_RE.match(style.get("font-size", ""))):
-            size, unit = float(m.group(1)), m.group(2)
-            props["font_zero"] = size == 0 or (unit in ("px", "pt") and size < 1)
+        if (zero := _font_zero(style)) is not None:
+            props["font_zero"] = zero
         if (visibility := style.get("visibility")) in ("hidden", "collapse", "visible"):
             props["vis_hidden"] = visibility != "visible"
-        if "color" in style:
-            props["white"] = bool(_WHITE_RE.match(_compact(style["color"])))
+        if (color := _color(style.get("color"))) is not None:
+            props["color"] = color
+        elif style.get("color") not in (None, "inherit", "currentcolor"):
+            props["color"] = None  # okänd färg: kan inte bedömas
         background = style.get("background-color", style.get("background"))
-        if background is not None:
-            background = _compact(background)
-            props["light_bg"] = bool(_WHITE_RE.match(background)) or background in ("none", "transparent")
+        if background is not None and (bg := _background(background)) is not None:
+            props["bg"] = bg
     for name, value in attrs:
         if name == "bgcolor" and value:
-            props["light_bg"] = bool(_WHITE_RE.match("".join(value.lower().split())))
+            props["bg"] = _color(value) or _UNKNOWN
+        elif name == "color" and value and "color" not in props:  # <font color=…>
+            props["color"] = _color(value)
     return props
 
 
+def _close(a: tuple, b: tuple) -> bool:
+    return all(abs(x - y) <= _SAME_COLOR for x, y in zip(a, b))
+
+
+def _soft_reason(font_zero: bool, vis_hidden: bool, color, bg) -> str | None:
+    """Varför ärvda stilar gör texten osynlig, eller None."""
+    if font_zero:
+        return "font-size:0"
+    if vis_hidden:
+        return "visibility:hidden"
+    if color == _TRANSPARENT:
+        return "color:transparent"
+    if isinstance(color, tuple) and isinstance(bg, tuple) and _close(color, bg):
+        return "färg=bakgrund"
+    return None
+
+
+def _is_white(color, bg) -> bool:
+    """Vit text där bakgrunden inte är satt (syns inte på en vit sida)."""
+    return isinstance(color, tuple) and bg is None and min(color) >= _WHITE_MIN
+
+
 # Ärvt tillstånd för ett öppet element:
-# (gömt för gott, font-size 0, visibility:hidden, vit text, ljus/ingen bakgrund)
-_ROOT = (False, False, False, False, True)
+# (gömt för gott, font-size 0, visibility:hidden, textfärg, bakgrund, osynlig, vit text)
+_ROOT = (False, False, False, None, None, False, False)
 
 
 def _visible_state(state: tuple) -> bool:
-    return not (state[0] or state[1] or state[2])
+    return not state[5]
 
 
 @dataclass
@@ -277,25 +427,21 @@ class _TextExtractor(HTMLParser):
         self._close_implied(tag)
         if tag in _VOID:
             return
-        parent = self.state
-        hard, font_zero, vis_hidden, white, light_bg = parent
-        reason = None
+        hard, font_zero, vis_hidden, color, bg, hidden, _ = self.state
         if not hard:
             style = _style(attrs)
-            reason = _hard_hidden(attrs, style)
-            if reason:
+            if reason := _hard_hidden(attrs, style):
                 hard = True
-            else:
-                props = _soft_style(attrs, style)
+            elif props := _soft_style(attrs, style):
                 font_zero = props.get("font_zero", font_zero)
                 vis_hidden = props.get("vis_hidden", vis_hidden)
-                white = props.get("white", white)
-                light_bg = props.get("light_bg", light_bg)
-                if (font_zero or vis_hidden) and not (parent[1] or parent[2]):
-                    reason = "font-size:0" if font_zero and props.get("font_zero") else "visibility:hidden"
-            if reason and _visible_state(parent):
+                color = props.get("color", color)
+                bg = props.get("bg", bg)
+                reason = _soft_reason(font_zero, vis_hidden, color, bg)
+            if reason and not hidden:  # räkna bara det yttersta gömda elementet
                 self._hide(reason)
-        state = (hard, font_zero, vis_hidden, white, light_bg)
+        now_hidden = hard or _soft_reason(font_zero, vis_hidden, color, bg) is not None
+        state = (hard, font_zero, vis_hidden, color, bg, now_hidden, _is_white(color, bg))
         self.stack.append((tag, state))
         self.stack_tags[tag] = self.stack_tags.get(tag, 0) + 1
         self.state = state
@@ -365,7 +511,7 @@ class _TextExtractor(HTMLParser):
             if data.strip():
                 self.hidden_parts.append(data)
             return
-        if self.state[3] and self.state[4] and data.strip():
+        if self.state[6] and data.strip():
             self.white_parts.append(data)
         if self.pre:
             first, *rest = data.split("\n")
@@ -406,11 +552,18 @@ def _joined(parts: list[str]) -> str:
 def html_to_text_report(markup: str) -> HtmlText:
     """Som html_to_text, men rapporterar också gömt innehåll och vit text.
 
-    Gömt är element med display:none, visibility:hidden, font-size 0 (eller
-    under 1px/1pt), opacity 0, mso-hide:all, max-height/height 0 med
-    overflow:hidden och hidden-attributet. Gömd text ingår inte i text —
-    läsaren ser den inte, och då ska inte heller modellen läsa den.
-    Bara inline-stil räknas; regler i <style> tolkas inte.
+    Gömt är element med display:none, visibility:hidden, teckenstorlek under
+    det läsbara (≤ 1px/pt, ≤ 0.1em/rem, ≤ 10 %, även i font-förkortningen),
+    opacity under 0.1, mso-hide:all, höjd eller bredd 0 med overflow:hidden,
+    positionering långt utanför skärmen (left/top ≤ -1000px när elementet är
+    absolut positionerat, text-indent ≤ -1000px), clip/clip-path som klipper
+    bort allt, genomskinlig textfärg, textfärg (även <font color>) nästan lika
+    med en känd bakgrundsfärg, och hidden-attributet. Gömd text ingår inte i
+    text — läsaren ser den inte, och då ska inte heller modellen läsa den.
+
+    Stilen tolkas som i en webbläsare: sista deklarationen gäller (utom mot
+    !important), CSS-kommentarer räknas inte, och öppna element följs i en
+    stack så att förälderns sluttagg stänger allt innanför. Linjär tid.
     """
     if not markup:
         return HtmlText("")
