@@ -7,13 +7,14 @@ from types import SimpleNamespace
 import aioimaplib
 import aiosmtplib
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from protonmail_mcp import config
 from protonmail_mcp.imap_client import IMAPAuthenticationError
 from protonmail_mcp.smtp_client import SMTPPartialDeliveryError
 from protonmail_mcp.tools import _errors
 from protonmail_mcp.tools._errors import describe_error, with_error_messages
+from tests import sdk_support as sdk
+from tests.sdk_support import ToolError
 
 
 def describe(exc, *, open_world=False):
@@ -184,7 +185,7 @@ def test_every_registered_tool_is_wrapped():
     from protonmail_mcp.server import mcp, register_tools
 
     register_tools()
-    for tool in mcp._tool_manager.list_tools():
+    for tool in sdk.list_tools(mcp):
         assert getattr(tool.fn, "_error_messages", False), tool.name
 
 

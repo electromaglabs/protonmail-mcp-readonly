@@ -1,6 +1,6 @@
 """Valfria strängparametrar i send_email och reply_to_email json-tolkas inte.
 
-FastMCP:s pre_parse_json kör json.loads på strängvärden för parametrar vars
+MCP-SDK:ns pre_parse_json kör json.loads på strängvärden för parametrar vars
 annotation inte är exakt `str`; för `str | None` blev strängen "null" None.
 """
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +9,7 @@ import pytest
 
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import reply, send  # noqa: F401 — registrerar verktygen
+from tests import sdk_support as sdk
 
 RAW = (
     b"From: a@x.se\r\nTo: me@proton.me\r\nSubject: s\r\nMessage-ID: <m@x>\r\n"
@@ -28,7 +29,7 @@ def ctx():
 
 
 async def _run(ctx, tool, **args):
-    await mcp._tool_manager.get_tool(tool).run(args, context=ctx)
+    await sdk.get_tool(mcp, tool).run(args, context=ctx)
     return ctx.request_context.lifespan_context.smtp.send_email.call_args.kwargs
 
 
@@ -59,6 +60,6 @@ async def test_reply_body_html_explicit_null_is_none(ctx):
 async def test_schemas_still_advertise_nullable_string():
     tools = {t.name: t for t in await mcp.list_tools()}
     for tool, field in [("send_email", "body_html"), ("send_email", "reply_to"), ("reply_to_email", "body_html")]:
-        prop = tools[tool].inputSchema["properties"][field]
+        prop = sdk.wire(tools[tool])["inputSchema"]["properties"][field]
         assert prop["anyOf"] == [{"type": "string"}, {"type": "null"}]
         assert prop["default"] is None

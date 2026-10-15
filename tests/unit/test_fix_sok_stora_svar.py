@@ -9,6 +9,7 @@ from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import search  # noqa: F401
 from tests.fix_sok_fakebox import imap_mock
+from tests import sdk_support as sdk
 
 
 def _messages(result):
@@ -60,5 +61,5 @@ async def test_max_results_below_one_rejected(client):
 
 
 def test_tool_schema_bounds_max_results():
-    prop = mcp._tool_manager.get_tool("search_emails").parameters["properties"]["max_results"]
+    prop = sdk.get_tool(mcp, "search_emails").parameters["properties"]["max_results"]
     assert (prop["default"], prop["minimum"], prop["maximum"]) == (50, 1, 200)

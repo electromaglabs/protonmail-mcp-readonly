@@ -12,6 +12,7 @@ from protonmail_mcp.imap_threads import (
 )
 from protonmail_mcp.server import mcp
 from tests.feat_sok_fakebridge import FakeBridge, FakeMessage
+from tests import sdk_support as sdk
 
 
 @pytest.fixture
@@ -183,7 +184,7 @@ class TestGetThread:
 
 class TestTool:
     def _tool(self):
-        return next(t for t in mcp._tool_manager.list_tools() if t.name == "get_thread")
+        return next(t for t in sdk.list_tools(mcp) if t.name == "get_thread")
 
     def test_registered_with_required_mailbox(self):
         import protonmail_mcp.tools.threads  # noqa: F401

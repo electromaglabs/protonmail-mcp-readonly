@@ -2,14 +2,12 @@
 import runpy
 import warnings
 
-from mcp.server.fastmcp import FastMCP
-
 from protonmail_mcp import server
+from tests import sdk_support as sdk
 
 
-def _run_as_module(monkeypatch) -> FastMCP:
-    captured = {}
-    monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: captured.setdefault("server", self))
+def _run_as_module(monkeypatch) -> sdk.MCPServer:
+    captured = sdk.patch_run(monkeypatch)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         runpy.run_module("protonmail_mcp.server", run_name="__main__")
@@ -23,11 +21,11 @@ def test_module_start_runs_the_server_the_tools_are_registered_on(monkeypatch):
 
 def test_module_start_has_tools(monkeypatch):
     started = _run_as_module(monkeypatch)
-    assert len(started._tool_manager.list_tools()) == 29
+    assert len(sdk.list_tools(started)) == 29
 
 
 def test_register_tools_is_idempotent():
     server.register_tools()
-    before = len(server.mcp._tool_manager.list_tools())
+    before = len(sdk.list_tools(server.mcp))
     server.register_tools()
-    assert len(server.mcp._tool_manager.list_tools()) == before == 29
+    assert len(sdk.list_tools(server.mcp)) == before == 29

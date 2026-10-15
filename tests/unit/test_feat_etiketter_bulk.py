@@ -5,6 +5,7 @@ from protonmail_mcp import imap_bulk
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import labels, manage  # noqa: F401 — registrerar verktygen
 from tests.feat_etiketter_bridge import make_client
+from tests import sdk_support as sdk
 
 BULK_TOOLS = [
     "mark_email_read", "mark_email_unread", "move_email", "delete_email",
@@ -173,7 +174,7 @@ class TestToolSchema:
     @pytest.mark.parametrize("name", BULK_TOOLS)
     async def test_uid_is_string_or_list_of_at_most_100(self, name):
         tools = {t.name: t for t in await mcp.list_tools()}
-        schema = tools[name].inputSchema
+        schema = sdk.wire(tools[name])["inputSchema"]
         uid = schema["properties"]["uid"]
         variants = uid["anyOf"]
         assert {"type": "string"} in [{"type": v.get("type")} for v in variants]
@@ -188,7 +189,7 @@ class TestToolSchema:
         mock_ctx.request_context.lifespan_context.imap = imap
         for uid in ("1", "5"):
             bridge.put("INBOX", uid)
-        tool = mcp._tool_manager.get_tool("mark_email_read")
+        tool = sdk.get_tool(mcp, "mark_email_read")
         res = await tool.run({"uid": '["1", "5"]', "mailbox": "INBOX"}, context=mock_ctx)
         assert res == {"ok": ["1", "5"], "failed": []}
 
@@ -197,7 +198,7 @@ class TestToolSchema:
         mock_ctx.request_context.lifespan_context.imap = imap
         for uid in ("1", "5"):
             bridge.put("INBOX", uid)
-        tool = mcp._tool_manager.get_tool("flag_email")
+        tool = sdk.get_tool(mcp, "flag_email")
         assert await tool.run({"uid": [1, 5], "mailbox": "INBOX"}, context=mock_ctx) == {"ok": ["1", "5"], "failed": []}
         assert await tool.run({"uid": 1, "mailbox": "INBOX"}, context=mock_ctx) is True
 
@@ -205,7 +206,7 @@ class TestToolSchema:
         imap, bridge = imap_and_bridge
         mock_ctx.request_context.lifespan_context.imap = imap
         bridge.put("INBOX", "1")
-        tool = mcp._tool_manager.get_tool("mark_email_read")
+        tool = sdk.get_tool(mcp, "mark_email_read")
         assert await tool.run({"uid": "1", "mailbox": "INBOX"}, context=mock_ctx) is True
 
 

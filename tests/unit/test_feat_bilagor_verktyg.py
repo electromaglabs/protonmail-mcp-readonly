@@ -13,6 +13,7 @@ from tests.feat_bilagor_support import (  # noqa: F401
     raw_message,
     text_part,
 )
+from tests import sdk_support as sdk
 
 
 def _ctx(raw):
@@ -30,7 +31,7 @@ def _run(raw, **kwargs):
 
 
 def test_schema_requires_mailbox_and_non_negative_index():
-    tool = mcp._tool_manager.get_tool("get_attachment")
+    tool = sdk.get_tool(mcp, "get_attachment")
     schema = tool.parameters
     assert set(schema["required"]) >= {"uid", "mailbox", "index"}
     assert schema["properties"]["index"]["minimum"] == 0

@@ -8,6 +8,7 @@ from protonmail_mcp.imap_client import IMAPClient, _text_search_criteria
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools.search import search_emails
 from tests.feat_sok_fakebridge import FakeBridge, FakeMessage
+from tests import sdk_support as sdk
 
 
 @pytest.fixture
@@ -145,7 +146,7 @@ class TestBodyText:
 # Verktyget
 # ---------------------------------------------------------------------------
 def _schema():
-    tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "search_emails")
+    tool = next(t for t in sdk.list_tools(mcp) if t.name == "search_emails")
     return tool.parameters["properties"]
 
 

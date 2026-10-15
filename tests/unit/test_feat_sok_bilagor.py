@@ -8,6 +8,7 @@ from protonmail_mcp.imap_client import IMAPClient, _attachment_uids
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools.search import search_emails
 from tests.feat_sok_fakebridge import FakeBridge, FakeMessage
+from tests import sdk_support as sdk
 
 _MIXED = "multipart/mixed"
 
@@ -120,7 +121,7 @@ class TestSearchHasAttachment:
 
 class TestTool:
     def test_schema_is_strict_bool(self):
-        tool = next(t for t in mcp._tool_manager.list_tools() if t.name == "search_emails")
+        tool = next(t for t in sdk.list_tools(mcp) if t.name == "search_emails")
         types = {t["type"] for t in tool.parameters["properties"]["has_attachment"]["anyOf"]}
         assert types == {"boolean", "null"}
 

@@ -16,9 +16,10 @@ from pydantic.types import Strict
 from protonmail_mcp.server import mcp, register_tools
 from protonmail_mcp.tools._types import AttachmentArg, Mailbox
 from protonmail_mcp.tools._uids import Uid, UidArg
+from tests import sdk_support as sdk
 
 register_tools()
-TOOLS = {t.name: t for t in mcp._tool_manager.list_tools()}
+TOOLS = {t.name: t for t in sdk.list_tools(mcp)}
 MAILBOX_PARAMS = {"mailbox", "target_mailbox", "name", "old_name", "new_name"}
 
 

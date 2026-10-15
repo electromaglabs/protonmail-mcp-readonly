@@ -3,6 +3,7 @@ import pytest
 
 from protonmail_mcp import prompts
 from protonmail_mcp.server import mcp, register_tools
+from tests import sdk_support as sdk
 
 
 def _text(prompt_result) -> str:
@@ -12,9 +13,9 @@ def _text(prompt_result) -> str:
 
 def test_register_is_idempotent():
     register_tools()
-    before = len(mcp._prompt_manager.list_prompts())
+    before = len(sdk.list_prompts(mcp))
     prompts.register(mcp)
-    assert len(mcp._prompt_manager.list_prompts()) == before == 4
+    assert len(sdk.list_prompts(mcp)) == before == 4
 
 
 def test_defaults():

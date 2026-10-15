@@ -7,6 +7,7 @@ import pytest
 
 from protonmail_mcp.tools import drafts
 from tests.fix_svar_support import make_client
+from tests import sdk_support as sdk
 
 
 def _ctx():
@@ -223,7 +224,7 @@ class TestUpdateDraft:
     def test_mcp_schema_requires_drafts_mailbox(self):
         from protonmail_mcp.server import mcp
 
-        tool = mcp._tool_manager.get_tool("update_draft")
+        tool = sdk.get_tool(mcp, "update_draft")
         schema = tool.parameters["properties"]["mailbox"]
         assert schema.get("const") == "Drafts" or schema.get("enum") == ["Drafts"]
         assert "mailbox" in tool.parameters["required"]

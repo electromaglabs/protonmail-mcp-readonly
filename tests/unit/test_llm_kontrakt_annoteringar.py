@@ -28,6 +28,7 @@ import pytest
 
 from protonmail_mcp.server import mcp, register_tools
 from tests.llm_kontrakt_support import client_session
+from tests import sdk_support as sdk
 
 READ = (True, False, True, False)
 MARK = (False, False, True, False)
@@ -82,7 +83,8 @@ async def test_every_tool_is_classified_in_the_table(tools):
 async def test_tool_hints_follow_the_table(tools, name):
     ann = tools[name].annotations
     assert ann is not None, f"{name} saknar annotations"
-    actual = (ann.readOnlyHint, ann.destructiveHint, ann.idempotentHint, ann.openWorldHint)
+    hints = sdk.wire(ann)
+    actual = tuple(hints.get(k) for k in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"))
     assert actual == EXPECTED[name]
 
 
@@ -111,4 +113,4 @@ def test_register_helper_returns_the_function_unchanged():
     register_tools()
     # Testerna anropar verktygsfunktionerna direkt; dekoratorn byter inte ut dem
     assert not hasattr(messages.get_email, "__wrapped__")
-    assert inspect.unwrap(mcp._tool_manager.get_tool("get_email").fn) is messages.get_email
+    assert inspect.unwrap(sdk.get_tool(mcp, "get_email").fn) is messages.get_email

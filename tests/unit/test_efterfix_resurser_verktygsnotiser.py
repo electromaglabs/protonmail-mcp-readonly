@@ -7,6 +7,7 @@ import pytest
 from protonmail_mcp import subscriptions
 from protonmail_mcp.server import mcp, register_tools
 from protonmail_mcp.subscriptions import changed_uris
+from tests import sdk_support as sdk
 
 
 @pytest.fixture(autouse=True)
@@ -99,8 +100,8 @@ def test_every_writing_tool_is_classified():
     """Ett nytt skrivverktyg måste tas ställning till: vilka resurser ändrar det?"""
     register_tools()
     writing = {
-        t.name for t in mcp._tool_manager.list_tools()
-        if not (t.annotations and t.annotations.readOnlyHint)
+        t.name for t in sdk.list_tools(mcp)
+        if not (t.annotations and sdk.wire(t.annotations).get("readOnlyHint"))
     }
     unclassified = writing - set(subscriptions.TOOL_CHANGES) - subscriptions.TOOLS_WITHOUT_MAILBOX_CHANGES
     assert unclassified == set(), (
@@ -112,12 +113,12 @@ def test_every_writing_tool_is_classified():
 class TestHook:
     def test_registered_writing_tool_is_wrapped_with_the_hook(self):
         register_tools()
-        fn = mcp._tool_manager.get_tool("mark_email_read").fn
+        fn = sdk.get_tool(mcp, "mark_email_read").fn
         assert getattr(fn, "_notifies_subscribers", False) is True
 
     def test_read_only_tools_are_not_wrapped(self):
         register_tools()
-        fn = mcp._tool_manager.get_tool("list_emails").fn
+        fn = sdk.get_tool(mcp, "list_emails").fn
         assert not getattr(fn, "_notifies_subscribers", False)
 
     def test_hook_does_not_wait_for_notifications(self, monkeypatch):

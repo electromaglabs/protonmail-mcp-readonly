@@ -9,11 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from protonmail_mcp.imap_client import IMAPClient
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import messages  # noqa: F401 — registrerar verktygen
+from tests import sdk_support as sdk
+from tests.sdk_support import ToolError
 
 
 @pytest.fixture
@@ -27,13 +28,13 @@ def mock_ctx():
 
 
 async def _run(name, args, ctx):
-    return await mcp._tool_manager.get_tool(name).run(args, context=ctx)
+    return await sdk.get_tool(mcp, name).run(args, context=ctx)
 
 
 class TestListEmailsSchema:
     async def test_schema_exposes_page_bounds(self):
         tools = {t.name: t for t in await mcp.list_tools()}
-        props = tools["list_emails"].inputSchema["properties"]
+        props = sdk.wire(tools["list_emails"])["inputSchema"]["properties"]
         assert props["page"]["minimum"] == 1
         assert props["page_size"]["minimum"] == 1
         assert props["page_size"]["maximum"] == 100

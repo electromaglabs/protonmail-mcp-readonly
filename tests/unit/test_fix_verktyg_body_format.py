@@ -2,10 +2,11 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import messages  # noqa: F401 — registrerar verktygen
+from tests import sdk_support as sdk
+from tests.sdk_support import ToolError
 
 
 @pytest.fixture
@@ -17,19 +18,19 @@ def mock_ctx(sample_raw_email):
 
 
 async def _run(args, ctx):
-    return await mcp._tool_manager.get_tool("get_email").run(args, context=ctx)
+    return await sdk.get_tool(mcp, "get_email").run(args, context=ctx)
 
 
 class TestGetEmailSchema:
     async def test_body_format_is_enum_in_schema(self):
         tools = {t.name: t for t in await mcp.list_tools()}
-        prop = tools["get_email"].inputSchema["properties"]["body_format"]
+        prop = sdk.wire(tools["get_email"])["inputSchema"]["properties"]["body_format"]
         assert sorted(prop["enum"]) == ["full", "stripped", "text"]
         assert prop["default"] == "text"
 
     async def test_max_length_has_minimum_zero_and_is_nullable(self):
         tools = {t.name: t for t in await mcp.list_tools()}
-        prop = tools["get_email"].inputSchema["properties"]["max_length"]
+        prop = sdk.wire(tools["get_email"])["inputSchema"]["properties"]["max_length"]
         variants = prop["anyOf"]
         assert {"type": "null"} in variants
         int_variant = next(v for v in variants if v.get("type") == "integer")

@@ -8,6 +8,7 @@ from protonmail_mcp.config import Settings
 from protonmail_mcp.imap_idle import MailWatcher
 from protonmail_mcp.server import mcp, register_tools
 from protonmail_mcp.tools import new_mail
+from tests import sdk_support as sdk
 
 
 def _ctx(app):
@@ -33,15 +34,15 @@ def _clean_fallback_marks():
 def test_tools_registered_read_only():
     register_tools()
     for name in ("check_new_emails", "wait_for_new_email"):
-        tool = mcp._tool_manager.get_tool(name)
-        assert tool.annotations.readOnlyHint is True
-        assert tool.annotations.destructiveHint is False
+        tool = sdk.get_tool(mcp, name)
+        assert sdk.wire(tool.annotations)["readOnlyHint"] is True
+        assert sdk.wire(tool.annotations)["destructiveHint"] is False
         assert "BODY.PEEK" in tool.description or "läst" in tool.description
 
 
 def test_timeout_schema_has_limits():
     register_tools()
-    props = mcp._tool_manager.get_tool("wait_for_new_email").parameters["properties"]
+    props = sdk.get_tool(mcp, "wait_for_new_email").parameters["properties"]
     assert props["timeout_seconds"]["minimum"] == 1
     assert props["timeout_seconds"]["maximum"] == 300
     assert props["timeout_seconds"]["default"] == 60

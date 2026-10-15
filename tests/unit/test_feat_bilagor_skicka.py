@@ -6,6 +6,7 @@ from protonmail_mcp.attachments import AttachmentStore, load_for_sending
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import reply, send  # noqa: F401 — registrerar verktygen
 from tests.feat_bilagor_support import attachment_env  # noqa: F401
+from tests import sdk_support as sdk
 
 
 @pytest.fixture
@@ -82,7 +83,7 @@ def test_default_store_comes_from_settings(attachment_env):
 
 @pytest.mark.parametrize("tool", ["send_email", "reply_to_email", "forward_email"])
 def test_tools_accept_attachments(tool):
-    schema = mcp._tool_manager.get_tool(tool).parameters
+    schema = sdk.get_tool(mcp, tool).parameters
     prop = schema["properties"]["attachments"]
     assert "attachments" not in schema.get("required", [])
     array = next(s for s in prop["anyOf"] if s.get("type") == "array")

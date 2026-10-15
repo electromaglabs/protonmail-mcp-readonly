@@ -3,9 +3,9 @@ import asyncio
 import json
 
 import pytest
-from pydantic import AnyUrl
 
 from protonmail_mcp import resources
+from tests import sdk_support as sdk
 from tests.mcp_resurser_support import client_session, fake_imap, read_or_error, text_of_resource
 
 
@@ -28,11 +28,13 @@ class TestMailboxUri:
     def test_round_trip(self, name):
         assert resources.parse_mailbox_uri(resources.mailbox_uri(name)) == name
 
-    def test_uri_survives_pydantic_anyurl(self):
-        # Klient och server skickar URI:n som AnyUrl; den får inte normaliseras om
+    def test_uri_survives_the_sdk_round_trip(self, monkeypatch):
+        # URI:n går genom SDK:ns modeller (i mcp 1.x en pydantic-URL) från klient till
+        # server och tillbaka; den får inte normaliseras om på vägen
         for name in ("INBOX", "Inbox", "Labels/Näs Samfällighet", "Folders/A/B"):
             uri = resources.mailbox_uri(name)
-            assert str(AnyUrl(uri)) == uri
+            result, _ = _read(monkeypatch, uri)
+            assert sdk.wire(result)["contents"][0]["uri"] == uri
 
     def test_unencoded_slash_is_accepted(self):
         assert resources.parse_mailbox_uri("mailbox://Folders/A/B") == "Folders/A/B"
@@ -78,7 +80,7 @@ def _read(monkeypatch, uri, imap=None):
 
     async def run():
         async with client_session(monkeypatch, imap=imap) as session:
-            return await session.read_resource(AnyUrl(uri))
+            return await session.read_resource(uri)
 
     return asyncio.run(run()), imap
 
@@ -98,7 +100,7 @@ def _read_error(monkeypatch, uri, imap=None):
 class TestResources:
     def test_contents_are_json(self, monkeypatch):
         result, _ = _read(monkeypatch, "mailboxes://")
-        assert result.contents[0].mimeType == "application/json"
+        assert sdk.wire(result)["contents"][0]["mimeType"] == "application/json"
         json.loads(text_of_resource(result))
 
     def test_mailbox_resource_reads_unencoded_slashes_too(self, monkeypatch):
@@ -141,18 +143,18 @@ class TestResources:
             async with client_session(monkeypatch) as session:
                 return await session.list_resource_templates()
 
-        templates = asyncio.run(run()).resourceTemplates
-        by_uri = {t.uriTemplate: t for t in templates}
+        templates = sdk.wire(asyncio.run(run()))["resourceTemplates"]
+        by_uri = {t["uriTemplate"]: t for t in templates}
         for template in ("mailbox://{mailbox}", "email://{mailbox}/{uid}"):
-            assert "%2F" in by_uri[template].description
-            assert by_uri[template].mimeType == "application/json"
+            assert "%2F" in by_uri[template]["description"]
+            assert by_uri[template]["mimeType"] == "application/json"
 
     def test_email_template_says_content_is_untrusted(self, monkeypatch):
         async def run():
             async with client_session(monkeypatch) as session:
                 return await session.list_resource_templates()
 
-        templates = asyncio.run(run()).resourceTemplates
-        email = next(t for t in templates if t.uriTemplate == "email://{mailbox}/{uid}")
-        assert "opålitlig" in email.description
-        assert "läst" in email.description
+        templates = sdk.wire(asyncio.run(run()))["resourceTemplates"]
+        email = next(t for t in templates if t["uriTemplate"] == "email://{mailbox}/{uid}")
+        assert "opålitlig" in email["description"]
+        assert "läst" in email["description"]

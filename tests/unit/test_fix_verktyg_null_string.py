@@ -1,6 +1,6 @@
 """Enhetstester: valfria strängparametrar i search_emails json-tolkas inte (punkt 16).
 
-FastMCP:s pre_parse_json kör json.loads på strängvärden för alla parametrar
+MCP-SDK:ns pre_parse_json kör json.loads på strängvärden för alla parametrar
 vars annotation inte är exakt `str`. För `str | None` blir "null" då None.
 """
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +9,7 @@ import pytest
 
 from protonmail_mcp.server import mcp
 from protonmail_mcp.tools import search  # noqa: F401 — registrerar verktygen
+from tests import sdk_support as sdk
 
 STRING_PARAMS = ["from_addr", "subject", "since", "before"]
 
@@ -22,7 +23,7 @@ def mock_ctx():
 
 
 async def _search(ctx, **args):
-    await mcp._tool_manager.get_tool("search_emails").run(args, context=ctx)
+    await sdk.get_tool(mcp, "search_emails").run(args, context=ctx)
     return ctx.request_context.lifespan_context.imap.search_messages.call_args.kwargs
 
 
@@ -44,7 +45,7 @@ class TestNullStringIsKept:
 
     async def test_schema_still_advertises_nullable_string(self):
         tools = {t.name: t for t in await mcp.list_tools()}
-        props = tools["search_emails"].inputSchema["properties"]
+        props = sdk.wire(tools["search_emails"])["inputSchema"]["properties"]
         for field in STRING_PARAMS:
             assert props[field]["anyOf"] == [{"type": "string"}, {"type": "null"}]
             assert props[field]["default"] is None
