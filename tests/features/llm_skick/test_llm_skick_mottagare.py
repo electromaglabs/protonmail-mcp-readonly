@@ -72,11 +72,6 @@ def llm_forwards(state, uid, mailbox, to):
         _run(state, lambda: call_tool("forward_email", {"uid": uid, "mailbox": mailbox, "to": to}, app, settings))
 
 
-@then(parsers.parse('ska felet nämna "{text}"'))
-def error_mentions(state, text):
-    assert text in str(state["error"])
-
-
 @then(parsers.parse('ska felet inte nämna "{address}" som otillåten'))
 def error_does_not_list(state, address):
     assert address not in str(state["error"])

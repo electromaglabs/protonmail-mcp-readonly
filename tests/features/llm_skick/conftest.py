@@ -107,6 +107,11 @@ def refused_with(state, text):
     assert text in str(error)
 
 
+@then(parsers.parse('ska felet nämna "{text}"'))
+def error_mentions(state, text):
+    assert text in str(state["error"])
+
+
 @then("ska Bridge inte ha kontaktats")
 def bridge_not_contacted(state):
     spy = state["spy"]

@@ -3,6 +3,7 @@ import email.policy
 import logging
 import re
 import ssl
+import time
 from email.header import Header
 from email.headerregistry import Address
 from email.message import EmailMessage, Message
@@ -270,6 +271,9 @@ def prepared_recipients(msg: Message) -> dict[str, list[str]]:
 class SMTPClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # Klockan för PROTONMAIL_MAX_SENDS_PER_HOUR (byts ut i tester)
+        self._clock = time.monotonic
+        self._rate = policy.SendRateLimiter(lambda: self._clock())
         self._ssl_ctx = ssl.create_default_context()
         self._ssl_ctx.check_hostname = False
 
@@ -365,7 +369,10 @@ class SMTPClient:
         innan Bridge kontaktas, så att ingen väg kan skicka förbi den.
         """
         policy.require_send(self._settings, "skicket")
+        policy.check_recipient_count(self._settings, all_recipients)
         policy.check_recipients(self._settings, all_recipients)
+        # Sist: bara skick som klarat alla andra kontroller räknas
+        self._rate.acquire(self._settings)
         logger.info(
             "Skickar e-post (%d mottagare) via SMTP %s:%d",
             len(all_recipients),

@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     # domänpost gäller bara den domänen, inte underdomäner. Delen före @ i en
     # adresspost jämförs exakt. Tom (standard) = alla mottagare tillåtna.
     allowed_recipients: str = ""
+    # PROTONMAIL_MAX_RECIPIENTS: högst så många (unika) mottagare per skick,
+    # To, Cc och Bcc tillsammans. 0 = ingen gräns. Standard: 50.
+    max_recipients: int = Field(default=50, ge=0)
+    # PROTONMAIL_MAX_SENDS_PER_HOUR: högst så många skick under en glidande
+    # timme (räknas i minnet, nollställs när servern startas om). Felet säger
+    # när nästa skick går. Vägrade skick räknas inte; ett skick som nådde
+    # Bridge räknas även om det misslyckades. 0 = ingen gräns. Standard: 30.
+    max_sends_per_hour: int = Field(default=30, ge=0)
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",

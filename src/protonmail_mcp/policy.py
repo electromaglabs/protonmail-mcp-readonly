@@ -16,7 +16,11 @@ Alla vägringar är ValueError med en text som når klienten oförändrad.
 from __future__ import annotations
 
 import functools
-from typing import Any
+import math
+import time
+from collections import deque
+from datetime import datetime, timedelta
+from typing import Any, Callable
 
 from .config import normalize_domain, parse_allowed_recipients
 
@@ -135,6 +139,62 @@ def check_recipients(settings: Any, recipients: list[str]) -> None:
             f"Skicket vägrades: {', '.join(refused)} finns inte bland de tillåtna "
             f"mottagarna (PROTONMAIL_ALLOWED_RECIPIENTS). Inget mejl skickades till någon."
         )
+
+
+def _limit(settings: Any, name: str) -> int:
+    value = getattr(settings, name, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def check_recipient_count(settings: Any, recipients: list[str]) -> None:
+    """ValueError om skicket har fler unika mottagare än PROTONMAIL_MAX_RECIPIENTS."""
+    limit = _limit(settings, "max_recipients")
+    count = len({address.lower() for address in recipients})
+    if limit and count > limit:
+        raise ValueError(
+            f"Skicket vägrades: {count} mottagare, men högst {limit} per mejl är tillåtet "
+            f"(PROTONMAIL_MAX_RECIPIENTS). Inget mejl skickades."
+        )
+
+
+_WINDOW = 3600.0
+
+
+def _wait_text(seconds: float) -> str:
+    if seconds >= 60:
+        minutes = math.ceil(seconds / 60)
+        return f"om {minutes} minut{'er' if minutes != 1 else ''}"
+    whole = max(1, math.ceil(seconds))
+    return f"om {whole} sekund{'er' if whole != 1 else ''}"
+
+
+class SendRateLimiter:
+    """Högst PROTONMAIL_MAX_SENDS_PER_HOUR skick under en glidande timme.
+
+    Räknaren ligger i minnet. ``acquire`` kontrollerar och räknar skicket i
+    ett svep (utan await emellan, så samtidiga anrop kan inte smita förbi).
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._times: deque[float] = deque()
+
+    def acquire(self, settings: Any) -> None:
+        limit = _limit(settings, "max_sends_per_hour")
+        if not limit:
+            return
+        now = self._clock()
+        while self._times and now - self._times[0] >= _WINDOW:
+            self._times.popleft()
+        if len(self._times) >= limit:
+            wait = self._times[-limit] + _WINDOW - now
+            at = (datetime.now() + timedelta(seconds=wait)).strftime("%H:%M:%S")
+            raise ValueError(
+                f"Skicket vägrades: högst {limit} skick per timme är tillåtet "
+                f"(PROTONMAIL_MAX_SENDS_PER_HOUR), och gränsen är nådd. Nästa skick går "
+                f"{_wait_text(wait)} (kl. {at}). Inget mejl skickades."
+            )
+        self._times.append(now)
 
 
 def write_operation(action: str, *, draft: bool = False):
