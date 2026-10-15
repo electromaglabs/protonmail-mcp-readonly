@@ -12,6 +12,7 @@ from typing import Sequence
 import aiosmtplib
 
 from .config import Settings
+from .email_parser import parse_addresses
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,49 @@ def _header_addr_specs(msg: Message, name: str) -> list[str]:
     return specs
 
 
+_RECIPIENT_HEADERS = (("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"))
+
+
+def prepared_recipients(msg: Message) -> dict[str, list[str]]:
+    """Mottagarna i ett färdigt meddelande (utkast), exakt som get_email visar dem.
+
+    Granskningen före send_draft sker med get_email, som tolkar To, Cc och
+    Bcc med email_parser.parse_addresses och bara visar den första rubriken
+    av varje. Samma tolkning används här, så att mejlet går till exakt de
+    adresser som visades. För att ingen adress ska kunna döljas för
+    granskningen vägras meddelandet (ValueError, inget skickas) om
+    - en adressrubrik förekommer mer än en gång, eller
+    - den strukturella adressparsern (_header_addr_specs) ger andra adresser
+      än visningens tolkning, t.ex. vid kommatecken i en kommentar
+      ("a@x.se (Efternamn, Förnamn)"), som visningen inte kan tolka.
+
+    Returnerar {"to": [...], "cc": [...], "bcc": [...]} med de nakna
+    adresserna som RCPT TO får (IDN-domäner som punycode).
+    """
+    result: dict[str, list[str]] = {}
+    for key, name in _RECIPIENT_HEADERS:
+        values = [value for k, value in msg.raw_items() if k.lower() == key]
+        if len(values) > 1:
+            raise ValueError(
+                f"Utkastet har {len(values)} {name}-rubriker. get_email visar bara den "
+                f"första, så utkastet skickas inte — skriv om det med update_draft."
+            )
+        structural = _header_addr_specs(msg, name)
+        shown = [addr for _, addr in parse_addresses(values[0])] if values else []
+        for addr in structural + shown:
+            _validate_email_addr(addr)
+        if shown != structural:
+            raise ValueError(
+                f"{name}-rubriken kan inte tolkas entydigt: get_email visar "
+                f"{shown or 'inga adresser'}, men rubriken innehåller {structural}. "
+                "Utkastet skickas inte — skriv om adresserna med update_draft."
+            )
+        result[key] = [_to_address(addr).addr_spec for addr in shown]
+    if not any(result.values()):
+        raise ValueError("Meddelandet saknar mottagare (To, Cc och Bcc är tomma)")
+    return result
+
+
 class SMTPClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -308,23 +352,21 @@ class SMTPClient:
     async def send_prepared_message(self, msg: Message) -> bool:
         """Skicka ett färdigt meddelande, t.ex. ett utkast ur Drafts.
 
-        Mottagarna läses ur To, Cc och Bcc och valideras som i send_email.
-        Bcc-headern tas bort ur det som skickas (de hemliga mottagarna får
-        mejlet via RCPT TO), men meddelandet som skickas in ändras inte.
-        Samma TLS, inloggning och felhantering som send_email, inklusive
-        SMTPPartialDeliveryError när bara några mottagare vägras.
+        Mottagarna läses ur To, Cc och Bcc med prepared_recipients (samma
+        tolkning som get_email visar; dubbla eller tvetydiga adressrubriker
+        vägras) och valideras som i send_email. Bcc-headern tas bort ur det
+        som skickas (de hemliga mottagarna får mejlet via RCPT TO), men
+        meddelandet som skickas in ändras inte. Samma TLS, inloggning och
+        felhantering som send_email, inklusive SMTPPartialDeliveryError när
+        bara några mottagare vägras.
         """
         recipients: list[str] = []
         seen: set[str] = set()
-        for name in ("To", "Cc", "Bcc"):
-            for addr in _header_addr_specs(msg, name):
-                _validate_email_addr(addr)
-                rcpt = _to_address(addr).addr_spec
+        for addrs in prepared_recipients(msg).values():
+            for rcpt in addrs:
                 if rcpt.lower() not in seen:
                     seen.add(rcpt.lower())
                     recipients.append(rcpt)
-        if not recipients:
-            raise ValueError("Meddelandet saknar mottagare (To, Cc och Bcc är tomma)")
 
         outgoing = copy.deepcopy(msg)
         del outgoing["Bcc"]

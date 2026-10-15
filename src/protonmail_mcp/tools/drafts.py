@@ -17,6 +17,7 @@ from .. import imap_drafts
 from ..server import mcp
 from ..smtp_client import (
     _build_message,
+    prepared_recipients,
     _normalize_recipients,
     _to_address,
     _validate_email_addr,
@@ -385,9 +386,14 @@ async def send_draft(
 
     Använd först när utkastet är granskat och godkänt. Utkastet hämtas ur
     Drafts (med eventuella ändringar som gjorts i Proton) och skickas över
-    SMTP till alla adresser i To, Cc och Bcc. Bcc-headern tas bort ur det
-    som skickas, så de hemliga mottagarna syns inte för de andra. Bridge
-    lägger det skickade mejlet i Sent.
+    SMTP till adresserna i To, Cc och Bcc — exakt de som get_email visar för
+    utkastet. Bcc-headern tas bort ur det som skickas, så de hemliga
+    mottagarna syns inte för de andra. Bridge lägger det skickade mejlet i Sent.
+
+    Ett utkast vägras (inget skickas) om To, Cc eller Bcc förekommer mer än
+    en gång, eller om en adress inte kan tolkas entydigt (get_email skulle
+    visa andra adresser än de som rubriken innehåller). Skriv då om
+    adresserna med update_draft.
 
     Efter skicket tas utkastet bort ur Drafts. Ett utkast som Bridge visar
     (med <id@protonmail.internalid> i References) tar Bridge själv bort när
@@ -404,14 +410,17 @@ async def send_draft(
         mailbox: Alltid "Drafts" — anges för att bekräfta att UID:t kommer därifrån
 
     Returns:
-        {"sent": True, "message_id", "draft_deleted"}. "note" förklarar när
+        {"sent": True, "message_id", "recipients", "draft_deleted"} där
+        recipients är {"to": [...], "cc": [...], "bcc": [...]}: exakt de
+        adresser mejlet skickades till. "note" förklarar när
         Bridge har tagit bort utkastet i Proton men Drafts ännu inte visar
         det. Gick utkastet inte att ta bort är draft_deleted False och
         "warning" förklarar — mejlet HAR då skickats och ska inte skickas igen.
 
     Raises:
-        ValueError: utkastet finns inte i Drafts, saknar mottagare eller har
-            en ogiltig adress (inget skickas).
+        ValueError: utkastet finns inte i Drafts, saknar mottagare, har en
+            ogiltig adress, dubbla adressrubriker eller en adress som inte
+            kan tolkas entydigt (inget skickas).
         SMTPPartialDeliveryError: servern vägrade några av mottagarna.
     """
     if mailbox != DRAFTS:
@@ -424,12 +433,16 @@ async def send_draft(
             'Hitta utkasten med list_emails(mailbox="Drafts").'
         )
     msg = email.message_from_bytes(raw, policy=email.policy.SMTP)
+    # Samma tolkning som get_email visar och som send_prepared_message skickar
+    # till; dubbla eller tvetydiga adressrubriker vägras här (inget skickas)
+    recipients = prepared_recipients(msg)
     # Fel här (även delvis leverans) går vidare och utkastet lämnas kvar
     await app.smtp.send_prepared_message(msg)
 
     result: dict[str, Any] = {
         "sent": True,
         "message_id": msg["Message-ID"],
+        "recipients": recipients,
         "draft_deleted": True,
     }
     try:

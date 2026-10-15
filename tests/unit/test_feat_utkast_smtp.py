@@ -38,8 +38,15 @@ class TestSendPreparedMessage:
 
     @pytest.mark.asyncio
     async def test_encoded_display_names_cannot_add_recipients(self):
-        # Ett kodat kommatecken eller <…> i namnet blir ingen ny mottagare
+        # Ett kodat kommatecken eller <…> i namnet blir ingen ny mottagare.
+        # efterfix-utkast: get_email kan inte tolka rubriken (rå "<" i det kodade
+        # ordet) och visar ingen adress, så utkastet vägras helt i stället.
         msg = _msg(BASE + "To: =?utf-8?q?x=2C_<evil@attacker.example>?= <a@example.se>")
+        with capture_smtp() as cap:
+            with pytest.raises(ValueError, match="kan inte tolkas entydigt"):
+                await make_client().send_prepared_message(msg)
+        assert cap.sent == []
+        msg = _msg(BASE + "To: =?utf-8?q?x=2C_=3Cevil=40attacker=2Eexample=3E?= <a@example.se>")
         with capture_smtp() as cap:
             await make_client().send_prepared_message(msg)
         assert cap.recipients == ["a@example.se"]

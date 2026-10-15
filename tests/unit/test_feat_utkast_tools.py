@@ -253,7 +253,8 @@ class TestSendDraft:
         result = await drafts.send_draft(ctx, uid="3", mailbox="Drafts")
         app.imap.get_message.assert_awaited_once_with("Drafts", "3")
         remove.assert_awaited_once_with(app.imap, "3")
-        assert result == {"sent": True, "message_id": "<d@proton.me>", "draft_deleted": True}
+        assert result == {"sent": True, "message_id": "<d@proton.me>", "draft_deleted": True,
+                          "recipients": {"to": ["a@example.se"], "cc": [], "bcc": []}}
 
     @pytest.mark.asyncio
     async def test_failed_send_keeps_draft(self, monkeypatch):
