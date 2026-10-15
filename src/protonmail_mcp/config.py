@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,6 +39,14 @@ class Settings(BaseSettings):
     # radering, läst/oläst, stjärna, etiketter, mappar, utkast och skick.
     # Läsande verktyg fungerar som vanligt. Standard: false.
     read_only: bool = False
+    # PROTONMAIL_SEND_MODE:
+    #   "send" (standard) — som tidigare: verktygen får skicka.
+    #   "draft_only" — send_email, reply_to_email, forward_email och send_draft
+    #       vägras; utkast (create_draft, create_reply_draft,
+    #       create_forward_draft, update_draft) går bra, så att användaren
+    #       själv granskar och skickar från Proton.
+    #   "disabled" — även utkasten vägras.
+    send_mode: Literal["send", "draft_only", "disabled"] = "send"
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
@@ -47,6 +56,11 @@ class Settings(BaseSettings):
         # och lifespan loggar det till stderr (som Claude Desktop sparar).
         hide_input_in_errors=True,
     )
+
+    @field_validator("send_mode", mode="before")
+    @classmethod
+    def _normalize_send_mode(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
 
     @field_validator("attachment_dir", mode="after")
     @classmethod

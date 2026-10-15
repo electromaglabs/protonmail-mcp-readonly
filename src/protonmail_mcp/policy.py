@@ -63,14 +63,41 @@ def require_write(settings: Any, action: str) -> None:
         )
 
 
+_DRAFT_HINT = (
+    "Skapa ett utkast i stället med create_draft, create_reply_draft eller "
+    "create_forward_draft, så kan användaren granska och skicka det själv i Proton."
+)
+
+
+def _send_mode(settings: Any) -> str:
+    mode = getattr(settings, "send_mode", "send")
+    return mode if mode in ("send", "draft_only", "disabled") else "send"
+
+
 def require_send(settings: Any, action: str) -> None:
-    """ValueError om skick inte är tillåtet."""
+    """ValueError om skick inte är tillåtet (skrivskydd eller PROTONMAIL_SEND_MODE)."""
     require_write(settings, action)
+    mode = _send_mode(settings)
+    if mode == "draft_only":
+        raise ValueError(
+            f"Servern får inte skicka e-post (PROTONMAIL_SEND_MODE=draft_only), så "
+            f"{action} vägras och inget skickades. {_DRAFT_HINT}"
+        )
+    if mode == "disabled":
+        raise ValueError(
+            f"Servern får varken skicka e-post eller skapa utkast "
+            f"(PROTONMAIL_SEND_MODE=disabled), så {action} vägras och inget skickades."
+        )
 
 
 def require_draft(settings: Any, action: str) -> None:
-    """ValueError om utkast inte får skapas eller ändras."""
+    """ValueError om utkast inte får skapas eller ändras (skrivskydd eller disabled)."""
     require_write(settings, action)
+    if _send_mode(settings) == "disabled":
+        raise ValueError(
+            f"Servern får varken skicka e-post eller skapa utkast "
+            f"(PROTONMAIL_SEND_MODE=disabled), så {action} vägras. Inget har sparats."
+        )
 
 
 def check_tool(settings: Any, tool: str) -> None:
