@@ -1,6 +1,4 @@
 """F6/F7: adresser ändras aldrig i visningen; ord med @ i visningsnamn rensas som text."""
-import time
-
 import pytest
 
 from protonmail_mcp.email_parser import parse_email
@@ -54,13 +52,12 @@ class TestAdressensDoldaTeckenSynliggors:
         assert once.isascii()
 
     def test_escapen_ar_linjar(self):
-        import time
+        def make(n):
+            return "a" + "󠁁" * n + "@x.se"
 
-        addr = "a" + "󠁁" * 500_000 + "@x.se"
-        start = time.perf_counter()
-        out = sanitize_address(addr)
-        assert time.perf_counter() - start < 3.0
-        assert out.kept_in_address == 500_000
+        assert sanitize_address(make(500_000)).kept_in_address == 500_000
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+        assert_linear(sanitize_address, make, 125_000)
 
     def test_taggtecken_i_namnet_tas_fortfarande_bort(self):
         result = sanitize_address_text(f"Bo{TAGS}ss <boss@company.com>")

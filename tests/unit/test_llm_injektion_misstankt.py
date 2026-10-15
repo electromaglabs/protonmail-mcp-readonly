@@ -1,10 +1,9 @@
 """Heuristik för injektionsmönster (llm-injektion)."""
-import time
-
 import pytest
 
 from protonmail_mcp.email_parser import parse_email
 from protonmail_mcp.sanitize import injection_signals
+from tests.tidsmatning import assert_linear
 
 
 def labels(text):
@@ -83,10 +82,10 @@ class TestFraser:
         assert labels(text) == []
 
     def test_linjar_tid(self):
-        text = ("ignore " * 50_000) + ("<|" * 50_000) + ("du är nu " * 50_000)
-        start = time.perf_counter()
-        labels(text)
-        assert time.perf_counter() - start < 2
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+        assert_linear(
+            labels, lambda n: ("ignore " * n) + ("<|" * n) + ("du är nu " * n), 12_500
+        )
 
 
 def html_mail(html):

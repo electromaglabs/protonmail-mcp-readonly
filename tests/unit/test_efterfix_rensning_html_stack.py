@@ -1,9 +1,8 @@
 """F8a/F8b/F10: öppna element följs i en stack, som i en webbläsare."""
-import time
-
 import pytest
 
 from protonmail_mcp.html_text import html_to_text, html_to_text_report
+from tests.tidsmatning import assert_linear
 
 
 class TestForalderStangerGomtElement:
@@ -79,11 +78,6 @@ class TestLinjarTid:
     ], ids=["nastlade-stilar", "felmatchade", "li-utan-scope", "td-utan-scope", "sjalvstangande",
             "containrar"])
     def test_tiden_vaxer_linjart(self, make):
-        def run(n):
-            html = make(n)
-            start = time.perf_counter()
-            html_to_text_report(html)
-            return time.perf_counter() - start
-
-        small, big = run(20_000), run(40_000)
-        assert big < max(small, 0.02) * 4, (small, big)
+        # n mot 4n, bästa av tre (tidigare n mot 2n med en mätning och gränsen
+        # 4×, som är precis vad kvadratisk tid ger och som föll under last)
+        assert_linear(html_to_text_report, make, 10_000)

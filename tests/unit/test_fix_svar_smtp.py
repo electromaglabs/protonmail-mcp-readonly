@@ -5,6 +5,7 @@ import pytest
 
 from protonmail_mcp.smtp_client import _build_message
 from tests.fix_svar_support import capture_smtp, header_addresses, make_client
+from tests.tidsmatning import assert_linear
 
 
 def _flat_headers(raw: bytes) -> str:
@@ -249,19 +250,19 @@ async def test_full_acceptance_returns_true():
 
 
 @pytest.mark.parametrize(
-    "addr",
-    ["a@" + "a." * 25_000, "a@" + "." * 50_000 + "x", "a@" + "a" * 50_000],
+    "make",
+    [lambda n: "a@" + "a." * (n // 2), lambda n: "a@" + "." * n + "x", lambda n: "a@" + "a" * n],
     ids=["många-punkter-slut-på-punkt", "bara-punkter", "ingen-punkt"],
 )
-def test_email_validation_is_linear(addr):
-    import time
-
+def test_email_validation_is_linear(make):
     from protonmail_mcp.smtp_client import _validate_email_addr
 
-    start = time.perf_counter()
-    with pytest.raises(ValueError):
-        _validate_email_addr(addr)
-    assert time.perf_counter() - start < 0.2
+    def validate(addr):
+        with pytest.raises(ValueError):
+            _validate_email_addr(addr)
+
+    # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+    assert_linear(validate, make, 12_500)
 
 
 @pytest.mark.parametrize(

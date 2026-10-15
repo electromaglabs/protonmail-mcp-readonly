@@ -2,6 +2,7 @@
 import pytest
 
 from protonmail_mcp.html_text import html_to_text, html_to_text_report
+from tests.tidsmatning import assert_linear
 
 S = "SECRETPAYLOAD"
 
@@ -101,13 +102,9 @@ def test_skal_for_nya_tekniker():
 
 
 def test_linjar_tid_med_manga_fargade_element():
-    import time
-
-    def run(n):
-        html = "<div style='background:#fff'>" + "<span style='color:#fefefe;font:0/0 a'>x" * n
-        start = time.perf_counter()
-        html_to_text(html)
-        return time.perf_counter() - start
-
-    small, big = run(20_000), run(40_000)
-    assert big < max(small, 0.02) * 4
+    # n mot 4n, bästa av tre (tidigare n mot 2n med en mätning och gränsen 4×)
+    assert_linear(
+        html_to_text,
+        lambda n: "<div style='background:#fff'>" + "<span style='color:#fefefe;font:0/0 a'>x" * n,
+        10_000,
+    )

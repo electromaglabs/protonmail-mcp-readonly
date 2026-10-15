@@ -7,6 +7,7 @@ import pytest
 
 from protonmail_mcp.tools.reply import forward_email, reply_to_email
 from tests.fix_svar_support import KONTO, capture_smtp, header_addresses, make_client
+from tests.tidsmatning import assert_linear
 
 
 def _ctx(raw: bytes | None, account: str = KONTO):
@@ -142,17 +143,18 @@ def _elapsed(fn) -> float:
     return time.perf_counter() - start
 
 
+# n mot 4n i stället för absoluta gränser, som föll på långsamma maskiner
 def test_prefix_stripping_is_linear_on_whitespace_runs():
     from protonmail_mcp.tools.reply import _base_subject
 
-    assert _elapsed(lambda: _base_subject("re" + " " * 50_000 + "x")) < 0.2
+    assert_linear(_base_subject, lambda n: "re" + " " * n + "x", 12_500)
 
 
 def test_prefix_stripping_is_linear_on_many_prefixes():
     from protonmail_mcp.tools.reply import _base_subject
 
     assert _base_subject("re: " * 50_000 + "x") == "x"
-    assert _elapsed(lambda: _base_subject("re: " * 50_000 + "x")) < 0.2
+    assert_linear(_base_subject, lambda n: "re: " * n + "x", 12_500)
 
 
 async def test_huge_references_header_is_cheap_and_trimmed():

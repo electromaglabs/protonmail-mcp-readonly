@@ -1,11 +1,11 @@
 """F1: Message-ID, In-Reply-To och References visas bara som ASCII-<msg-id>."""
 import base64
-import time
 
 import pytest
 
 from protonmail_mcp.email_parser import clean_msg_ids, parse_email
 from protonmail_mcp.imap_client import _parse_fetch_metadata
+from tests.tidsmatning import assert_linear
 
 HIDDEN = "".join(chr(0xE0000 + ord(c)) for c in "RUN")
 ENCODED = "=?utf-8?b?" + base64.b64encode(HIDDEN.encode()).decode() + "?="
@@ -49,10 +49,13 @@ class TestCleanMsgIds:
         assert clean_msg_ids("").text == ""
 
     def test_lang_references_ar_linjar(self):
-        value = " ".join(f"<{i}@x>" for i in range(200_000))
-        start = time.perf_counter()
+        def make(n):
+            return " ".join(f"<{i}@x>" for i in range(n))
+
+        value = make(200_000)
         assert clean_msg_ids(value).text == value
-        assert time.perf_counter() - start < 2.0
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+        assert_linear(clean_msg_ids, make, 50_000)
 
 
 def _raw(header: str) -> bytes:

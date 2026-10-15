@@ -6,6 +6,7 @@ import pytest
 
 from protonmail_mcp.attachments import AttachmentStore, sanitize_filename
 from protonmail_mcp.config import Settings
+from tests.tidsmatning import assert_linear
 
 
 class TestSanitizeFilename:
@@ -46,12 +47,12 @@ class TestSanitizeFilename:
         assert len(name.encode("utf-8")) <= 200
 
     def test_huge_hostile_name_is_linear(self):
-        import time
+        def make(n):
+            return " ." * n + "x" + ". " * n + "\u202e" * (n // 200)
 
-        hostile = " ." * 200_000 + "x" + ". " * 200_000 + "\u202e" * 1000
-        start = time.perf_counter()
-        assert sanitize_filename(hostile) == "x"
-        assert time.perf_counter() - start < 1.0
+        assert sanitize_filename(make(200_000)) == "x"
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+        assert_linear(sanitize_filename, make, 50_000)
 
     def test_long_extension_is_not_kept(self):
         name = sanitize_filename("x." + "y" * 300)
