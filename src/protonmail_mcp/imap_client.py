@@ -12,8 +12,7 @@ import aioimaplib
 
 from . import policy
 from .config import Settings
-from .email_parser import decode_header_value, iso_date
-from .sanitize import clean_text, sanitize_address_text
+from .email_parser import FieldCleaner, decode_header_value, iso_date, suspicious_reasons
 from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
 
 logger = logging.getLogger(__name__)
@@ -1100,12 +1099,15 @@ _METADATA_ADDRESS_HEADERS = frozenset({"from", "to", "cc", "bcc", "reply-to", "s
 _METADATA_TEXT_HEADERS = frozenset({"subject", "date"})
 
 
-def _metadata_value(hdrs, name: str) -> str:
+def _metadata_value(hdrs, name: str, clean: FieldCleaner | None = None) -> str:
+    """Ett rubrikvärde för listningen, rensat efter sorts rubrik. Det som
+    rensas (och osynliga tecken som lämnas i adresser) räknas i clean."""
+    clean = clean if clean is not None else FieldCleaner()
     value = decode_header_value(hdrs.get(name))
     if name in _METADATA_ADDRESS_HEADERS:
-        return sanitize_address_text(value).text
+        return clean.address_text(name, value)
     if name in _METADATA_TEXT_HEADERS:
-        return clean_text(value)
+        return clean.text(name, value)
     return value
 
 
@@ -1157,18 +1159,24 @@ def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> l
         # headers (RFC 6532) avkodas först, annars blir "ö" till "��"
         hdrs = HeaderParser().parsestr(_decode_header_bytes(headers_raw))
 
+        clean = FieldCleaner()
         meta = {
             "uid": uid,
             "flags": flags_m.group(1).split() if flags_m else [],
-            "subject": _metadata_value(hdrs, "subject"),
-            "from": _metadata_value(hdrs, "from"),
-            "to": _metadata_value(hdrs, "to"),
-            "date": (date := _metadata_value(hdrs, "date")),
+            "subject": _metadata_value(hdrs, "subject", clean),
+            "from": _metadata_value(hdrs, "from", clean),
+            "to": _metadata_value(hdrs, "to", clean),
+            "date": (date := _metadata_value(hdrs, "date", clean)),
             "date_iso": iso_date(date),  # jämförbart och sorterbart för klienten
-            "message_id": _metadata_value(hdrs, "message-id"),
+            "message_id": _metadata_value(hdrs, "message-id", clean),
         }
         for name in extra_headers:
-            meta[name.replace("-", "_")] = _metadata_value(hdrs, name)
+            meta[name.replace("-", "_")] = _metadata_value(hdrs, name, clean)
+        # Varning (fasta texter, som i get_email) bara när det finns något:
+        # taggtecken/bidi som rensats, osynliga tecken som lämnats i en
+        # adress eller ett injektionsmönster i ämnet
+        if reasons := suspicious_reasons([meta["subject"]], clean):
+            meta["suspicious_content"] = reasons
         messages.append(meta)
     return messages
 

@@ -180,7 +180,6 @@ _ANY_RE = re.compile(
     )
 )
 _ASCII_UNSAFE_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f]")
-_TAG_RE = re.compile(_char_class(_TAGS))
 
 
 @dataclass(frozen=True)
@@ -245,48 +244,66 @@ def clean_text(text: str | None) -> str:
     return sanitize_text(text).text
 
 
-# Citerad sträng (även oavslutad), <…> eller ett ord utan avgränsare.
-# Inga överlappande alternativ, så varje tecken läses högst ett par gånger.
-_ADDRESS_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"?|<[^<>]*>|[^\s<>,;"]+', re.DOTALL)
+# Citerad sträng (även oavslutad), <…>, ett ord utan avgränsare eller en
+# avgränsare mellan adresser. Inga överlappande alternativ, så varje tecken
+# läses högst ett par gånger.
+_ADDRESS_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"?|<[^<>]*>|[^\s<>,;"]+|[,;]', re.DOTALL)
 
 
-def _is_address(token: str, followed_by: str) -> bool:
-    if token.startswith('"'):
-        return followed_by == "@"  # citerad lokaldel: "anna svensson"@x.se
-    return "@" in token and len(token) <= _MAX_ADDRESS_LEN + 2
+def _is_angle_address(token: str) -> bool:
+    return token.startswith("<") and "@" in token and len(token) <= _MAX_ADDRESS_LEN + 2
 
 
 def sanitize_address(addr: str | None) -> Sanitized:
-    """En enskild adress (local@domain): bara taggtecken tas bort.
+    """En enskild adress (local@domain): lämnas helt orörd.
 
-    Övriga tecken som sanitize_text skulle ta bort lämnas, eftersom en
-    ändrad adress kunde peka på en annan mottagare; de räknas i
-    kept_in_address så att anroparen kan varna.
+    En ändrad adress kunde peka på en annan mottagare än den som ett svar
+    går till, så inget tas bort — inte ens taggtecken. Tecken som
+    sanitize_text skulle ha tagit bort räknas i kept_in_address, så att
+    anroparen kan varna (suspicious_content). Att skicka till en sådan
+    adress vägras vid skick.
     """
     if not addr:
         return Sanitized("")
     if addr.isascii() and not _ASCII_UNSAFE_RE.search(addr):
         return Sanitized(addr)
-    addr, tags = _TAG_RE.subn("", addr)
-    return Sanitized(addr, {"tag": tags} if tags else {}, sanitize_text(addr).count)
+    return Sanitized(addr, {}, sanitize_text(addr).count)
 
 
 def sanitize_address_text(text: str | None) -> Sanitized:
     """Rensa en adressrad ("Anna <anna@x.se>, b@y.se") utan att röra adresserna.
 
-    Adressdelen ändras inte — en rensad adress kunde peka på en annan
-    mottagare. Som adress räknas <…> med @, ord med @ utanför citattecken och
-    en citerad lokaldel direkt före @, högst 320 tecken. Visningsnamn (även
-    citerade) och övrig text rensas.
+    Adressdelen ändras aldrig (se sanitize_address); osynliga tecken i den
+    räknas i kept_in_address. Som adress räknas, per element mellan komma
+    eller semikolon:
 
-    Undantag: Unicode-taggtecken tas bort även i adresser. De kan inte ingå i
-    en adress som går att leverera till och är den vanligaste smuggelvägen.
-    Andra tecken som står kvar i en adress räknas i kept_in_address.
+    - <…> med @ (högst 320 tecken), och
+    - om elementet saknar en sådan <…>: ord med @ och en citerad lokaldel
+      direkt före @ ("anna svensson"@x.se).
+
+    Ett ord med @ i ett element som har en <…>-adress är en del av
+    visningsnamnet ("secure@paypal.com <evil@x.com>") och rensas som text,
+    liksom visningsnamn (även citerade) och övrig text.
     """
     if not text:
         return Sanitized("")
     if text.isascii() and not _ASCII_UNSAFE_RE.search(text):
         return Sanitized(text)
+    tokens = list(_ADDRESS_TOKEN_RE.finditer(text))
+    # Element (mellan , och ;) som har en <…>-adress
+    has_angle: list[bool] = []
+    element_of: list[int] = []
+    element = 0
+    has_angle.append(False)
+    for m in tokens:
+        token = m.group()
+        if token in (",", ";"):
+            element += 1
+            has_angle.append(False)
+        elif _is_angle_address(token):
+            has_angle[element] = True
+        element_of.append(element)
+
     out: list[str] = []
     removed: dict[str, int] = {}
     kept = 0
@@ -298,13 +315,18 @@ def sanitize_address_text(text: str | None) -> Sanitized:
             out.append(result.text)
             _merge(removed, result.removed)
 
-    for m in _ADDRESS_TOKEN_RE.finditer(text):
+    for m, element in zip(tokens, element_of):
         token = m.group()
-        if not _is_address(token, text[m.end():m.end() + 1]):
+        if has_angle[element]:
+            is_address = _is_angle_address(token)
+        elif token.startswith('"'):
+            is_address = text[m.end():m.end() + 1] == "@"  # citerad lokaldel
+        else:
+            is_address = "@" in token and len(token) <= _MAX_ADDRESS_LEN
+        if not is_address:
             continue
         flush(m.start())
         result = sanitize_address(token)
-        _merge(removed, result.removed)
         kept += result.kept_in_address
         out.append(result.text)
         pending_start = m.end()

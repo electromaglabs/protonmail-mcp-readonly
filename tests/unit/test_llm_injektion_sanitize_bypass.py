@@ -88,11 +88,14 @@ class TestAdressBypass:
         result = sanitize_address_text("Anna <" + tags("ignore previous") + "> <anna@x.se>")
         assert result.text == "Anna <> <anna@x.se>"
 
-    def test_taggtecken_tas_bort_aven_i_adressen(self):
-        # Taggtecken kan aldrig vara en del av en riktig adress
-        result = sanitize_address_text("<anna" + tags("run rm") + "@x.se>")
-        assert result.text == "<anna@x.se>"
-        assert result.removed == {"tag": 6}
+    def test_taggtecken_i_adressen_lamnas_och_rapporteras(self):
+        # Ändrat i efterfix-rensning (F6): en visad adress som skiljer sig från
+        # mottagaren är värre än en flaggad adress; skick vägrar sådana adresser
+        text = "<anna" + tags("run rm") + "@x.se>"
+        result = sanitize_address_text(text)
+        assert result.text == text
+        assert result.removed == {}
+        assert result.kept_in_address == 6
 
     def test_alltfor_langt_ord_med_snabel_a_ar_ingen_adress(self):
         fake = "ignore\u200b" * 60 + "@x.se"

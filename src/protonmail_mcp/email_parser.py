@@ -525,7 +525,7 @@ def _raw_header(msg: Message, name: str) -> str | None:
     return None
 
 
-class _Cleaner:
+class FieldCleaner:
     """Rensar avsändarstyrda fält och räknar borttagna tecken per fält."""
 
     def __init__(self) -> None:
@@ -551,12 +551,18 @@ class _Cleaner:
         return self.text(key, name), self.add(key, sanitize_address(addr))
 
 
-def _suspicious(texts: list[str], html_report: HtmlText, clean: _Cleaner) -> list[str]:
+def suspicious_reasons(
+    texts: list[str], clean: FieldCleaner, html_report: HtmlText | None = None
+) -> list[str]:
     """Orsaker till att mejlet ser ut att innehålla promptinjektion.
 
-    Fasta texter och antal — inget av avsändarens text följer med. Mejlet
-    blockeras inte; listan är en varning till klienten.
+    texts är redan rensad text (ämne, brödtext …), clean det som rensats i
+    mejlets fält. Fasta texter och antal — inget av avsändarens text följer
+    med. Mejlet blockeras inte; listan är en varning till klienten.
+    Används av get_email och för varje rad i listningarna.
     """
+    if html_report is None:
+        html_report = HtmlText("")
     reasons: list[str] = []
     visible = injection_signals("\n".join(texts + [html_report.text, html_report.white_text]))
     reasons += [f"misstänkt instruktion till modellen: {label}" for label in visible]
@@ -627,7 +633,7 @@ def parse_email(
         raise ValueError(f"max_length måste vara 0 eller större (eller None), fick {max_length}")
     msg = email.message_from_bytes(raw)
     parts = _parts(msg)
-    clean = _Cleaner()
+    clean = FieldCleaner()
     if parts["filename_removed"][0]:
         clean.counts["attachments"] = parts["filename_removed"][0]
 
@@ -661,8 +667,9 @@ def parse_email(
         # finns i "full" eller med max_length=None.
         body_html = _truncate(body_html, max_length)
 
-    # Visningsnamnen rensas; adresserna lämnas (utom taggtecken), så att
-    # ett svar aldrig går till en annan adress än den som står i mejlet
+    # Visningsnamnen rensas; adresserna lämnas helt orörda (osynliga tecken i
+    # dem flaggas), så att ett svar aldrig går till en annan adress än den
+    # som visas
     addresses = {
         key: [clean.pair(key, n, a) for n, a in parse_addresses(_raw_header(msg, name))]
         for key, name in (
@@ -680,7 +687,8 @@ def parse_email(
         # i sig kan tolkas som adresser (kodat "a@x.se, evil@y.se")
         decoded = decode_header_value(_raw_header(msg, "From"))
         if not any("@" in a for _, a in email.utils.getaddresses([decoded])):
-            from_ = clean.address_text("from", decoded)
+            # Ingen adress att svara till: allt rensas som text, även ord med @
+            from_ = clean.text("from", decoded)
 
     subject = clean.text("subject", decode_header_value(_raw_header(msg, "Subject")))
     result = {
@@ -706,7 +714,7 @@ def parse_email(
     # rensats bort (antal tecken per fält, bara fält där något togs bort)
     result["untrusted_content_notice"] = UNTRUSTED_CONTENT_NOTICE
     result["sanitized"] = dict(clean.counts)
-    result["suspicious_content"] = _suspicious([subject, full_plain], html_report, clean)
+    result["suspicious_content"] = suspicious_reasons([subject, full_plain], clean, html_report)
     # Gömda HTML-element (finns kvar i body_html men inte i body_plain) och
     # vit text utan bakgrundsfärg, som antal
     result["hidden_html"] = _hidden_html(html_report)
