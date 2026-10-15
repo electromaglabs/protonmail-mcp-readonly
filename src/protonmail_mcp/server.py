@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
 
+from . import __version__
+
 # Logging enbart till stderr — stdout är reserverat för MCP stdio-protokollet
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -114,6 +116,8 @@ class _GuardedFastMCP(FastMCP):
 
 
 mcp = _GuardedFastMCP("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
+# serverInfo.version i initialize: FastMCP tar annars mcp-bibliotekets version
+mcp._mcp_server.version = __version__
 
 
 def register_tools() -> None:

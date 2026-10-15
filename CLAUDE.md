@@ -27,7 +27,7 @@ startar `MailWatcher` (egna IDLE-anslutningar). Loggning går bara till stderr �
 
 | Modul | Ansvar |
 |-------|--------|
-| `__init__.py` | Tom paketfil |
+| `__init__.py` | `__version__` ur paketets metadata; versionens enda källa är `version` i pyproject.toml (servern anger den i serverInfo) |
 | `__main__.py` | `python -m protonmail_mcp` startar `server.main()` |
 | `server.py` | FastMCP-instansen `mcp` (`_GuardedFastMCP` vägrar verktyg efter policy innan de körs), `INSTRUCTIONS` till modellen, `lifespan`, `register_tools()`, `main()` och lyssnaren som gör nya mejl till resursnotiser |
 | `config.py` | `Settings` (pydantic-settings, prefix `PROTONMAIL_`), tolkning av `ALLOWED_RECIPIENTS` (IDNA2008) och `WATCH_MAILBOXES` |
