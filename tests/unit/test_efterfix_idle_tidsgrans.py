@@ -16,8 +16,10 @@ def _ctx():
 async def test_hanging_poll_is_cancelled_after_timeout_plus_margin(monkeypatch):
     monkeypatch.setattr(new_mail, "DEADLINE_MARGIN", 0.2)
     cancelled = asyncio.Event()
+    started = asyncio.Event()
 
     async def hanging(app, mailbox, since_uid):
+        started.set()
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
@@ -43,8 +45,10 @@ async def test_errors_from_the_poll_are_passed_through(monkeypatch):
 
 async def test_caller_cancellation_also_cancels_the_poll(monkeypatch):
     cancelled = asyncio.Event()
+    started = asyncio.Event()
 
     async def hanging(app, mailbox, since_uid):
+        started.set()
         try:
             await asyncio.sleep(3600)
         except asyncio.CancelledError:
@@ -53,7 +57,9 @@ async def test_caller_cancellation_also_cancels_the_poll(monkeypatch):
 
     monkeypatch.setattr(new_mail, "_collect", hanging)
     task = asyncio.create_task(new_mail.wait_for_new_email(_ctx(), mailbox="INBOX", timeout_seconds=60))
-    await asyncio.sleep(0.05)
+    # Avbryt först när frågan har startat; en fast väntetid kan på en långsam
+    # maskin avbryta innan den startat, och då körs aldrig except-grenen
+    await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

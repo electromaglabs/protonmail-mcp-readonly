@@ -190,9 +190,19 @@ class TestUidTimeout:
     async def test_cancelled_operation_discards_connection(self, client):
         """aioimaplib rensar inte hängande kommandon vid avbrott; anslutningen är då oanvändbar."""
         imap = client._client
-        imap.uid.side_effect = _never_answers
+        hanging = asyncio.Event()
+
+        async def never_answers(*args, **kwargs):
+            hanging.set()
+            await _never_answers()
+
+        imap.uid.side_effect = never_answers
         task = asyncio.ensure_future(client.set_flags("INBOX", "1", r"(\Seen)", True))
-        await asyncio.sleep(0.01)
+        # Avbryt först när kommandot verkligen hänger. Med en fast väntetid kunde
+        # avbrottet på en långsam maskin komma samtidigt som NOOP svarade, och då
+        # sväljer asyncio.wait_for i Python < 3.12 det (bpo-42130): operationen
+        # körde vidare och föll efter uid_timeout (30 s) med TimeoutError.
+        await hanging.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
