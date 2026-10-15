@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from protonmail_mcp import imap_drafts, policy
 from protonmail_mcp.smtp_client import SMTPClient
 from tests.llm_skick_support import BridgeSpy, call_tool, make_app, make_settings, spy_imap, spy_smtp_patch
+from tests.sdk_support import ToolError
 
 SEND_TOOLS = ["send_email", "reply_to_email", "forward_email", "send_draft"]
 DRAFT_TOOLS = ["create_draft", "create_reply_draft", "create_forward_draft", "update_draft"]
@@ -47,7 +48,7 @@ def test_mode_from_environment(monkeypatch):
 async def test_draft_only_refuses_send_tools_with_hint(tool):
     settings = make_settings(send_mode="draft_only")
     spy = BridgeSpy()
-    with spy_smtp_patch(spy), pytest.raises(ValueError) as exc:
+    with spy_smtp_patch(spy), pytest.raises(ToolError) as exc:
         await call_tool(tool, {}, make_app(settings, spy), settings)
     text = str(exc.value)
     assert "PROTONMAIL_SEND_MODE=draft_only" in text
@@ -65,7 +66,7 @@ def test_draft_only_lets_draft_tools_through(tool):
 async def test_disabled_refuses_send_and_draft_tools(tool):
     settings = make_settings(send_mode="disabled")
     spy = BridgeSpy()
-    with spy_smtp_patch(spy), pytest.raises(ValueError, match="PROTONMAIL_SEND_MODE=disabled"):
+    with spy_smtp_patch(spy), pytest.raises(ToolError, match="PROTONMAIL_SEND_MODE=disabled"):
         await call_tool(tool, {}, make_app(settings, spy), settings)
     assert not spy.contacted
 

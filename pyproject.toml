@@ -8,10 +8,10 @@ authors = [{ name = "Mattias Wahlberg", email = "mattias.wahlberg@proton.me" }]
 keywords = ["mcp", "protonmail", "email", "claude", "llm"]
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.26.0,<2",
+    "mcp[cli]>=2.3,<3",
     "aioimaplib>=2.0.1",
     "aiosmtplib>=5.1.2",
-    "pydantic>=2.11.0",
+    "pydantic>=2.12.0",
     "pydantic-settings>=2.14.2",
     "python-dotenv>=1.0.0",
     "idna>=3.15",
@@ -40,6 +40,12 @@ addopts = "-m 'not integration'"
 asyncio_mode = "auto"
 markers = [
     "integration: Integrationstester mot en riktig ProtonMail Bridge",
+]
+# Testerna talar medvetet protokollet före 2026-07-28 (resources/subscribe,
+# ping), som dagens klienter använder; mcp 2.x varnar för det vid varje anrop
+filterwarnings = [
+    "ignore:.*is removed as of 2026-07-28:DeprecationWarning",
+    "ignore:.*is removed as of 2026-07-28:UserWarning",
 ]
 
 [dependency-groups]

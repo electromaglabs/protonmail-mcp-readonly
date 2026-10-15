@@ -23,6 +23,7 @@ from tests.llm_skick_support import (
     spy_imap,
     spy_smtp_patch,
 )
+from tests.sdk_support import ToolError
 
 # Rent läsande verktyg: ändrar ingenting i kontot.
 READ_TOOLS = {
@@ -75,7 +76,7 @@ async def test_write_tool_refused_before_bridge(tool):
     spy = BridgeSpy()
     app = make_app(settings, spy)
     with spy_smtp_patch(spy):
-        with pytest.raises(ValueError, match="PROTONMAIL_READ_ONLY"):
+        with pytest.raises(ToolError, match="PROTONMAIL_READ_ONLY"):
             # Argumenten spelar ingen roll: vägran kommer före tolkningen
             await call_tool(tool, {}, app, settings)
     assert not spy.contacted, (spy.imap_calls, spy.smtp_connections)

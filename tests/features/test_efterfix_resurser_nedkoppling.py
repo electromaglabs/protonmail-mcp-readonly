@@ -8,7 +8,6 @@ till den misslyckas).
 import asyncio
 
 import pytest
-from pydantic import AnyUrl
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import subscriptions
@@ -47,7 +46,7 @@ def disconnects(monkeypatch, state):
     async def run():
         async with client_session(monkeypatch, message_handler=Collector()) as session:
             for uri in state["uris"]:
-                await session.subscribe_resource(AnyUrl(uri))
+                await session.subscribe_resource(uri)
             state["during"] = subscriptions.registry.sessions()
         # Ingen notis, ingen ping: bara att sessionen stängts
         state["after"] = subscriptions.registry.sessions()

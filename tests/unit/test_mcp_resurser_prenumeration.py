@@ -7,6 +7,7 @@ import pytest
 
 from protonmail_mcp import resources, subscriptions
 from protonmail_mcp.server import mcp, register_tools
+from tests import sdk_support as sdk
 
 
 class FakeSession:
@@ -75,10 +76,11 @@ class TestRegistry:
     def test_session_is_forgotten_when_it_exits(self, registry):
         async def run():
             session = FakeSession()
-            session._exit_stack = AsyncExitStack()
+            # Utan _connection räknas sessionen som sin egen anslutning
+            session.exit_stack = AsyncExitStack()
             registry.subscribe(session, "mailbox://INBOX")
             assert registry.sessions() == [session]
-            await session._exit_stack.aclose()
+            await session.exit_stack.aclose()
 
         asyncio.run(run())
         assert registry.sessions() == []
@@ -141,17 +143,12 @@ class TestNotify:
 class TestRegistration:
     def test_capabilities_announce_subscribe(self):
         register_tools()
-        from mcp.server.lowlevel.server import NotificationOptions
-
-        caps = mcp._mcp_server.get_capabilities(NotificationOptions(), {})
-        assert caps.resources.subscribe is True
+        assert sdk.capabilities(mcp)["resources"]["subscribe"] is True
 
     def test_register_is_idempotent(self):
         register_tools()
         subscriptions.register(mcp)
         subscriptions.register(mcp)
-        from mcp.server.lowlevel.server import NotificationOptions
-
-        caps = mcp._mcp_server.get_capabilities(NotificationOptions(resources_changed=True), {})
-        assert caps.resources.subscribe is True
-        assert caps.resources.listChanged is True
+        caps = sdk.capabilities(mcp, resources_changed=True)
+        assert caps["resources"]["subscribe"] is True
+        assert caps["resources"]["listChanged"] is True

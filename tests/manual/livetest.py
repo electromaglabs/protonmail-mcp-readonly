@@ -30,8 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import Client, StdioServerParameters
 
 from protonmail_mcp.config import get_settings
 from protonmail_mcp.imap_client import IMAPClient
@@ -109,9 +108,9 @@ def _pm_headers(msg) -> list[tuple[str, str]]:
 
 def _parse_result(res) -> object:
     txt = res.content[0].text if res.content else ""
-    if res.isError:
+    if res.is_error:
         raise RuntimeError(txt)
-    sc = getattr(res, "structuredContent", None)
+    sc = getattr(res, "structured_content", None)
     if sc is not None:
         return sc.get("result", sc) if isinstance(sc, dict) and set(sc) == {"result"} else sc
     try:
@@ -125,17 +124,16 @@ async def run(step, token: str) -> None:
         command="uv", args=["--directory", str(REPO), "run", "protonmail-mcp"], env={**os.environ}
     )
     imap = IMAPClient(get_settings())
-    async with stdio_client(params) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
+    # Protokollet före 2026-07-28, som Claude Code och Claude Desktop talar
+    async with Client(params, mode="legacy") as s:
 
-            async def call(tool, **a):
-                return _parse_result(await s.call_tool(tool, a))
+        async def call(tool, **a):
+            return _parse_result(await s.call_tool(tool, a))
 
-            try:
-                await step(Live(token, call, imap))
-            finally:
-                await imap.disconnect()
+        try:
+            await step(Live(token, call, imap))
+        finally:
+            await imap.disconnect()
 
 
 # ---------------------------------------------------------------- steg 1

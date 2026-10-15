@@ -46,7 +46,7 @@ def imap_protocol_mock() -> AsyncMock:
 
 
 @asynccontextmanager
-async def client_session(monkeypatch, imap=None, smtp=None, message_handler=None):
+async def client_session(monkeypatch, imap=None, smtp=None, message_handler=None, **connect_options):
     """ClientSession mot servern med imap/smtp-attrapper."""
     register_tools()
     # Verktygsanrop läser konfigurationen (policy, lösenordsrensning i fel)
@@ -62,7 +62,7 @@ async def client_session(monkeypatch, imap=None, smtp=None, message_handler=None
         yield app
 
     sdk.set_lifespan(monkeypatch, mcp, lifespan)
-    async with sdk.connect(mcp, message_handler=message_handler) as session:
+    async with sdk.connect(mcp, message_handler=message_handler, **connect_options) as session:
         yield session
 
 

@@ -21,14 +21,14 @@ Resurserna läser via samma verktygsfunktioner som list_mailboxes,
 get_mailbox_status, list_emails och get_email, så validering, sanering,
 opålitlighetsmärkning och fel blir desamma. Inget markeras som läst (Bridge
 läses med BODY.PEEK) och inget ändras. Fel blir samma begripliga texter som
-verktygen ger (tools/_errors.describe_error), utan FastMCP:s engelska prefix.
+verktygen ger (tools/_errors.describe_error), utan SDK:ns engelska prefix.
 """
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote, unquote
 
-from ._sdk import Resource, ResourceTemplate
+from ._sdk import DEFAULT_RESOURCE_SECURITY, Resource, ResourceError, ResourceTemplate, UriTemplate
 from pydantic import Field
 
 MAILBOXES_URI = "mailboxes://"
@@ -175,14 +175,15 @@ class _ImapResource(Resource):
     reader: Callable[[Any], Awaitable[Any]] = Field(exclude=True)
 
     async def read(self) -> str:
-        from .server import mcp
+        from .server import current_context
         from .tools._errors import describe_error
 
         try:
-            data = await self.reader(mcp.get_context())
+            data = await self.reader(current_context.get())
         except Exception as exc:
-            # ValueError utan prefix: FastMCP gör det till felet klienten ser
-            raise ValueError(
+            # ResourceError: klienten får texten oförändrad (annat blir SDK:ns
+            # engelska "Error reading resource …" utan förklaring)
+            raise ResourceError(
                 describe_error(exc, tool_name=f"resursen {self.uri}", open_world=False)
             ) from exc
         return json.dumps(data, ensure_ascii=False, indent=2)
@@ -191,10 +192,11 @@ class _ImapResource(Resource):
 class _PrefixTemplate(ResourceTemplate):
     """Resursmall som matchar på schemat och tolkar resten själv.
 
-    FastMCP:s egen mall matchar {param} mot [^/]+ och lägger engelska prefix
-    på fel ("Error creating resource from template: ..."). Här tolkas och
-    valideras URI:n först vid läsning, så att felen blir begripliga, och
-    okodade "/" i mappnamnet godtas.
+    SDK:ns egen mall matchar {param} enligt RFC 6570 (utan "/") och ger
+    engelska fel. Här tolkas och valideras URI:n först vid läsning, så att
+    felen blir begripliga, och okodade "/" i mappnamnet godtas. Mappnamnet
+    valideras av IMAP-klienten (_validate_mailbox), inte av SDK:ns
+    sökvägsskydd, som gäller filsökvägar.
     """
 
     prefix: str
@@ -203,7 +205,7 @@ class _PrefixTemplate(ResourceTemplate):
     def matches(self, uri: str) -> dict[str, Any] | None:
         return {"uri": uri} if uri.startswith(self.prefix) else None
 
-    async def create_resource(self, uri: str, params: dict[str, Any], context: Any = None) -> Resource:
+    async def create_resource(self, uri: str, params: dict[str, Any], context: Any) -> Resource:
         reader = self.reader
         return _ImapResource(
             uri=uri,
@@ -260,7 +262,7 @@ _EMAIL_DESCRIPTION = (
 
 
 def register(server: Any) -> None:
-    """Registrera resurserna på FastMCP-servern. Upprepade anrop gör inget."""
+    """Registrera resurserna på servern. Upprepade anrop gör inget."""
     if getattr(server, "_protonmail_resources", False):
         return
     server.add_resource(
@@ -284,6 +286,8 @@ def register(server: Any) -> None:
             fn=_read_mailbox,
             reader=_read_mailbox,
             parameters={},
+            parsed_template=UriTemplate.parse(MAILBOX_TEMPLATE),
+            security=DEFAULT_RESOURCE_SECURITY,
         ),
         _PrefixTemplate(
             uri_template=EMAIL_TEMPLATE,
@@ -295,9 +299,11 @@ def register(server: Any) -> None:
             fn=_read_email,
             reader=_read_email,
             parameters={},
+            parsed_template=UriTemplate.parse(EMAIL_TEMPLATE),
+            security=DEFAULT_RESOURCE_SECURITY,
         ),
     ]
-    # FastMCP har inget publikt sätt att lägga till en egen mallklass
+    # SDK:n har inget publikt sätt att lägga till en egen mallklass
     for template in templates:
         server._resource_manager._templates[template.uri_template] = template
     server._protonmail_resources = True

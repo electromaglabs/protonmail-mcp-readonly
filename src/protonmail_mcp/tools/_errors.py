@@ -176,7 +176,7 @@ def with_error_messages(
     """Omslut ett verktyg så att undantag blir ToolError med describe_error-text.
 
     Signatur, docstring och annoteringar behålls (functools.wraps), så att
-    FastMCP bygger samma schema som för den omslutna funktionen.
+    SDK:n bygger samma schema som för den omslutna funktionen.
     CancelledError (BaseException) släpps igenom orörd.
     """
 

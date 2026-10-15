@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **The server runs on the MCP Python SDK 2.x** (`mcp>=2.3,<3`, `MCPServer` instead of `FastMCP`). Tools, parameters, schemas, resources, prompts and error texts are unchanged; a recorded contract of everything a client sees (`tests/snapshots/mcp_kontrakt.json`) is identical before and after, except that the empty `experimental` capability is no longer sent.
+- **Tool descriptions are the same on every Python version.** On Python 3.12 they kept the docstring's indentation; Python 3.13+ removed it.
+- **A tool refused by policy** (`PROTONMAIL_READ_ONLY`, `PROTONMAIL_SEND_MODE`) is logged as an expected refusal instead of with a stack trace. The client sees the same text.
+- **Resource errors** no longer write a stack trace to stderr; the client gets the same text as before.
+
+### Known limitations
+
+- **Subscriptions need a client on a protocol version before 2026-07-28** (`resources/subscribe`). `subscriptions/listen` from protocol 2026-07-28 is not supported yet, and the server does not advertise subscriptions to such clients.
+
 ## [0.3.1] - 2026-10-15
 
 A bug-fix release. v0.3.0 could not be installed without the lock file, and a final review against a real ProtonMail Bridge found ways that deletion, labels and replies could report or do the wrong thing.

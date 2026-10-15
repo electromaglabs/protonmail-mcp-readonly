@@ -1,5 +1,6 @@
 """Enhetstester: serverinstruktionerna (llm-kontrakt)."""
 from protonmail_mcp.server import INSTRUCTIONS, mcp
+from tests import sdk_support as sdk
 from tests.llm_kontrakt_support import client_session
 
 
@@ -19,6 +20,4 @@ def test_instructions_mention_drafts_before_sending():
 
 async def test_initialize_result_carries_instructions(monkeypatch):
     async with client_session(monkeypatch) as session:
-        # initialize är redan gjord; svaret ligger kvar i sessionen
-        result = await session.initialize()
-        assert result.instructions == INSTRUCTIONS
+        assert sdk.init_info(session)["instructions"] == INSTRUCTIONS

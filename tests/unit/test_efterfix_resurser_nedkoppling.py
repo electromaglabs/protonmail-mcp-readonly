@@ -1,14 +1,15 @@
-"""Kroken på mcp:s riktiga ServerSession (efterfix-resurser, R4-4).
+"""Kroken på SDK:ns riktiga anslutning (efterfix-resurser, R4-4).
 
-subscriptions.SubscriptionRegistry glömmer en session via BaseSession._exit_stack,
-som är privat API i mcp. Testerna här använder en riktig ServerSession i minnet,
-så att de faller om mcp byter namn på attributet eller slutar stänga det.
+subscriptions.SubscriptionRegistry glömmer en session när anslutningen stängs,
+via anslutningens exit-stack (Connection.exit_stack), som den når genom
+ServerSession._connection, privat API i mcp. Testerna här använder en riktig
+ServerSession i minnet, så att de faller om mcp byter namn på attributen eller
+slutar stänga exit-stacken.
 """
 import asyncio
 from contextlib import AsyncExitStack
 
 import pytest
-from pydantic import AnyUrl
 
 from protonmail_mcp import subscriptions
 from tests.efterfix_resurser_support import client_session
@@ -21,13 +22,15 @@ def _empty_registry():
     subscriptions.registry.clear()
 
 
-def _subscribe_then_disconnect(monkeypatch):
+def _subscribe_then_disconnect(monkeypatch, subscriptions_count=1):
     seen = {}
 
     async def run():
         async with client_session(monkeypatch) as session:
-            await session.subscribe_resource(AnyUrl("mailbox://INBOX"))
-            (server_session,) = subscriptions.registry.sessions()
+            for _ in range(subscriptions_count):
+                await session.subscribe_resource("mailbox://INBOX")
+            seen["sessions"] = subscriptions.registry.sessions()
+            (server_session,) = seen["sessions"]
             seen["session"] = server_session
             seen["hooked"] = id(server_session) in subscriptions.registry._hooked
         seen["after"] = subscriptions.registry.sessions()
@@ -36,12 +39,18 @@ def _subscribe_then_disconnect(monkeypatch):
     return seen
 
 
-def test_real_server_session_has_an_exit_stack(monkeypatch):
+def test_real_session_has_a_connection_with_an_exit_stack(monkeypatch):
     seen = _subscribe_then_disconnect(monkeypatch)
     from mcp.server.session import ServerSession
 
     assert isinstance(seen["session"], ServerSession)
-    assert isinstance(getattr(seen["session"], "_exit_stack", None), AsyncExitStack)
+    connection = getattr(seen["session"], "_connection", None)
+    assert isinstance(getattr(connection, "exit_stack", None), AsyncExitStack)
+
+
+def test_requests_on_one_connection_are_one_session(monkeypatch):
+    """SDK:n ger varje meddelande ett nytt sessionsobjekt; registret ska ändå se en session."""
+    assert len(_subscribe_then_disconnect(monkeypatch, subscriptions_count=3)["sessions"]) == 1
 
 
 def test_hook_is_attached_to_a_real_session(monkeypatch):

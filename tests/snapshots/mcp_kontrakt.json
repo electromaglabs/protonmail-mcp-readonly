@@ -114,7 +114,6 @@
   ],
   "server": {
     "capabilities": {
-      "experimental": {},
       "prompts": {
         "listChanged": false
       },

@@ -167,7 +167,7 @@ _PROMPTS = (
 
 
 def register(server: Any) -> None:
-    """Registrera promptarna på FastMCP-servern. Upprepade anrop gör inget."""
+    """Registrera promptarna på servern. Upprepade anrop gör inget."""
     if getattr(server, "_protonmail_prompts", False):
         return
     for fn, title in _PROMPTS:

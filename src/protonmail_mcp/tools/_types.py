@@ -4,9 +4,9 @@ from pydantic import AfterValidator, Field, WithJsonSchema, WrapValidator
 
 from ..attachments import MAX_SEND_FILES
 
-# Valfri strängparameter som inte json-tolkas av FastMCP.
+# Valfri strängparameter som inte json-tolkas av SDK:n (MCPServer).
 #
-# FastMCP:s pre_parse_json kör json.loads på strängvärden för alla parametrar
+# SDK:ns pre_parse_json kör json.loads på strängvärden för alla parametrar
 # vars annotation inte är exakt `str`. Med `str | None` blir strängen "null"
 # därför None, och "[1]" en lista. Här är annotationen `str`, så strängen
 # lämnas orörd, medan ett uttryckligt JSON-null släpps igenom som None och
@@ -19,7 +19,7 @@ OptionalStr = Annotated[
 
 # Mappnamn i alla verktyg (mailbox, target_mailbox och namnen i
 # create/delete/rename_folder). Samma gränser som imap_client validerar
-# (1–255 tecken), synliga i schemat. Annotationen är `str`, så FastMCP
+# (1–255 tecken), synliga i schemat. Annotationen är `str`, så SDK:n
 # json-tolkar inte värdet.
 Mailbox = Annotated[str, Field(min_length=1, max_length=255)]
 

@@ -1,9 +1,10 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
-from ._sdk import MCPServer
+from ._sdk import INVALID_PARAMS, Context, MCPError, MCPServer, ToolError
 
 from . import __version__
 
@@ -92,6 +93,12 @@ E-post i Proton Mail via ProtonMail Bridge.
 """
 
 
+# Anropets Context medan en resurs läses: Resource.read() får ingen Context i
+# SDK:n, men resurserna läser via verktygsfunktionerna, som behöver den
+# (resources._ImapResource)
+current_context: ContextVar[Context | None] = ContextVar("current_context", default=None)
+
+
 class _GuardedMCPServer(MCPServer):
     """MCP-server som vägrar verktyg som policyn inte tillåter, innan de körs.
 
@@ -99,7 +106,7 @@ class _GuardedMCPServer(MCPServer):
     här vägras t.ex. reply_to_email redan innan originalet läses.
     """
 
-    async def call_tool(self, name, arguments):
+    async def call_tool(self, name, arguments, context=None):
         from . import audit, config, policy
 
         settings = config.get_settings()
@@ -109,15 +116,40 @@ class _GuardedMCPServer(MCPServer):
                 policy.check_tool(settings, name)
             except ValueError as exc:
                 audit.record(settings, "tool_call", result="error", error=exc)
-                raise
-            return await super().call_tool(name, arguments)
+                # ToolError: klienten får texten som verktygsfel, utan stackspår i loggen
+                raise ToolError(str(exc)) from exc
+            return await super().call_tool(name, arguments, context)
         finally:
             audit.current_tool.reset(token)
 
+    async def get_prompt(self, name, arguments=None, context=None):
+        try:
+            return await super().get_prompt(name, arguments, context)
+        except ValueError as exc:
+            # SDK:n byter promptens eget fel (t.ex. en vägrad radbrytning i ett
+            # argument) mot "Error rendering prompt …" utan orsaken; klienten ska
+            # få veta vad som var fel, som med mcp 1.x
+            cause = exc
+            while cause.__cause__ is not None:
+                cause = cause.__cause__
+            if cause is exc:
+                raise
+            raise MCPError(INVALID_PARAMS, f"{exc}: {cause}") from exc
 
-mcp = _GuardedMCPServer("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
-# serverInfo.version i initialize: FastMCP tar annars mcp-bibliotekets version
-mcp._mcp_server.version = __version__
+    async def read_resource(self, uri, context=None):
+        token = current_context.set(context)
+        try:
+            return await super().read_resource(uri, context)
+        finally:
+            current_context.reset(token)
+
+
+# subscriptions=False: protokollets subscriptions/listen (2026-07-28) stöds inte
+# än; notiserna går bara till resources/subscribe (subscriptions.py). Utan det
+# skulle servern annonsera prenumerationer till 2026-klienter men aldrig skicka.
+mcp = _GuardedMCPServer(
+    "protonmail", instructions=INSTRUCTIONS, lifespan=lifespan, version=__version__, subscriptions=False
+)
 
 
 def register_tools() -> None:

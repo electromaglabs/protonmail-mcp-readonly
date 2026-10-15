@@ -20,16 +20,21 @@ resurser, eftersom serverns egna verktyg kan ändra var och en av dem. URI:er j�
 "mailbox://Folders%2FA%2FB" är samma resurs. Notisen skickas med den URI som
 sessionen själv prenumererade med, så att klienten känner igen den.
 
-En session glöms när den stängs (via sessionens exit-stack), när en notis
-till den visar att anslutningen är stängd, och när MAX_CONSECUTIVE_TIMEOUTS
+SDK:n ger varje inkommande meddelande ett eget sessionsobjekt; alla som hör
+till samma anslutning (Connection) räknas som en session, och den första
+används för notiserna. En session glöms när anslutningen stängs (via
+anslutningens exit-stack), när en notis till den visar att anslutningen är
+stängd, och när MAX_CONSECUTIVE_TIMEOUTS
 notiser i rad har tagit längre tid än SEND_TIMEOUT_SECONDS (en klient som
 slutat läsa skulle annars få varje ny notis att vänta ut hela tidsgränsen,
 för alltid). En lyckad notis nollställer räkningen. Notiserna skickas
 parallellt med en tidsgräns per session: ett fel eller en hängande session
 stoppar inte de andra.
 
-FastMCP:s lågnivåserver annonserar alltid resources.subscribe=False; register()
-skriver över det, eftersom servern nu hanterar prenumerationer.
+Prenumerationerna gäller klienter på protokoll före 2026-07-28
+(resources/subscribe). SDK:n annonserar resources.subscribe=True när
+register() har lagt in hanteraren. Protokollets subscriptions/listen
+(2026-07-28) stöds inte än: sådana klienter får inga resursnotiser.
 """
 import asyncio
 import inspect
@@ -38,8 +43,7 @@ from collections.abc import Callable
 from typing import Any
 
 import anyio
-from pydantic import AnyUrl
-
+from ._sdk import EmptyResult, SubscribeRequestParams, UnsubscribeRequestParams
 from .resources import MAILBOXES_URI, canonical_uri, email_uri, mailbox_uri
 
 logger = logging.getLogger(__name__)
@@ -57,12 +61,15 @@ class SubscriptionRegistry:
         # kanonisk URI → session → URI:n som sessionen prenumererade med
         self._subscriptions: dict[str, dict[Any, str]] = {}
         self._hooked: set[int] = set()
+        # id(anslutning) → den session som står för anslutningen i registret
+        self._by_connection: dict[int, Any] = {}
         # id(session) → antal notiser i rad som inte hunnit skickas
         self._timeouts: dict[int, int] = {}
 
     def subscribe(self, session: Any, uri: str) -> None:
         """Lägg till en prenumeration. ValueError om URI:n inte är en av serverns resurser."""
         key = canonical_uri(uri)
+        session = self._representative(session)
         self._subscriptions.setdefault(key, {})[session] = uri
         self._forget_on_exit(session)
 
@@ -72,6 +79,7 @@ class SubscriptionRegistry:
             key = canonical_uri(uri)
         except ValueError:
             key = uri
+        session = self._by_connection.get(id(_connection(session)), session)
         subscribers = self._subscriptions.get(key)
         if subscribers is not None:
             subscribers.pop(session, None)
@@ -87,6 +95,7 @@ class SubscriptionRegistry:
                 del self._subscriptions[key]
         self._hooked.discard(id(session))
         self._timeouts.pop(id(session), None)
+        self._by_connection.pop(id(_connection(session)), None)
 
     def record_timeout(self, session: Any) -> bool:
         """Räkna en tidsgräns i rad; glöm sessionen vid MAX_CONSECUTIVE_TIMEOUTS.
@@ -124,18 +133,31 @@ class SubscriptionRegistry:
         self._subscriptions.clear()
         self._hooked.clear()
         self._timeouts.clear()
+        self._by_connection.clear()
+
+    def _representative(self, session: Any) -> Any:
+        """Den session som står för session:s anslutning (den första som sågs)."""
+        return self._by_connection.setdefault(id(_connection(session)), session)
 
     def _forget_on_exit(self, session: Any) -> None:
-        # BaseSession stänger sin exit-stack när sessionen avslutas. Det är
-        # privat API i mcp, så saknas den städas sessionen i stället bort när
-        # en notis visar att anslutningen är stängd.
+        # Anslutningen (Connection) stänger sin exit-stack när klienten kopplar
+        # ner. Saknas den städas sessionen i stället bort efter för många
+        # notiser i rad som inte går fram.
         if id(session) in self._hooked:
             return
-        exit_stack = getattr(session, "_exit_stack", None)
+        exit_stack = getattr(_connection(session), "exit_stack", None)
         if exit_stack is None:
             return
         exit_stack.callback(self.forget, session)
         self._hooked.add(id(session))
+
+
+def _connection(session: Any) -> Any:
+    """Anslutningen som sessionsobjektet hör till (SDK:ns privata _connection).
+
+    Utan den (t.ex. en attrapp i tester) räknas objektet självt som anslutning.
+    """
+    return getattr(session, "_connection", session)
 
 
 registry = SubscriptionRegistry()
@@ -144,7 +166,7 @@ registry = SubscriptionRegistry()
 async def _send(session: Any, uri: str) -> None:
     try:
         with anyio.fail_after(SEND_TIMEOUT_SECONDS):
-            await session.send_resource_updated(AnyUrl(uri))
+            await session.send_resource_updated(uri)
     except (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream):
         logger.info("Sessionen är stängd; prenumerationerna tas bort (%s)", uri)
         registry.forget(session)
@@ -323,8 +345,16 @@ def notify_soon(uris: list[str]) -> None:
 
 
 async def wait_for_pending_notices() -> None:
-    """Vänta tills bakgrundsnotiserna skickats (för tester och nedstängning)."""
-    while _pending:
+    """Vänta tills bakgrundsnotiserna skickats (för tester och nedstängning).
+
+    En uppgift kan vara klar innan dess done-callback (som tar bort den ur
+    _pending) har körts; den räknas som klar ändå, annars snurrar slingan
+    utan att lämna över till event-loopen.
+    """
+    while True:
+        _pending.difference_update([task for task in _pending if task.done()])
+        if not _pending:
+            return
         await asyncio.gather(*list(_pending), return_exceptions=True)
 
 
@@ -374,32 +404,29 @@ def coverage_note(uri: str) -> str | None:
 
 
 def register(server: Any) -> None:
-    """Koppla in prenumerationerna på FastMCP-servern. Upprepade anrop gör inget."""
-    lowlevel = server._mcp_server
+    """Koppla in prenumerationerna på servern. Upprepade anrop gör inget.
+
+    Hanterarna läggs på lågnivåservern (SDK:ns privata _lowlevel_server);
+    MCPServer har inget publikt sätt att hantera resources/subscribe.
+    """
+    lowlevel = server._lowlevel_server
     if getattr(lowlevel, "_protonmail_subscriptions", False):
         return
 
-    @lowlevel.subscribe_resource()
-    async def _subscribe(uri: AnyUrl) -> None:
-        registry.subscribe(lowlevel.request_context.session, str(uri))
+    async def _subscribe(ctx: Any, params: SubscribeRequestParams) -> EmptyResult:
+        registry.subscribe(ctx.session, params.uri)
         # Godtas alltid (alla giltiga resurser kan ändras av serverns verktyg, och
         # resources/subscribe har inget svar att lägga en varning i); loggen säger
         # när nya mejl och ändringar utifrån inte ger någon notis.
-        note = coverage_note(str(uri))
+        note = coverage_note(params.uri)
         if note:
             logger.info("Prenumeration: %s", note)
+        return EmptyResult()
 
-    @lowlevel.unsubscribe_resource()
-    async def _unsubscribe(uri: AnyUrl) -> None:
-        registry.unsubscribe(lowlevel.request_context.session, str(uri))
+    async def _unsubscribe(ctx: Any, params: UnsubscribeRequestParams) -> EmptyResult:
+        registry.unsubscribe(ctx.session, params.uri)
+        return EmptyResult()
 
-    original = lowlevel.get_capabilities
-
-    def get_capabilities(notification_options, experimental_capabilities):
-        capabilities = original(notification_options, experimental_capabilities)
-        if capabilities.resources is not None:
-            capabilities.resources.subscribe = True
-        return capabilities
-
-    lowlevel.get_capabilities = get_capabilities
+    lowlevel.add_request_handler("resources/subscribe", SubscribeRequestParams, _subscribe)
+    lowlevel.add_request_handler("resources/unsubscribe", UnsubscribeRequestParams, _unsubscribe)
     lowlevel._protonmail_subscriptions = True

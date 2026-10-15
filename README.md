@@ -168,7 +168,7 @@ The mailbox is also exposed as read-only MCP resources, as JSON. They go through
 
 **Mailbox names in URIs are percent-encoded as UTF-8** (RFC 3986, the same as RFC 6570 expansion of `{mailbox}`): everything except `A–Z a–z 0–9 - . _ ~` is encoded, including `/` and spaces. `Labels/Näs Samfällighet` becomes `mailbox://Labels%2FN%C3%A4s%20Samf%C3%A4llighet`, and email 42 in `Folders/A/B` is `email://Folders%2FA%2FB/42`. When reading, unencoded `/` (`mailbox://Folders/A/B`) and lower-case percent codes are accepted too.
 
-**Subscriptions.** The server supports `resources/subscribe` and sends `notifications/resources/updated` in two cases:
+**Subscriptions.** The server supports `resources/subscribe` (MCP protocol versions before 2026-07-28, which Claude Code and Claude Desktop use) and sends `notifications/resources/updated` in two cases:
 
 1. **New mail in a watched folder** (`PROTONMAIL_WATCH_MAILBOXES`, default `INBOX`): the IDLE watcher notifies `mailbox://{mailbox}`.
 2. **After a successful write tool in this server**, for the resources that call changed:
@@ -179,6 +179,8 @@ The mailbox is also exposed as read-only MCP resources, as JSON. They go through
    - `send_email`, `reply_to_email`, `forward_email`: `mailbox://Sent`
 
    With a list of UIDs only the UIDs that succeeded are notified; a failed call notifies nothing. Notifications are sent in the background, so a tool's answer never waits for them.
+
+Clients on protocol version 2026-07-28 use `subscriptions/listen`, which the server does not support yet; it advertises no subscriptions to them. Tools, resources and prompts work on both protocol versions.
 
 **Changes made by other clients** (Proton's apps, the web, another IMAP client) are only seen as new mail in watched folders; flags, moves and folder changes made elsewhere produce no notification. Subscriptions are accepted on every valid resource URI and compared in canonical form, so `mailbox://Folders/A/B` and `mailbox://Folders%2FA%2FB` are the same resource, and `INBOX` is case-insensitive.
 

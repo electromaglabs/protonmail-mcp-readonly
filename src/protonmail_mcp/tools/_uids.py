@@ -16,7 +16,7 @@ def _number_to_str(value: Any) -> Any:
 Uid = Annotated[str, BeforeValidator(_number_to_str)]
 
 # Ett UID som sträng, eller en lista med 1–100 UID:n ur samma mapp.
-# Annotationen är inte `str`, så FastMCP json-tolkar en sträng som ser ut som
+# Annotationen är inte `str`, så SDK:n json-tolkar en sträng som ser ut som
 # en lista ('["1", "5"]') — det är avsiktligt; "42" förblir strängen "42".
 UidArg = Annotated[
     Uid | Annotated[list[Uid], Field(min_length=1, max_length=MAX_UIDS)],

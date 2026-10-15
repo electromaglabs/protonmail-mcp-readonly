@@ -7,7 +7,6 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from protonmail_mcp import resources, subscriptions
-from tests import sdk_support as sdk
 from tests.efterfix_resurser_support import Collector, client_session
 
 scenarios("efterfix_resurser_hangande_session.feature")
@@ -50,18 +49,15 @@ def slow_and_fast(state, mailbox):
 def notify_until_forgotten(monkeypatch, state, caplog, mailbox):
     uri = resources.mailbox_uri(mailbox)
     fast = Collector()
-    release = anyio.Event()
-
-    async def stuck(message):
-        if sdk.resource_updated_uri(message) is not None:
-            await release.wait()
+    stop_reading = anyio.Event()
 
     async def run():
-        async with client_session(monkeypatch, message_handler=stuck) as slow_client, \
+        async with client_session(monkeypatch, stop_reading=stop_reading) as slow_client, \
                 client_session(monkeypatch, message_handler=fast) as fast_client:
             await slow_client.subscribe_resource(uri)
             (slow_session,) = subscriptions.registry.sessions()
             await fast_client.subscribe_resource(uri)
+            stop_reading.set()  # den första klienten slutar läsa
             sent = 0
             # Minnesströmmen buffrar några notiser innan sändningen börjar vänta
             with caplog.at_level(logging.INFO, logger="protonmail_mcp.subscriptions"):
@@ -73,7 +69,6 @@ def notify_until_forgotten(monkeypatch, state, caplog, mailbox):
             state["slow"] = slow_session
             state["left"] = subscriptions.registry.sessions()
             state["fast_received"] = list(fast.uris)
-            release.set()
 
     asyncio.run(run())
     state["log"] = caplog.text

@@ -10,14 +10,12 @@ ledningen), så att testerna inte beror på SDK:ns attributnamn.
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
 
 import anyio
-from mcp import types
-from mcp.client.session import ClientSession
+from mcp import Client, types
+from mcp.client._memory import InMemoryTransport
 from mcp.server.lowlevel.server import NotificationOptions
-from mcp.shared.exceptions import McpError as MCPError
-from mcp.shared.memory import create_client_server_memory_streams
+from mcp.shared.exceptions import MCPError
 
 from protonmail_mcp._sdk import Context, MCPServer, ToolError
 
@@ -36,7 +34,7 @@ def wire(model: Any) -> dict:
 
 def lowlevel(server: MCPServer) -> Any:
     """Lågnivåservern under MCPServer (privat i SDK:n)."""
-    return server._mcp_server
+    return server._lowlevel_server
 
 
 def set_lifespan(monkeypatch, server: MCPServer, lifespan) -> None:
@@ -44,51 +42,80 @@ def set_lifespan(monkeypatch, server: MCPServer, lifespan) -> None:
     monkeypatch.setattr(lowlevel(server), "lifespan", lifespan)
 
 
-@asynccontextmanager
-async def connect(server: MCPServer, message_handler=None):
-    """En initierad klientsession mot servern, i minnet (JSON-RPC som på riktigt).
+class _GatedRead:
+    """Klientens läsström, som slutar läsa när stop_reading sätts.
 
-    Sessionen har metoderna list_tools, call_tool, list_resources,
-    list_resource_templates, read_resource, subscribe_resource,
-    unsubscribe_resource, list_prompts och get_prompt. Skicka URI:er som str.
+    Som en klient som slutat läsa stdout: serverns skrivningar fastnar när
+    minnesströmmens buffert är full.
     """
-    low = lowlevel(server)
-    async with create_client_server_memory_streams() as (client_streams, server_streams):
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(
-                lambda: low.run(server_streams[0], server_streams[1], low.create_initialization_options())
-            )
-            try:
-                async with ClientSession(
-                    client_streams[0], client_streams[1], message_handler=message_handler
-                ) as session:
-                    session.protonmail_init = await session.initialize()
-                    yield session
-            finally:
-                tg.cancel_scope.cancel()
+
+    def __init__(self, stream: Any, stop_reading: anyio.Event) -> None:
+        self._stream = stream
+        self._stop = stop_reading
+
+    @property
+    def last_context(self) -> Any:
+        return getattr(self._stream, "last_context", None)
+
+    async def __aenter__(self) -> "_GatedRead":
+        await self._stream.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc: Any) -> Any:
+        return await self._stream.__aexit__(*exc)
+
+    def __aiter__(self) -> "_GatedRead":
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._stop.is_set():
+            await anyio.sleep_forever()
+        return await self._stream.__anext__()
+
+
+@asynccontextmanager
+async def _gated_transport(server: MCPServer, stop_reading: anyio.Event):
+    async with InMemoryTransport(server) as (read, write):
+        yield _GatedRead(read, stop_reading), write
+
+
+@asynccontextmanager
+async def connect(server: MCPServer, message_handler=None, *, stop_reading: anyio.Event | None = None):
+    """En initierad klient mot servern, i minnet (JSON-RPC som på riktigt).
+
+    Protokollet före 2026-07-28 (mode="legacy"), som dagens klienter talar och
+    som prenumerationerna (resources/subscribe) kräver. Klienten har metoderna
+    list_tools, call_tool, list_resources, list_resource_templates,
+    read_resource, subscribe_resource, unsubscribe_resource, list_prompts,
+    get_prompt och send_ping. Skicka URI:er som str. Inga svar cachas.
+
+    stop_reading: när den sätts slutar klienten läsa från servern (en klient
+    som hänger). Klientens notishanterare körs annars parallellt med läsningen
+    och kan inte få servern att vänta.
+    """
+    target = server if stop_reading is None else _gated_transport(server, stop_reading)
+    async with Client(target, mode="legacy", message_handler=message_handler, cache=None) as client:
+        yield client
 
 
 def init_info(session: Any) -> dict:
     """Det klienten fick vid anslutningen: serverInfo, instructions och capabilities."""
-    result = session.protonmail_init
     return {
-        "serverInfo": {"name": result.serverInfo.name, "version": result.serverInfo.version},
-        "instructions": result.instructions,
-        "capabilities": wire(result.capabilities),
+        "serverInfo": {"name": session.server_info.name, "version": session.server_info.version},
+        "instructions": session.instructions,
+        "capabilities": wire(session.server_capabilities),
     }
 
 
 def error_message(exc: MCPError) -> str:
     """Felmeddelandet i ett JSON-RPC-fel som klienten fick."""
-    return exc.error.message
+    return exc.message
 
 
 def resource_updated_uri(message: Any) -> str | None:
     """URI:n i en notifications/resources/updated, annars None."""
-    if isinstance(message, types.ServerNotification) and isinstance(
-        message.root, types.ResourceUpdatedNotification
-    ):
-        return str(message.root.params.uri)
+    if isinstance(message, types.ResourceUpdatedNotification):
+        return str(message.params.uri)
     return None
 
 
@@ -116,9 +143,12 @@ def list_prompts(server: MCPServer) -> list[Any]:
     return server._prompt_manager.list_prompts()
 
 
-def capabilities(server: MCPServer) -> dict:
-    """Förmågorna servern annonserar vid initialize, i wire-format."""
-    return wire(lowlevel(server).get_capabilities(NotificationOptions(), {}))
+def capabilities(server: MCPServer, **notification_options: bool) -> dict:
+    """Förmågorna servern annonserar vid initialize (protokoll före 2026), i wire-format.
+
+    notification_options: t.ex. resources_changed=True (NotificationOptions).
+    """
+    return wire(lowlevel(server).get_capabilities(NotificationOptions(**notification_options), {}))
 
 
 def init_options(server: MCPServer) -> dict:
@@ -129,17 +159,15 @@ def init_options(server: MCPServer) -> dict:
 
 def make_context(server: MCPServer, app: Any) -> Context:
     """En Context med app som lifespan-kontext (som under ett riktigt anrop)."""
-    return Context(request_context=SimpleNamespace(lifespan_context=app), fastmcp=server)
+    return Context(request_context=SimpleNamespace(lifespan_context=app), mcp_server=server)
 
 
 async def call_tool(server: MCPServer, name: str, arguments: dict[str, Any], app: Any) -> Any:
     """Anropa ett verktyg genom serverns call_tool (policyspärr, schema, felomslag).
 
-    Fel kastas som ToolError (eller ValueError från policyspärren) med
-    ursprungsundantaget som __cause__.
+    Fel kastas som ToolError med ursprungsundantaget som __cause__.
     """
-    with patch.object(server, "get_context", return_value=make_context(server, app)):
-        return await server.call_tool(name, arguments)
+    return await server.call_tool(name, arguments, make_context(server, app))
 
 
 def patch_run(monkeypatch) -> dict:

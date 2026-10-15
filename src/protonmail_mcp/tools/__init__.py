@@ -77,7 +77,7 @@ def notify_after(fn: Callable[..., Any], tool_name: str) -> Callable[..., Any]:
     verktygssvaret aldrig väntar på en långsam session. Ett fel i kroken
     loggas och påverkar aldrig verktygets svar; ett fel i verktyget släpps
     igenom orört och ger ingen notis. Signatur och docstring behålls
-    (functools.wraps), så att FastMCP bygger samma schema.
+    (functools.wraps), så att SDK:n bygger samma schema.
     """
 
     @functools.wraps(fn)

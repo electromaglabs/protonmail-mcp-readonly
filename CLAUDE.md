@@ -1,6 +1,6 @@
 # protonmail-mcp
 
-MCP-server (FastMCP, stdio) som ger en LLM tillgång till Proton Mail via ProtonMail Bridge på localhost: IMAP för
+MCP-server (MCP Python SDK 2.x, `MCPServer`, stdio) som ger en LLM tillgång till Proton Mail via ProtonMail Bridge på localhost: IMAP för
 läsning och ändringar, SMTP för skick. 29 verktyg, tre resurser (med prenumerationer), fyra promptar och bevakning
 av nya mejl med IMAP IDLE. README.md (engelska, publik) beskriver verktygen, inställningarna och säkerhetsmodellen
 för användare; den här filen är för den som ändrar koden.
@@ -238,7 +238,7 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
 
 - Brödtextsökning (`text`/`body`) med åäö hittar ungefär 95 %: ord som quoted-printable radbryter mitt i, ord i
   base64-delar och HTML-entiteter (`&ouml;`) missas.
-- pydantics valideringsfel (saknad eller feltypad parameter) är på engelska; de uppstår i FastMCP innan
+- pydantics valideringsfel (saknad eller feltypad parameter) är på engelska; de uppstår i SDK:n innan
   verktygsfunktionen och `with_error_messages` körs.
 - Homoglyfer (kyrilliskt `а` för `a` m.fl.) rensas inte, och `suspicious_content` fångar inte alla formuleringar
   (`1gn0re`, "SYSTEM: you must" …). Gömda element via `details`, `aria-hidden`, `noscript`, svg-text och
@@ -246,11 +246,18 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
 - Notiser (`notifications/resources/updated`) ges för nya mejl i bevakade mappar och efter lyckade skrivverktyg i
   den här servern. Andra klienters ändringar av flaggor, etiketter, flyttar och mappar syns inte (bara nya mejl i
   `PROTONMAIL_WATCH_MAILBOXES`), och `rename_folder` notifierar inte undermappar som byter namn med föräldern.
+- Prenumerationer finns bara för klienter på protokoll före 2026-07-28 (`resources/subscribe`, som Claude Code
+  och Claude Desktop använder). `subscriptions/listen` (2026-07-28) stöds inte än: servern skapas med
+  `subscriptions=False`, så den annonserar inga prenumerationer till sådana klienter. Verktyg, resurser och
+  promptar fungerar på båda protokollen.
 - Vattenmärkena för nya mejl och timräknaren för skick ligger i minnet och nollställs vid omstart. Avbryts
   `check_new_emails` efter att märket flyttats men innan svaret nått klienten räknas de mejlen inte längre som nya.
-- Privata API:er som kan gå sönder vid uppgradering av beroenden (testerna täcker dem): FastMCP:s
-  `_resource_manager._templates` (resursmallar med egna fel), `BaseSession._exit_stack` (glömma sessioner) och
-  klassbytet till `_BridgeProtocol` på aioimaplib-anslutningen.
+- Privata API:er som kan gå sönder vid uppgradering av beroenden (testerna täcker dem): `MCPServer`:s
+  `_resource_manager._templates` (resursmallar med egna fel) och `_lowlevel_server` (hanterare för
+  `resources/subscribe`), `ServerSession._connection` (en session per anslutning; dess publika `exit_stack` glömmer
+  sessionen vid nedkoppling) och klassbytet till `_BridgeProtocol` på aioimaplib-anslutningen. Testerna når SDK:n
+  bara via `tests/sdk_support.py` och servern bara via `_sdk.py`, så ett SDK-byte ändrar i första hand de två.
+  `tests/snapshots/mcp_kontrakt.json` är facit för allt en klient ser (scheman, fel, förmågor); skriv om det med
+  `PROTONMAIL_UPDATE_SNAPSHOT=1` bara medvetet och förklara varje ändrat fält i commit-meddelandet.
 - aioimaplib: `uid("search", …)` stöds inte — använd `uid_search()` eller `search()` + FETCH av UID. `list_emails`
   använder EXISTS + sekvensintervall i stället för `SEARCH ALL`, och FETCH görs i delar om högst 200.
-- FastMCP loggar ett stackspår till stderr för varje resursläsning som ger fel; klienten får bara den rena texten.
