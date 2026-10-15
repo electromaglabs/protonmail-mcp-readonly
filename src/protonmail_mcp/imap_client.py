@@ -217,6 +217,39 @@ def _close_transport(client: aioimaplib.IMAP4) -> None:
             pass
 
 
+async def _with_timeout(aw, seconds: float):
+    """Som asyncio.wait_for, men ett avbrott utifrån tappas aldrig.
+
+    asyncio.wait_for i Python 3.10/3.11 sväljer ett avbrott som kommer när det
+    inre anropet redan är klart men innan wait_for vaknat (bpo-42130). Ett
+    avbrutet verktygsanrop körde då vidare och höll klientens lås tills nästa
+    kommando nådde sin tidsgräns. Här väntas det inre anropet in direkt i den
+    egna uppgiften: asyncio.timeout där det finns (3.11+, skiljer på egen
+    tidsgräns och avbrott utifrån), annars en timer som avbryter uppgiften och
+    gör om just det avbrottet till TimeoutError.
+    """
+    if hasattr(asyncio, "timeout"):
+        async with asyncio.timeout(seconds):
+            return await aw
+    task = asyncio.current_task()
+    expired = False
+
+    def expire() -> None:
+        nonlocal expired
+        expired = True
+        task.cancel()
+
+    handle = asyncio.get_running_loop().call_later(seconds, expire)
+    try:
+        return await aw
+    except asyncio.CancelledError:
+        if expired:
+            raise asyncio.TimeoutError from None
+        raise
+    finally:
+        handle.cancel()
+
+
 def _serialized(method):
     """Kör IMAP-operationen under klientens lås.
 
@@ -395,7 +428,7 @@ class IMAPClient:
         if not isinstance(task, asyncio.Future):
             return
         try:
-            await asyncio.wait_for(task, self.timeout)
+            await _with_timeout(task, self.timeout)
         except (OSError, asyncio.TimeoutError) as exc:
             reason = str(exc) or type(exc).__name__
             raise ConnectionError(
@@ -461,7 +494,7 @@ class IMAPClient:
     async def _uid(self, command: str, *args: str):
         """UID STORE/COPY/EXPUNGE med timeout. UID FETCH har redan aioimaplib:s egen."""
         try:
-            return await asyncio.wait_for(self._client.uid(command, *args), self.uid_timeout)
+            return await _with_timeout(self._client.uid(command, *args), self.uid_timeout)
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(
                 f"ProtonMail Bridge svarade inte på UID {command.upper()} inom {self.uid_timeout:g} s"
@@ -481,7 +514,7 @@ class IMAPClient:
             await self.connect()
             return
         try:
-            await asyncio.wait_for(self._client.noop(), timeout=self.noop_timeout)
+            await _with_timeout(self._client.noop(), self.noop_timeout)
         except Exception:
             logger.warning("IMAP NOOP misslyckades — återansluter")
             self._discard_connection()
