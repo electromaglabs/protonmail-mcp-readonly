@@ -10,3 +10,21 @@ Feature: Bilagekatalogen är lika svår att kapa på Linux som på macOS
     Given att "offert.pdf" efter kontrollen byts mot en ny fil som återanvänder inodnumret
     When jag försöker skicka "offert.pdf" som bilaga
     Then ska sändningen avvisas med ett fel som nämner "ändrades"
+
+  Scenario: Som root räknas ingen symlänk som systemets egen
+    Given att servern körs som root
+    And att bilagekatalogen nås via symlänken "via" som ägs av root
+    When jag försöker skicka "offert.pdf" som bilaga
+    Then ska sändningen avvisas med ett fel som nämner "symlänk"
+
+  Scenario: En root-ägd symlänk i en katalog som andra kan skriva i avvisas
+    Given att bilagekatalogen nås via symlänken "delad/via" som ägs av root
+    And att katalogen "delad" har rättigheterna 777
+    When jag försöker skicka "offert.pdf" som bilaga
+    Then ska sändningen avvisas med ett fel som nämner "symlänk"
+
+  Scenario: Systemets egna symlänkar, som /var på macOS, fungerar fortfarande
+    Given att servern inte körs som root
+    And att bilagekatalogen nås via symlänken "system/via" som ägs av root
+    When jag försöker skicka "offert.pdf" som bilaga
+    Then ska en bilaga med namnet "offert.pdf" ha byggts

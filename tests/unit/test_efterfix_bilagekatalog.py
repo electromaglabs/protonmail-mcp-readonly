@@ -53,6 +53,10 @@ class TestRoot:
             AttachmentStore(tmp_path / "via" / "ny" / "bilagor").save("x.txt", b"1")
         assert list((tmp_path / "real").iterdir()) == []
 
+    @pytest.mark.skipif(
+        hasattr(os, "getuid") and os.getuid() == 0,
+        reason="som root godtas inga symlänker (test_ci_linux_bilagekatalog.py)",
+    )
     def test_system_symlink_owned_by_root_is_allowed(self, tmp_path, monkeypatch):
         # /var -> private/var och /tmp -> private/tmp på macOS ägs av root
         (tmp_path / "real").mkdir()

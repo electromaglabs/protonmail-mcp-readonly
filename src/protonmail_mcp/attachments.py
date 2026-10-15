@@ -11,10 +11,11 @@ kommer från klienten (en AI-modell). Båda behandlas som opålitliga:
   som pekar ut avvisas, liksom namn med kontrolltecken.
 - Själva katalogen måste vara en riktig katalog som du äger och som andra
   inte kan skriva i, och sökvägen dit får inte gå via någon symlänk (utom
-  systemets egna, som /var och /tmp på macOS, som ägs av root). Annars
-  räcker det att en uppackad zip lägger symlänken "protonmail-mcp -> .." i
-  ~/Downloads för att hela hemkatalogen ska räknas som "inuti". Katalogen
-  skapas därför redan när servern startar.
+  systemets egna, som /var och /tmp på macOS: ägda av root, i en katalog som
+  bara root eller du kan ändra, och bara när servern inte själv kör som
+  root). Annars räcker det att en uppackad zip lägger symlänken
+  "protonmail-mcp -> .." i ~/Downloads för att hela hemkatalogen ska räknas
+  som "inuti". Katalogen skapas därför redan när servern startar.
 - En fil som ska skickas öppnas med O_NOFOLLOW och jämförs (fstat: enhet,
   inod, storlek, mtime och ctime) med den fil som kontrollerades, så att den
   inte kan bytas ut däremellan — inte heller på filsystem som återanvänder
@@ -218,6 +219,24 @@ def _mark_quarantined(fd: int, path: Path) -> None:
         logger.warning("Kunde inte sätta karantänmärkning på %s: %s", path, exc)
 
 
+def _is_system_symlink(link: Path, st: os.stat_result) -> bool:
+    """En symlänk som systemet äger, som /var och /tmp på macOS.
+
+    Den ska ägas av root och ligga i en katalog som bara root eller du kan
+    ändra (ingen annan kan då byta ut den). Körs processen själv som root
+    godtas ingen symlänk: då ägs alla symlänkar den, eller en zip den packar
+    upp, skapar av root, och ägaren skiljer inte systemets från andras.
+    """
+    uid = _current_uid()
+    if st.st_uid != 0 or uid == 0:
+        return False
+    try:
+        parent = os.lstat(link.parent)
+    except OSError:
+        return False
+    return parent.st_uid in (0, uid) and not parent.st_mode & 0o022
+
+
 class _CheckedFile(NamedTuple):
     path: Path  # upplöst, utan symlänkar
     stat: os.stat_result  # lstat vid kontrollen
@@ -260,9 +279,10 @@ class AttachmentStore:
         """Kontrollera bilagekatalogen (skapa den med 0700 om ``create``) och
         returnera den upplöst.
 
-        Vägrar en relativ sökväg, en sökväg via en symlänk som inte ägs av
-        root (systemets /var och /tmp på macOS är tillåtna), en rot som själv
-        är en symlänk, som någon annan äger eller som andra kan skriva i.
+        Vägrar en relativ sökväg, en sökväg via en symlänk som inte är
+        systemets egen (_is_system_symlink; /var och /tmp på macOS är
+        tillåtna), en rot som själv är en symlänk, som någon annan äger eller
+        som andra kan skriva i.
         """
         root = self.root
         if not root.is_absolute():
@@ -279,7 +299,7 @@ class AttachmentStore:
                 raise ValueError(
                     f"Bilagekatalogen {root} kan inte kontrolleras: {exc.strerror or exc}"
                 ) from None
-            if stat.S_ISLNK(st.st_mode) and st.st_uid != 0:
+            if stat.S_ISLNK(st.st_mode) and not _is_system_symlink(parent, st):
                 raise ValueError(
                     f"Bilagekatalogen {root} ligger under symlänken {parent} och "
                     "används inte. Sätt PROTONMAIL_ATTACHMENT_DIR till den riktiga "
