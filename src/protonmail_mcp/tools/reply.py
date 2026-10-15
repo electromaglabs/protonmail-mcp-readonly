@@ -1,6 +1,7 @@
 import email
 import email.policy
 import html
+import logging
 import re
 from collections.abc import Sequence
 from email.headerregistry import Address
@@ -9,12 +10,16 @@ from email.utils import parseaddr, parsedate_to_datetime
 
 from mcp.server.fastmcp import Context
 
+from .. import imap_labels
 from ..attachments import load_for_sending
 from ..email_parser import parse_addresses
+from ..imap_bulk import BEST_EFFORT_ERRORS
 from . import _get_app, SENDS, tool
 from ._types import AttachmentArg, Mailbox, OptionalStr
 from ._uids import Uid
 from .messages import _not_found
+
+logger = logging.getLogger(__name__)
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
 # AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"), med valfri
@@ -255,18 +260,59 @@ def _own_address(app) -> str:
     return addr.lower() if isinstance(addr, str) else ""
 
 
+def _from_own(msg: EmailMessage, own: str) -> bool:
+    """Om alla adresser i From är det egna kontot (säger inget om vem som skickade)."""
+    senders = _addresses(msg, "From")
+    return bool(own and senders and all(addr.lower() == own for _, addr in senders))
+
+
+# Bridge sätter X-Pm-Origin på varje mejl: "internal" för mejl skickade inom
+# Proton (live: alla egna mejl i Sent), "external" för mejl utifrån
+_ORIGIN_HEADER = "X-Pm-Origin"
+_SENT = "Sent"
+
+
+async def _sent_by_me(app, msg: EmailMessage) -> bool:
+    """Om originalet bevisligen skickats från kontot, inte bara har det i From.
+
+    From styrs av avsändaren: ett förfalskat mejl "från" det egna kontot
+    till en lookalike-adress skulle annars få svaret till den adressen.
+    Räknas som eget när Bridge märkt det X-Pm-Origin: internal (exakt en
+    sådan rubrik), eller när samma Proton-mejl (X-Pm-Internal-Id) finns i
+    Sent. Går det inte att avgöra: inte eget (svaret går till From/Reply-To).
+    """
+    origins = msg.get_all(_ORIGIN_HEADER) or []
+    if len(origins) == 1 and str(origins[0]).strip().casefold() == "internal":
+        return True
+    internal_id = imap_labels.internal_id_of(msg.get_all("X-Pm-Internal-Id") or [])
+    if internal_id is None:
+        return False
+    try:
+        return await imap_labels.has_internal_id(app.imap, _SENT, internal_id)
+    except BEST_EFFORT_ERRORS as exc:
+        logger.warning("Kunde inte kontrollera om originalet finns i Sent: %s", exc)
+        return False
+
+
 def _reply_recipients(
     msg: EmailMessage,
     own: str,
     reply_all: bool,
     extra_cc: list[str],
+    *,
+    sent_by_me: bool = False,
 ) -> tuple[list[str], list[str]]:
-    """(To, Cc) för ett svar, utan det egna kontot och utan dubbletter."""
+    """(To, Cc) för ett svar, utan det egna kontot och utan dubbletter.
+
+    sent_by_me: originalet är bevisligen skickat från kontot (_sent_by_me).
+    Bara då går svaret till originalets mottagare; ett mejl som bara har
+    det egna kontot i From behandlas som vilket mottaget mejl som helst.
+    """
     senders = _addresses(msg, "From")
     original_to = _addresses(msg, "To")
     original_cc = _addresses(msg, "Cc")
 
-    if own and senders and all(addr.lower() == own for _, addr in senders):
+    if sent_by_me and _from_own(msg, own):
         # Svar på ett eget skickat mejl: fortsätt till samma mottagare
         to_pairs = original_to
     else:
@@ -413,7 +459,9 @@ async def reply_to_email(
 
     Svaret går till originalets Reply-To om den finns, annars till From. Är
     originalet ett mejl du själv skickat går svaret till dess mottagare, och
-    hade det bara dig själv som mottagare går svaret till dig själv.
+    hade det bara dig själv som mottagare går svaret till dig själv. Ett mejl
+    räknas som ditt eget bara om Proton märkt det som skickat inifrån Proton
+    eller om det finns i Sent — inte bara för att From är din adress.
     Originalet citeras under svaret ("Den <datum> skrev <namn>:" och "> "-rader).
 
     Args:
@@ -477,8 +525,10 @@ async def build_reply(
     # Ett enda "Re: " oavsett hur många och vilka språks prefix som finns
     subject = f"Re: {_base_subject(_header_text(msg, 'Subject'))}"
 
+    own = _own_address(app)
+    sent_by_me = _from_own(msg, own) and await _sent_by_me(app, msg)
     to_list, cc_list = _reply_recipients(
-        msg, _own_address(app), reply_all, _as_list(cc)
+        msg, own, reply_all, _as_list(cc), sent_by_me=sent_by_me
     )
 
     if quote_original:

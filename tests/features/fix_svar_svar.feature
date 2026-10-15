@@ -97,6 +97,7 @@ Feature: Svara på e-post
       From: Me <me@proton.me>
       To: Bo <bo@example.se>
       Cc: cia@example.se
+      X-Pm-Origin: internal
       Subject: Offert
       Message-ID: <o@proton.me>
       """

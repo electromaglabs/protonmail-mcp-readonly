@@ -297,6 +297,29 @@ async def _find_in_label(
     return found, errors
 
 
+def internal_id_of(values: list) -> str | None:
+    """Protons mejl-id ur rubrikvärdena för X-Pm-Internal-Id, eller None (saknas, flera, felformat)."""
+    return _usable_internal_id(values)
+
+
+@_serialized
+async def has_internal_id(imap: IMAPClient, mailbox: str, internal_id: str) -> bool:
+    """Om Proton-mejlet med X-Pm-Internal-Id internal_id syns i mailbox.
+
+    Bara läsning: SELECT, SEARCH HEADER X-Pm-Internal-Id och FETCH med
+    BODY.PEEK, och exakt jämförelse av id:t (SEARCH är delsträngsmatchning).
+    ValueError om id:t är ogiltigt eller Bridge nekar.
+    """
+    if _usable_internal_id([internal_id]) is None:
+        raise ValueError(f"Ogiltigt X-Pm-Internal-Id: {internal_id!r}")
+    _quote_mailbox(mailbox)
+    await imap._ensure_connected()
+    await imap._select(mailbox)
+    source = {"id": {"internal_id": internal_id, "message_id": None, "date": None, "size": None}}
+    found, _ = await _find_in_label(imap, mailbox, source)
+    return "id" in found
+
+
 async def _expunge_in_label(
     imap: IMAPClient, label: str, label_uids: list[str]
 ) -> tuple[list[str], dict[str, str]]:

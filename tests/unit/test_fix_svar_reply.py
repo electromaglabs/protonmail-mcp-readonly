@@ -289,7 +289,8 @@ async def test_malformed_encoded_word_with_at_sign_sends_nothing():
 
 
 async def test_reply_to_own_sent_message_goes_to_original_recipients():
-    raw = _raw(f"From: Me <{KONTO}>\nTo: Bo <b@x.se>\nCc: c@x.se\nSubject: s")
+    # X-Pm-Origin: internal som Bridge sätter på egna mejl (efterfix-slut)
+    raw = _raw(f"From: Me <{KONTO}>\nTo: Bo <b@x.se>\nCc: c@x.se\nX-Pm-Origin: internal\nSubject: s")
     with capture_smtp() as cap:
         await reply_to_email(_ctx(raw), uid="1", body="ok", mailbox="Sent")
     assert _to(cap) == [("Bo", "b@x.se")]

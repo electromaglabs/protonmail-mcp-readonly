@@ -28,7 +28,8 @@ class TestReplyToSelf:
         assert to == [ME] and cc == []
 
     def test_own_sent_mail_to_others_still_goes_to_them(self):
-        to, _ = _reply_recipients(_parse_original(_raw(ME, "anna@x.se")), ME, False, [])
+        # Eget = bevisat skickat från kontot (efterfix-slut: inte bara From)
+        to, _ = _reply_recipients(_parse_original(_raw(ME, "anna@x.se")), ME, False, [], sent_by_me=True)
         assert to == ["anna@x.se"]
 
     def test_unknown_own_address_still_errors(self):

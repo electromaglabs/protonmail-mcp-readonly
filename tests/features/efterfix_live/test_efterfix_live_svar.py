@@ -26,7 +26,9 @@ def svar():
 @given(parsers.parse('att mejlet med UID "{uid}" i "{mailbox}" är från "{sender}" till "{to}"'))
 def original(svar, uid, mailbox, sender, to):
     raw = (
-        f"From: {sender}\r\nTo: {to}\r\nSubject: Påminnelse\r\nMessage-ID: <p@proton.me>\r\n"
+        # X-Pm-Origin: internal som Bridge sätter på egna mejl (efterfix-slut)
+        f"From: {sender}\r\nTo: {to}\r\nX-Pm-Origin: internal\r\n"
+        "Subject: Påminnelse\r\nMessage-ID: <p@proton.me>\r\n"
         "Content-Type: text/plain; charset=utf-8\r\n\r\nKom ihåg\r\n"
     ).encode()
     svar["app"].imap.get_message.return_value = raw
