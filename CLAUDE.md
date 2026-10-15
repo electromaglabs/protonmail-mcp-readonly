@@ -129,10 +129,29 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   ett etikettnamn är escapat som `\/` och ska skickas tillbaka så.
 - **COPY/MOVE/EXPUNGE.** COPY till en mapp flyttar, till en etikett lägger till etiketten. MOVE tar bort källan om
   den är en etikett eller målet är en mapp. EXPUNGE från en etikett tar bort etiketten, från en mapp hamnar mejlet
-  bara i All Mail, från Trash/Drafts raderas det permanent. Ligger mejlet redan i målet tas det först bort — i
-  Trash/Drafts blir det permanent radering. Allt till/från All Mail och INBOX ↔ Sent nekas. Därför: radering =
-  `UID MOVE` till Trash; permanent bara `UID STORE \Deleted` + `UID EXPUNGE <uid>` i Trash/Drafts; aldrig EXPUNGE
-  utan UID.
+  bara i All Mail, från Trash/Drafts raderas det permanent — men bara om Protons UnlabelMessages lyckas för hela
+  omgången (se Code=2501 nedan). Ligger mejlet redan i målet tas det först bort — i Trash/Drafts blir det permanent
+  radering. Allt till/från All Mail och INBOX ↔ Sent nekas. Därför: radering = `UID MOVE` till Trash; permanent bara
+  `UID STORE \Deleted` + `UID EXPUNGE <uid>` i Trash/Drafts; aldrig EXPUNGE utan UID.
+- **Ett mejl, flera vyer.** Ett mejl till sig själv är ETT Proton-mejl med både Inbox och Sent (inte två): det syns i
+  INBOX och Sent med var sitt UID men samma Message-ID, tid och storlek, och en gång i All Mail. Skickas ett utkast
+  till sig själv blir utkastet självt det skickade mejlet (samma Proton-id och Message-ID).
+- **Vyerna släpar 20–40 s.** Bridge hämtar händelser från Proton var 20:e–40:e sekund (`EventPeriod` 20 s +
+  `EventJitter` 20 s i `internal/user/user.go`). Vyer som beror på Protons tillstånd — Starred, Sent, All Mail och en
+  mapp som mejlet just flyttats ur via en annan vy — visar det gamla läget så länge. `-FLAGS \Flagged` tar bort
+  stjärnan i Proton direkt men mejlet ligger kvar i Starred-vyn; `unflag_email` tar därför bort det därifrån med
+  UID EXPUNGE i Starred (bästa försök).
+- **Code=2501 ("Message does not exist").** Flyttas ett mejl till Trash som redan ligger där — typiskt Sent-kopian av
+  ett mejl till sig själv inom 20–40 s efter att INBOX-kopian lagts i Trash — svarar Bridge `NO labeling messages:
+  … (Code=2501)`, men mejlet är då raderat permanent. `move_email`/`delete_email` letar därför först upp mejlen i
+  Trash/Drafts via Message-ID, tid och storlek (`imap_bulk.already_in_target`, en SEARCH per 20 Message-ID) och
+  skickar ingenting för dem som redan ligger där; de räknas som ok med en förklaring i `note`. Vid permanent radering
+  kan Bridge svara `NO failed to unlabel messages … (Code=2501)` och ändå radera vid nästa händelsehämtning;
+  `permanent_delete_found` väntar då upp till 45 s (`_GONE_TIMEOUT`) och räknar försvunna mejl som raderade.
+- **Föräldralösa utkast.** Innehåller en omgång permanenta raderingar i Trash ett mejl som ger 2501 avbryter Bridge
+  före DeleteMessage: utkasten i samma omgång tappar Trash men raderas inte, och blir kvar osynliga i All Mail utan
+  mapp. `permanent_delete_found` letar upp dem i All Mail via Message-ID, lägger dem i Trash igen med UID COPY och
+  raderar dem där med UID STORE `\Deleted` + UID EXPUNGE. `send_draft` tar bort sitt utkast utan att vänta.
 - **Stjärna = `\Flagged`**, globalt i alla vyer. Flytt till Starred skulle ta bort mejlet ur källmappen.
 - **Mappnamn i modified UTF-7.** LIST-namnen avkodas; `_quote_mailbox` kodar alltid. Verktygen tar alltså bara emot
   läsbara namn (`Labels/Näs Samfällighet`), och den kodade formen blir dubbelkodad.
@@ -165,7 +184,9 @@ inställningar som koden har. Lägger du till något: uppdatera tabellerna i sam
   igenom — rätta attrappen. En ren `AsyncMock()` som `_client` duger inte: den behöver `select`/`login` som svarar
   OK och `protocol.state` (se `_imap_mock()` i `tests/unit/test_imap_client.py`).
 - **Fejk-servrar i `tests/`** i stället för mockar där semantiken spelar roll: `fix_flytta_bridge.py`
-  (flytt/radering/mappar), `feat_etiketter_bridge.py` (etiketter), `feat_utkast_bridge.py` (utkast),
+  (flytt/radering/mappar), `feat_etiketter_bridge.py` (etiketter), `efterfix_live_bridge.py` (Code=2501 vid permanent
+  radering, föräldralösa utkast, Starred som släpar), `efterfix_l7_bridge.py` (ett mejl i INBOX och Sent, flytt till
+  Trash av ett mejl som redan ligger där raderar permanent), `feat_utkast_bridge.py` (utkast),
   `feat_sok_fakebridge.py` och `fix_sok_fakebox.py` (SEARCH/FETCH som Gluon), `fix_imapkarna_fakeimap.py` (hängande
   och nekande Bridge), `efterfix_imap_avbrott.py` och `ny_mejl_fakeidle.py` (riktiga TCP-servrar: avbrott, IDLE),
   `fix_svar_support.py` (fångar SMTP), `llm_kontrakt_support.py` och `mcp_resurser_support.py` (riktig MCP-session i

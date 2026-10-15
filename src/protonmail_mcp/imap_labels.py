@@ -52,8 +52,10 @@ STARRED = "Starred"
 # Systemmappar (och behållarna Folders/Labels) som inte är etiketter
 _NOT_LABELS = ("inbox", "archive", "sent", "spam", "trash", "drafts", "all mail", "folders", "labels")
 # Mejlets identitet i en vy. Samma mejl har samma värden i alla vyer (verifierat
-# live mot Bridge); två mejl med samma Message-ID (t.ex. ett mejl till sig själv,
-# där kopian i Sent och den i INBOX är två mejl) skiljs åt på tid och storlek.
+# live mot Bridge). Ett mejl till sig själv är ETT Proton-mejl med både Inbox och
+# Sent (verifierat live), alltså samma värden i INBOX och Sent. Två olika mejl med
+# samma Message-ID (t.ex. samma mejl importerat två gånger, eller kopior via en
+# e-postlista) skiljs åt på tid och storlek.
 _IDENTITY_ITEMS = "(UID INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
 _INTERNALDATE_RE = re.compile(r'INTERNALDATE\s+"([^"]*)"', re.IGNORECASE)
 _SIZE_RE = re.compile(r'RFC822\.SIZE\s+(\d+)', re.IGNORECASE)
