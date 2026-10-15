@@ -17,6 +17,19 @@ class AppContext:
     watcher: object = None  # MailWatcher (imap_idle.py): bevakning av nya mejl
 
 
+async def notify_new_mail(mailbox: str, messages: list[dict]) -> None:
+    """Lyssnare på bevakningen: nya mejl i mailbox → notis till prenumeranter.
+
+    Skickar notifications/resources/updated för mappresursen (mailbox://…)
+    till varje session som prenumererar på den. Körs i bevakningsuppgiften,
+    i serverns event loop; fel i en session stoppar inte de andra.
+    """
+    from . import subscriptions
+    from .resources import mailbox_uri
+
+    await subscriptions.notify_resource_updated(mailbox_uri(mailbox))
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     from .config import get_settings
@@ -41,6 +54,7 @@ async def lifespan(server: FastMCP):
     imap = IMAPClient(s)
     # Egna anslutningar i bakgrunden; start() väntar inte på Bridge
     watcher = MailWatcher(s)
+    watcher.add_listener(notify_new_mail)
     watcher.start()
     try:
         yield AppContext(imap=imap, smtp=SMTPClient(s), watcher=watcher)

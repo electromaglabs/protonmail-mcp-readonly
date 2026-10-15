@@ -24,3 +24,14 @@ async def test_watcher_stopped_even_if_imap_disconnect_fails(tmp_path):
                 assert isinstance(app.watcher, MailWatcher)
                 app.imap.disconnect = AsyncMock(side_effect=RuntimeError("nej"))
         stop.assert_awaited_once()
+
+
+async def test_lifespan_connects_new_mail_to_resource_notifications(tmp_path):
+    settings = Settings(username="u", password="p", imap_port=1, attachment_dir=tmp_path,
+                        watch_enabled=False, _env_file=None)
+    with patch.object(config, "get_settings", return_value=settings), \
+            patch("protonmail_mcp.subscriptions.notify_resource_updated", new=AsyncMock()) as notify:
+        async with lifespan(mcp) as app:
+            assert len(app.watcher._listeners) == 1
+            await app.watcher._notify("Folders/A/B", [{"uid": "4"}])
+    notify.assert_awaited_once_with("mailbox://Folders%2FA%2FB")
