@@ -9,8 +9,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Alla versioner ska rapportera, även när en av dem faller
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      # uv sync och uv run använder exakt matrisens version
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
