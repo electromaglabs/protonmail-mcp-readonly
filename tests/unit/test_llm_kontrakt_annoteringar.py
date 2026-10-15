@@ -5,6 +5,8 @@ så att den som lägger till det måste ta ställning till hur det klassas.
 
 Kolumner: (readOnlyHint, destructiveHint, idempotentHint, openWorldHint)
 - Läsverktyg: läs-endast, inte destruktiva, idempotenta, sluten värld.
+  check_new_emails och wait_for_new_email ändrar inget i brevlådan (BODY.PEEK);
+  de flyttar bara serverns eget vattenmärke för "sedan förra anropet".
 - get_attachment ändrar inget i brevlådan men skriver (med save=True) en ny
   fil i bilagekatalogen. Den skriver aldrig över något (namnkrock ger
   "namn (1)"), alltså inte destruktiv, men inte heller läs-endast eller
@@ -41,6 +43,8 @@ EXPECTED = {
     "get_email_headers": READ,
     "search_emails": READ,
     "get_thread": READ,
+    "check_new_emails": READ,
+    "wait_for_new_email": READ,
     "get_attachment": ADD,
     "mark_email_read": MARK,
     "mark_email_unread": MARK,

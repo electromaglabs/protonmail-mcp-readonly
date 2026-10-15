@@ -290,6 +290,11 @@ class MailWatcher:
         state = self._state(mailbox)
         return list(reversed(state.events)) if state else []
 
+    def uidvalidity(self, mailbox: str) -> int | None:
+        """UIDVALIDITY som bevakningen senast såg för mappen, eller None."""
+        state = self._state(mailbox)
+        return state.uidvalidity if state else None
+
     def baseline(self, mailbox: str) -> tuple[int | None, int] | None:
         """(UIDVALIDITY, vattenmärke) när bevakningen av mappen började, eller None."""
         state = self._state(mailbox)

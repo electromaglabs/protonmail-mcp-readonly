@@ -34,6 +34,8 @@ READ_TOOLS = {
     "search_emails",
     "get_thread",
     "get_attachment",
+    "check_new_emails",
+    "wait_for_new_email",
 }
 
 # Verktyg som skriver i kontot eller skickar.

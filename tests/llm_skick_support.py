@@ -106,7 +106,8 @@ async def call_tool(name: str, arguments: dict[str, Any], app: Any, settings: Se
     from protonmail_mcp import config
     from protonmail_mcp.server import mcp
     from protonmail_mcp.tools import (  # noqa: F401 — registrerar verktygen
-        attachments, drafts, folders, labels, mailboxes, manage, messages, reply, search, send, threads,
+        attachments, drafts, folders, labels, mailboxes, manage, messages, new_mail, reply, search, send,
+        threads,
     )
 
     request_context = SimpleNamespace(lifespan_context=app)
@@ -119,7 +120,8 @@ async def call_tool(name: str, arguments: dict[str, Any], app: Any, settings: Se
 def registered_tools() -> set[str]:
     from protonmail_mcp.server import mcp
     from protonmail_mcp.tools import (  # noqa: F401 — registrerar verktygen
-        attachments, drafts, folders, labels, mailboxes, manage, messages, reply, search, send, threads,
+        attachments, drafts, folders, labels, mailboxes, manage, messages, new_mail, reply, search, send,
+        threads,
     )
 
     return {tool.name for tool in mcp._tool_manager.list_tools()}

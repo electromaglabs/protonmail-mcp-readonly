@@ -108,7 +108,7 @@ def register_tools() -> None:
     Importeras här i stället för på modulnivå för att undvika cirkulär import.
     Upprepade anrop gör inget, eftersom modulerna bara importeras en gång.
     """
-    from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts, attachments, labels, threads  # noqa: F401
+    from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts, attachments, labels, threads, new_mail  # noqa: F401
     from . import prompts, resources, subscriptions
 
     resources.register(mcp)

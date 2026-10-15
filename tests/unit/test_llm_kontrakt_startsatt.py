@@ -23,11 +23,11 @@ def test_module_start_runs_the_server_the_tools_are_registered_on(monkeypatch):
 
 def test_module_start_has_tools(monkeypatch):
     started = _run_as_module(monkeypatch)
-    assert len(started._tool_manager.list_tools()) == 27
+    assert len(started._tool_manager.list_tools()) == 29
 
 
 def test_register_tools_is_idempotent():
     server.register_tools()
     before = len(server.mcp._tool_manager.list_tools())
     server.register_tools()
-    assert len(server.mcp._tool_manager.list_tools()) == before == 27
+    assert len(server.mcp._tool_manager.list_tools()) == before == 29
