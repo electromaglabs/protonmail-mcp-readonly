@@ -34,6 +34,7 @@ def checked(env, mailbox):
 
 @when(parsers.parse('jag anropar check_new_emails för "{mailbox}"'))
 def check(env, mailbox):
+    env.error = None
     try:
         env.result = run(env, new_mail.check_new_emails(env.ctx, mailbox=mailbox))
     except Exception as exc:  # noqa: BLE001 — scenariot kontrollerar felet

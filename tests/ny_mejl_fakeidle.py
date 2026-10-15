@@ -102,6 +102,8 @@ class FakeIdleBridge:
         self._handlers: set[asyncio.Task] = set()
         # True: Bridge är nere, nya anslutningar stängs direkt
         self.refusing = False
+        # Kommandot (t.ex. "UID SEARCH") som Bridge hänger sig på: inget svar alls
+        self.hang_on: str | None = None
         # Engångskrokar (kommando, åtgärd) som körs mitt i nästa sådant kommando
         self._during: list[tuple[str, object]] = []
 
@@ -249,6 +251,8 @@ class FakeIdleBridge:
         if cmd == "UID":
             sub, _, args = args.partition(" ")
             cmd = f"UID {sub.upper()}"
+        if cmd == self.hang_on:
+            return None
         out: list[str | bytes] = []
         result = "OK"
         if cmd == "CAPABILITY":

@@ -24,8 +24,10 @@ def env(monkeypatch):
     loop = asyncio.new_event_loop()
     e = SimpleNamespace(loop=loop, fake=None, port=None, watcher=None, app=None, ctx=None,
                         received=[], delays=[], result=None, error=None, elapsed=None,
-                        monkeypatch=monkeypatch)
+                        monkeypatch=monkeypatch, cleanups=[])
     yield e
+    for cleanup in e.cleanups:
+        loop.run_until_complete(cleanup())
     if e.app is not None:
         loop.run_until_complete(e.app.imap.disconnect())
     if e.watcher is not None:
@@ -112,6 +114,7 @@ def checked_once(env):
 
 @when("jag anropar check_new_emails för INBOX")
 def check(env):
+    env.error = None
     try:
         env.result = run(env, new_mail.check_new_emails(env.ctx, mailbox="INBOX"))
     except Exception as exc:  # noqa: BLE001 — scenariot kontrollerar felet

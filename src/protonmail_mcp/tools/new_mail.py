@@ -29,6 +29,9 @@ MAX_MESSAGES = 50
 # Sekunder mellan frågorna till Bridge när wait_for_new_email inte har någon
 # bevakning att vänta på. Låset tas bara under själva frågan.
 POLL_INTERVAL = 5.0
+# wait_for_new_email ger upp så här många sekunder efter timeout_seconds när
+# Bridge inte svarar (varje IMAP-steg har annars sin egen, längre tidsgräns)
+DEADLINE_MARGIN = 3.0
 
 # Vattenmärken när sessionen saknar bevakning (AppContext.watcher är None)
 _FALLBACK_MARKS: dict[str, tuple[int | None, int]] = {}
@@ -96,6 +99,32 @@ async def _collect(app, mailbox: str, since_uid: str | None) -> dict[str, Any]:
     result["after"] = after
     result["since_uid_given"] = since_uid is not None
     return result
+
+
+class _Overdue(Exception):
+    """Frågan till Bridge blev inte klar före wait_for_new_email:s tidsgräns."""
+
+
+async def _within(coro, seconds: float):
+    """Kör coro högst seconds sekunder; annars avbryts den och _Overdue kastas.
+
+    Avbrytningen inväntas, så att _serialized hinner kasta den delade
+    anslutningen och släppa låset. Fel från coro (även IMAP-timeouter) går
+    igenom oförändrade.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(seconds, 0))
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+    if task in done:
+        return task.result()
+    # Python 3.10–3.11:s wait_for kan svälja en avbrytning: försök tills den är klar
+    while not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=0.5)
+    raise _Overdue
 
 
 def _note(app, mailbox: str, result: dict[str, Any]) -> str | None:
@@ -234,6 +263,8 @@ async def wait_for_new_email(
     Raises:
         ValueError: ogiltigt mappnamn eller mappen finns inte. Kan Bridge inte
             nås kommer felet direkt, utan att vänta ut tiden.
+        TimeoutError: Bridge svarade inte (har hängt sig) inom timeout_seconds
+            plus några sekunder; frågan avbryts och anslutningen släpps.
     """
     _quote_mailbox(mailbox)
     app = _get_app(ctx)
@@ -243,7 +274,13 @@ async def wait_for_new_email(
     deadline = start + timeout_seconds
     reset = None  # ett UIDVALIDITY-byte under väntan ska synas i svaret
     while True:
-        result = await _collect(app, mailbox, None)
+        try:
+            result = await _within(_collect(app, mailbox, None), deadline + DEADLINE_MARGIN - loop.time())
+        except _Overdue:
+            raise asyncio.TimeoutError(
+                f"ProtonMail Bridge svarade inte inom {timeout_seconds} s (timeout_seconds) — "
+                "frågan avbröts. Kontrollera att Bridge körs och inte har hängt sig."
+            ) from None
         if result.get("reset") and reset is None:
             reset = {"reset": True, "recovered": result.get("recovered", False)}
         remaining = deadline - loop.time()
