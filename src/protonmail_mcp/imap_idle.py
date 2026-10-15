@@ -26,7 +26,11 @@ Per mapp, i en bakgrundsuppgift:
    bevakad (is_watching) först när Bridge har bekräftat IDLE.
    Vid återanslutning hämtas det som kom under avbrottet. Har UIDVALIDITY
    ändrats gäller inte de gamla UID:na: vattenmärket och kön nollställs och
-   UIDNEXT - 1 blir nytt vattenmärke.
+   UIDNEXT - 1 blir nytt vattenmärke. Mejl som kom under avbrottet letas då
+   fram efter ankomsttid (INTERNALDATE sedan bevakningen senast var i fas,
+   med RECOVER_MARGIN för Bridges fördröjning), utom de som redan
+   rapporterats (samma Message-ID). Verktygen visar dem, med en anteckning
+   om bytet, nästa gång de frågar (recovered).
 
 Ingenting här får krascha servern: fel loggas (till stderr) och leder till
 ett nytt försök. start() väntar inte på Bridge.
@@ -39,7 +43,7 @@ import re
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aioimaplib.aioimaplib import STOP_WAIT_SERVER_PUSH, Abort
@@ -48,6 +52,7 @@ from .config import Settings
 from .imap_client import (
     _FETCH_CHUNK_SIZE,
     _METADATA_ITEMS,
+    _MONTHS,
     IMAPClient,
     _BridgeProtocol,
     _close_transport,
@@ -74,6 +79,9 @@ QUEUE_SIZE = 200
 # Högst så många nya mejl hämtas per omgång; fler (t.ex. efter ett långt
 # avbrott) ger bara de nyaste i kön, och verktygen frågar då Bridge själva
 FETCH_LIMIT = 200
+# Efter ett UIDVALIDITY-byte: mejl som kom så här långt innan bevakningen
+# senast var i fas räknas också (Bridge får mejlen från Proton med fördröjning)
+RECOVER_MARGIN = timedelta(minutes=5)
 # Högst så många sökningar efter en IDLE-omgång när Bridge hela tiden
 # rapporterar nya mejl i svaren; resten fångas av nästa omgång
 CATCH_UP_ROUNDS = 5
@@ -84,6 +92,10 @@ _PUSH_RE = re.compile(r"^(?:\*\s+)?\d+\s+(?:EXISTS|RECENT)\b", re.IGNORECASE)
 _UID_ITEM_RE = re.compile(r"\bUID\s+(\d+)", re.IGNORECASE)
 # Bridges svar på UID SEARCH UID n:* i en mapp utan mejl (i stället för OK)
 _NO_SUCH_MESSAGE_RE = re.compile(r"\bno such message\b", re.IGNORECASE)
+_INTERNALDATE_ITEM_RE = re.compile(r'INTERNALDATE\s+"([^"]*)"', re.IGNORECASE)
+_INTERNALDATE_RE = re.compile(
+    r"^\s*(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})\s*$"
+)
 
 Listener = Callable[[str, list[dict[str, Any]]], Awaitable[None]]
 
@@ -93,8 +105,29 @@ def mailbox_key(name: str) -> str:
     return "INBOX" if name.upper() == "INBOX" else name
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return _utcnow().isoformat(timespec="seconds")
+
+
+def _imap_date(when: datetime) -> str:
+    """Datum för SEARCH SINCE (RFC 3501 date), oberoende av locale."""
+    return f"{when.day:02d}-{_MONTHS[when.month - 1]}-{when.year:04d}"
+
+
+def _parse_internaldate(text: str) -> datetime | None:
+    """INTERNALDATE ("15-Oct-2026 09:00:00 +0200") som UTC, eller None."""
+    m = _INTERNALDATE_RE.match(text)
+    if not m or m.group(2).capitalize() not in _MONTHS:
+        return None
+    day, mon, year, hh, mm, ss, sign, oh, om = m.groups()
+    offset = timedelta(hours=int(oh), minutes=int(om)) * (1 if sign == "+" else -1)
+    local = datetime(int(year), _MONTHS.index(mon.capitalize()) + 1, int(day), int(hh), int(mm), int(ss),
+                     tzinfo=timezone(offset))
+    return local.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -193,6 +226,40 @@ async def fetch_metadata(imap: IMAPClient, mailbox: str, uids: list[int]) -> lis
     return [{**m, "mailbox": mailbox} for m in _sort_newest_first(msgs)]
 
 
+async def recover_messages(
+    imap: IMAPClient, mailbox: str, cutoff: datetime, known_ids: set[str]
+) -> list[dict[str, Any]]:
+    """Mejl i vald mapp som kom (INTERNALDATE) vid cutoff eller senare, nyaste först.
+
+    För när UIDVALIDITY har bytts och UID:n inte går att jämföra. Mejl vars
+    Message-ID finns i known_ids (redan rapporterade) hoppas över. Högst
+    FETCH_LIMIT mejl; allt hämtas med BODY.PEEK eller INTERNALDATE.
+    """
+    cutoff = cutoff.astimezone(timezone.utc).replace(microsecond=0)
+    # SINCE jämför bara datum (i serverns tidszon): ta en dag till för säkerhets skull
+    resp = await imap._client.uid_search("SINCE", _imap_date(cutoff - timedelta(days=1)))
+    if resp.result == "NO" and _NO_SUCH_MESSAGE_RE.search(_response_text(resp)):
+        return []
+    _require_ok(resp, "Sökningen efter mejl som kom under avbrottet")
+    uids = sorted({int(u) for u in _parse_seqnums(resp)})
+    arrived: list[int] = []
+    for start in range(0, len(uids), _FETCH_CHUNK_SIZE):
+        chunk = uids[start:start + _FETCH_CHUNK_SIZE]
+        resp = await imap._uid("fetch", ",".join(map(str, chunk)), "(UID INTERNALDATE)")
+        _require_ok(resp, f"Hämtningen av ankomsttider i {mailbox}")
+        for line in resp.lines:
+            if isinstance(line, bytearray):
+                continue
+            text = _decode(line)
+            uid_m, date_m = _UID_ITEM_RE.search(text), _INTERNALDATE_ITEM_RE.search(text)
+            when = _parse_internaldate(date_m.group(1)) if date_m else None
+            if uid_m and when is not None and when >= cutoff and int(uid_m.group(1)) in uids:
+                arrived.append(int(uid_m.group(1)))
+    taken = sorted(set(arrived))[-FETCH_LIMIT:]
+    msgs = await fetch_metadata(imap, mailbox, taken) if taken else []
+    return [m for m in msgs if not (m.get("message_id") and m["message_id"] in known_ids)]
+
+
 @_serialized
 async def poll_new_messages(
     imap: IMAPClient, mailbox: str, after: int | None, uidvalidity: int | None, limit: int
@@ -242,6 +309,12 @@ class _MailboxState:
     last_event: str | None = None
     last_error: str | None = None
     signal: asyncio.Event = field(default_factory=asyncio.Event)
+    # Tiden då vattenmärket sattes, och då bevakningen senast visste att den
+    # hade sett allt (före den senaste lyckade sökningen)
+    baseline_at: datetime | None = None
+    synced_at: datetime | None = None
+    # None tills UIDVALIDITY har bytts; sedan mejlen som kom under avbrottet
+    recovered: list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         self.events = deque(maxlen=self.queue_size)
@@ -356,6 +429,16 @@ class MailWatcher:
             return None
         return state.uidvalidity, state.baseline
 
+    def recovered(self, mailbox: str) -> list[dict[str, Any]] | None:
+        """None om UIDVALIDITY inte har bytts sedan bevakningen började.
+
+        Annars mejlen (nyaste först) som kom medan bevakningen var nere före
+        det senaste bytet. De har UID:n under baseline och syns därför inte i
+        messages_since.
+        """
+        state = self._state(mailbox)
+        return None if state is None or state.recovered is None else list(state.recovered)
+
     def messages_since(self, mailbox: str, after: int, uidvalidity: int | None) -> list[dict[str, Any]] | None:
         """Mejl i kön med UID över after, nyaste först.
 
@@ -458,19 +541,47 @@ class MailWatcher:
 
     async def _sync(self, state: _MailboxState, imap: IMAPClient, info: MailboxInfo) -> None:
         """Efter (åter)anslutning: sätt vattenmärket eller hämta det som kommit."""
+        now = _utcnow()
         if state.uidvalidity is not None and info.uidvalidity != state.uidvalidity:
             logger.warning(
                 "UIDVALIDITY för %s ändrades (%s → %s): de gamla UID:na gäller inte, "
                 "vattenmärket nollställs", state.name, state.uidvalidity, info.uidvalidity,
             )
-            state.watermark = None
-            state.events.clear()
-            self.marks.pop(mailbox_key(state.name), None)
+            await self._reset(state, imap, info, now)
+            return
         state.uidvalidity = info.uidvalidity
         if state.watermark is None:
             state.watermark = state.baseline = state.floor = info.uidnext - 1
+            state.baseline_at = state.synced_at = now
         elif info.exists:  # en tom mapp har inget nytt (och Bridge svarar NO på sökningen)
             await self._fetch_new(state, imap)
+        else:
+            state.synced_at = now
+
+    async def _reset(self, state: _MailboxState, imap: IMAPClient, info: MailboxInfo, now: datetime) -> None:
+        """Nytt UIDVALIDITY: ny baslinje, och leta fram mejlen från avbrottet efter ankomsttid."""
+        known = {m["message_id"] for m in state.events if m.get("message_id")}
+        cutoff = None
+        if state.synced_at is not None:
+            cutoff = max(state.synced_at - RECOVER_MARGIN, state.baseline_at or state.synced_at)
+        state.events.clear()
+        self.marks.pop(mailbox_key(state.name), None)
+        state.uidvalidity = info.uidvalidity
+        state.watermark = state.baseline = state.floor = info.uidnext - 1
+        state.baseline_at = state.synced_at = now
+        state.recovered = []
+        if cutoff is not None and info.exists:
+            try:
+                state.recovered = await recover_messages(imap, state.name, cutoff, known)
+            except (asyncio.CancelledError, ConnectionError, asyncio.TimeoutError):
+                raise
+            except Exception as exc:  # noqa: BLE001 — anteckningen hänvisar ändå till list_emails
+                logger.warning("Mejlen från avbrottet i %s kunde inte letas fram: %s", state.name, exc)
+        self._wake(state)  # väntande anrop ser att UIDVALIDITY har bytts
+        if state.recovered:
+            state.last_event = _now()
+            logger.info("%d mejl i %s kom medan bevakningen var nere", len(state.recovered), state.name)
+            await self._notify(state.name, state.recovered)
 
     async def _catch_up(self, state: _MailboxState, imap: IMAPClient, client) -> None:
         """Hämta nya mejl efter en IDLE-omgång, tills inget tyder på fler.
@@ -490,14 +601,17 @@ class MailWatcher:
                 return
 
     async def _fetch_new(self, state: _MailboxState, imap: IMAPClient) -> None:
+        checked = _utcnow()
         uids = await new_uids(imap, state.watermark)
         if not uids:
+            state.synced_at = checked
             return
         if len(uids) > FETCH_LIMIT:
             uids = uids[-FETCH_LIMIT:]
             state.floor = max(state.floor or 0, uids[0] - 1)
         msgs = await fetch_metadata(imap, state.name, uids)
         state.watermark = uids[-1]
+        state.synced_at = checked
         self._record(state, msgs)
         logger.info("%d nytt/nya mejl i %s", len(msgs), state.name)
         await self._notify(state.name, msgs)

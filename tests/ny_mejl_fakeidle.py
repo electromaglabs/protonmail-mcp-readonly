@@ -22,6 +22,13 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass
@@ -30,6 +37,16 @@ class FakeMessage:
     subject: str = "Hej"
     sender: str = "anna@example.com"
     flags: set[str] = field(default_factory=set)
+    # Ankomsttiden (INTERNALDATE); Message-ID följer mejlet även om UID:t byts
+    internaldate: datetime = field(default_factory=_now)
+    msgid: str = ""
+
+    def __post_init__(self) -> None:
+        self.msgid = self.msgid or f"{self.uid}@example.com"
+
+    def imap_internaldate(self) -> str:
+        d = self.internaldate.astimezone(timezone.utc)
+        return f"{d.day:02d}-{_MONTHS[d.month - 1]}-{d.year} {d:%H:%M:%S} +0000"
 
     def header_block(self) -> bytes:
         return (
@@ -37,7 +54,7 @@ class FakeMessage:
             f"From: {self.sender}\r\n"
             f"To: me@proton.me\r\n"
             f"Subject: {self.subject}\r\n"
-            f"Message-ID: <{self.uid}@example.com>\r\n\r\n"
+            f"Message-ID: <{self.msgid}>\r\n\r\n"
         ).encode()
 
 
@@ -83,6 +100,8 @@ class FakeIdleBridge:
         self._conns: dict[int, _Conn] = {}
         self._server: asyncio.AbstractServer | None = None
         self._handlers: set[asyncio.Task] = set()
+        # True: Bridge är nere, nya anslutningar stängs direkt
+        self.refusing = False
         # Engångskrokar (kommando, åtgärd) som körs mitt i nästa sådant kommando
         self._during: list[tuple[str, object]] = []
 
@@ -91,7 +110,9 @@ class FakeIdleBridge:
     def add_box(self, name: str, uids: list[int] = (), uidvalidity: int = 1) -> FakeBox:
         box = FakeBox(uidvalidity=uidvalidity)
         for uid in uids:
-            box.messages.append(FakeMessage(uid=uid, subject=f"Mejl {uid}"))
+            # Mejl som redan fanns kom för en timme sedan
+            box.messages.append(FakeMessage(uid=uid, subject=f"Mejl {uid}",
+                                            internaldate=_now() - timedelta(hours=1)))
         box.uidnext = (max(uids) + 1) if uids else 1
         self.boxes[name] = box
         return box
@@ -150,6 +171,13 @@ class FakeIdleBridge:
             conn.writer.close()
         await asyncio.sleep(0.05)
 
+    async def outage(self, during) -> None:
+        """Bridge går ner, during() körs medan den är nere, och den kommer upp igen."""
+        self.refusing = True
+        await self.drop_all()
+        during()
+        self.refusing = False
+
     def idle_count(self, conn: int | None = None) -> int:
         return sum(1 for n, line in self.commands if line.split(" ")[1:2] == ["IDLE"]
                    and (conn is None or n == conn))
@@ -184,6 +212,9 @@ class FakeIdleBridge:
             conn.writer.write(data.encode() if isinstance(data, str) else data)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self.refusing:
+            writer.close()
+            return
         task = asyncio.current_task()
         self._handlers.add(task)
         self.connections_total += 1
@@ -276,6 +307,11 @@ class FakeIdleBridge:
                 result = "NO"
             else:
                 hits = self._select_uids(box, uid_set)
+                if "SINCE" in words:  # ankomstdag (INTERNALDATE) från och med
+                    day, mon, year = words[words.index("SINCE") + 1].split("-")
+                    since = (int(year), _MONTHS.index(mon.capitalize()) + 1, int(day))
+                    hits = [m for m in hits if (m.internaldate.year, m.internaldate.month,
+                                                m.internaldate.day) >= since]
                 out.append("* SEARCH" + "".join(f" {m.uid}" for m in hits) + "\r\n")
         elif cmd in ("FETCH", "UID FETCH"):
             box = self.boxes[conn.selected]
@@ -297,6 +333,8 @@ class FakeIdleBridge:
                         f"BODY[HEADER.FIELDS (DATE FROM TO SUBJECT MESSAGE-ID)] {{{len(hdr)}}}\r\n".encode()
                         + hdr + b")\r\n"
                     )
+                elif "INTERNALDATE" in upper:
+                    out.append(f'* {seq} FETCH (UID {msg.uid} INTERNALDATE "{msg.imap_internaldate()}")\r\n')
                 else:
                     out.append(f"* {seq} FETCH (UID {msg.uid} FLAGS ({flags}))\r\n")
         else:
