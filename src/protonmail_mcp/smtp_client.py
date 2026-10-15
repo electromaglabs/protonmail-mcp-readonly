@@ -46,14 +46,29 @@ _HIDDEN_KINDS = {
 }
 
 
+# Den synliga märkningen av ett dolt tecken i visningen ("[U+E0041]")
+_VISIBLE_ESCAPE_RE = re.compile(r"\[U\+", re.IGNORECASE)
+
+
 def _reject_hidden_characters(addr: str, spec: str) -> None:
     """ValueError om adressen (addr-spec) innehåller tecken som inte syns.
 
     Taggtecken, bidi-styrtecken, nollbreddstecken och andra formattecken (Cf)
     ritas inte, så en adress med sådana ser ut som en annan adress än den
     som mejlet går till. Samma tecken som sanitize.sanitize_text tar bort ur
-    text räknas. Visningsnamnet kontrolleras inte här.
+    text räknas, liksom visningens märkning av dem ("[U+…]", som en LLM kan
+    ha kopierat ur get_email). Visningsnamnet kontrolleras inte här.
     """
+    # Hela strängen: parseaddr tolkar "[" som avgränsare och kan tappa delen
+    if _VISIBLE_ESCAPE_RE.search(str(addr)) or _VISIBLE_ESCAPE_RE.search(spec):
+        # get_email visar ett dolt tecken i en adress som "[U+E0041]"; en
+        # kopierad visad adress är inte den adress som mejlet kom ifrån
+        raise ValueError(
+            f"Ogiltig e-postadress: {ascii(addr)} innehåller \"[U+…]\", som är hur get_email "
+            "visar dolda tecken i en adress. Den riktiga adressen innehåller alltså dolda tecken "
+            "och ser ut som en annan adress än den som visas; sådana adresser vägras, så inget "
+            "skickas eller sparas. Fråga användaren vilken adress mejlet ska till."
+        )
     removed = sanitize_text(spec).removed
     if removed:
         kinds = ", ".join(f"{_HIDDEN_KINDS.get(k, k)}: {n}" for k, n in removed.items())
@@ -76,8 +91,7 @@ def _validate_email_addr(addr: str) -> str:
     if '\r' in addr or '\n' in addr:
         raise ValueError(f"Ogiltig e-postadress (CRLF): {addr!r}")
     _, parsed = parseaddr(addr)
-    if parsed:
-        _reject_hidden_characters(addr, parsed)
+    _reject_hidden_characters(addr, parsed)
     if not parsed or not _EMAIL_RE.match(parsed):
         raise ValueError(f"Ogiltig e-postadress: {addr!r}")
     _to_address(addr)

@@ -55,3 +55,14 @@ def test_prepared_recipients_refuses_hidden_bcc():
     msg._headers.append(("Bcc", "spion​@ond.example"))
     with pytest.raises(ValueError, match="dolda tecken"):
         prepared_recipients(msg)
+
+
+@pytest.mark.parametrize(
+    "addr",
+    ["boss[U+E0041]@company.com", "boss[u+200b]@company.com", "Boss <b[U+202E]oss@company.com>",
+     "boss@company[U+200B].com"],
+)
+def test_visible_escape_of_hidden_character_is_refused_clearly(addr):
+    with pytest.raises(ValueError, match=r"dolda tecken.*\[U\+|\[U\+.*dolda tecken") as exc:
+        _validate_email_addr(addr)
+    assert "get_email" in str(exc.value)
