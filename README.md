@@ -152,7 +152,7 @@ Files to *send* are given as names inside the attachment directory via the `atta
 | `check_new_emails` | Emails that arrived since the previous call (a per-folder high-water mark) or since `since_uid`; returns immediately | read-only |
 | `wait_for_new_email` | Wait up to `timeout_seconds` (1–300) for the next email; returns at once if mail is already waiting | read-only |
 
-Watched folders (`PROTONMAIL_WATCH_MAILBOXES`, default `INBOX`) are answered from an in-memory event queue fed by IMAP IDLE (`"source": "watcher"`). Other folders are checked with a UID search on demand (`"source": "imap"`); there, the first call for a folder only sets the high-water mark. High-water marks live in the server process and start over when it restarts.
+Watched folders (`PROTONMAIL_WATCH_MAILBOXES`, default `INBOX`) are answered from an in-memory event queue fed by IMAP IDLE (`"source": "watcher"`). Other folders are checked with a UID search on demand (`"source": "imap"`); there, the first call for a folder only sets the high-water mark. High-water marks live in the server process and start over when it restarts. If Bridge resyncs a folder (new UIDVALIDITY), the next call says so in `note`, and for a watched folder it shows the emails that arrived during the outage, selected by arrival time. If Bridge hangs, `wait_for_new_email` gives up a few seconds after `timeout_seconds` with an error instead of waiting forever.
 
 ## Resources and subscriptions
 

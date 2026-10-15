@@ -38,7 +38,7 @@ startar `MailWatcher` (egna IDLE-anslutningar). Loggning går bara till stderr �
 | `imap_labels.py` | Etiketter (`add_label` med UID COPY, `remove_label` via Message-ID i etikettvyn) och stjärna (`\Flagged`) |
 | `imap_drafts.py` | Utkast i Drafts: APPEND, ersättning (gamla till Trash) och borttagning efter skick |
 | `imap_threads.py` | Trådar ur Message-ID/In-Reply-To/References-kedjan i All Mail, med tak på sökningar, ID:n och tid |
-| `imap_idle.py` | `MailWatcher`: en egen IDLE-anslutning per bevakad mapp, vattenmärken, händelsekö, återanslutning med växande väntetid |
+| `imap_idle.py` | `MailWatcher`: en egen IDLE-anslutning per bevakad mapp (`_WatchProtocol`), vattenmärken, händelsekö, lyssnare som egna uppgifter, återanslutning med växande väntetid, återhämtning efter UIDVALIDITY-byte |
 | `mailbox_names.py` | Modified UTF-7 för mappnamn (RFC 3501 §5.1.3) och `describe_mailbox` (type, selectable, special_use) |
 | `email_parser.py` | RFC 822 → dict för verktygen: avkodning, body_format, bilagelistor, sanering och `suspicious_content` |
 | `html_text.py` | HTML → synlig text; hoppar över gömda element och rapporterar dem; fail-closed |
