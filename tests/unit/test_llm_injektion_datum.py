@@ -14,7 +14,8 @@ from protonmail_mcp.email_parser import iso_date, parse_email
         ("Tue, 14 Oct 2026 21:45 +0200", "2026-10-14T21:45:00+02:00"),
         ("14 Oct 2026 21:45:52 UT", "2026-10-14T21:45:52+00:00"),
         ("Tue, 14 Oct 2026 21:45:52 EST", "2026-10-14T21:45:52-05:00"),
-        ("Tue, 14 Oct 2026 21:45:52", "2026-10-14T21:45:52+00:00"),  # utan zon: UTC
+        # Ändrat i efterfix-rensning (F12): utan zon blir det lokal tid utan offset
+        ("Tue, 14 Oct 2026 21:45:52", "2026-10-14T21:45:52"),
         ("  Tue,  14  Oct  2026 21:45:52 +0200  ", "2026-10-14T21:45:52+02:00"),
     ],
 )

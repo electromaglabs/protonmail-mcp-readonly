@@ -668,18 +668,43 @@ def suspicious_reasons(
 _MAX_DATE_LEN = 200
 
 
+# Året i den vanliga formen "[Tue, ]14 Oct 26 …" eller "14-Oct-26": två eller tre siffror
+_DATE_YEAR_RE = re.compile(r"^(\s*(?:[A-Za-z]+,?\s*)?\d{1,2}[\s-]+[A-Za-z]+[\s-]+)(\d{2,3})(?=\s)")
+# Skottsekund (23:59:60), som datetime inte kan representera
+_LEAP_SECOND_RE = re.compile(r"(\d{1,2}:\d{2}):60(?!\d)")
+# Zon med bara timmar ("+02") eller med kolon ("+02:00"), sist eller före en kommentar
+_SHORT_ZONE_RE = re.compile(r"(\s[+-]\d{2})(?::(\d{2}))?(\s*(?:\([^()]*\))?\s*)$")
+_UTC_UNKNOWN_LOCAL_RE = re.compile(r"\s-0000(?:\s*\([^()]*\))?\s*$")
+
+
+def _two_digit_year(m: re.Match[str]) -> str:
+    year = int(m.group(2))
+    if len(m.group(2)) == 2:
+        year += 2000 if year < 50 else 1900  # RFC 5322 §4.3
+    else:
+        year += 1900  # tresiffrigt år: år − 1900 (RFC 5322 §4.3)
+    return f"{m.group(1)}{year}"
+
+
 def iso_date(value: str | None) -> str | None:
     """RFC 5322-datum som ISO 8601 med tidszon ("2026-10-14T21:45:52+02:00").
 
-    Avsändarens egen tidszon behålls. Saknas zonen, eller är den -0000
-    ("okänd lokal tid", RFC 5322 §3.3), räknas tiden som UTC. None om
-    datumet inte går att tolka.
+    Avsändarens egen tidszon behålls. -0000 är UTC (RFC 5322 §3.3). Saknas
+    zonen, eller är den en okänd bokstavszon (t.ex. CEST, som RFC 5322 §4.3
+    säger ska behandlas som okänd), blir det lokal tid UTAN offset
+    ("2026-10-14T21:45:52") i stället för en påhittad zon. Tvåsiffriga år
+    00–49 blir 20xx och 50–99 19xx, tresiffriga år + 1900 (RFC 5322 §4.3).
+    "+02" och "+02:00" läses som +0200, och en skottsekund (23:59:60) som
+    23:59:59. None om datumet inte går att tolka.
     """
     if not value or len(value) > _MAX_DATE_LEN:
         return None
     try:
-        when = email.utils.parsedate_to_datetime(value.strip())
-        if when.tzinfo is None:
+        text = _DATE_YEAR_RE.sub(_two_digit_year, value.strip(), count=1)
+        text = _LEAP_SECOND_RE.sub(r"\1:59", text, count=1)
+        text = _SHORT_ZONE_RE.sub(lambda m: f"{m.group(1)}{m.group(2) or '00'}{m.group(3)}", text, count=1)
+        when = email.utils.parsedate_to_datetime(text)
+        if when.tzinfo is None and _UTC_UNKNOWN_LOCAL_RE.search(text):
             when = when.replace(tzinfo=timezone.utc)
         return when.isoformat()
     except Exception:  # ValueError, TypeError, IndexError, OverflowError …
