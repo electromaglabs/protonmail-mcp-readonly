@@ -101,6 +101,9 @@ def register_tools() -> None:
     Upprepade anrop gör inget, eftersom modulerna bara importeras en gång.
     """
     from .tools import mailboxes, messages, search, manage, send, reply, folders, drafts, attachments, labels, threads  # noqa: F401
+    from . import resources
+
+    resources.register(mcp)
 
 
 def main() -> None:
