@@ -13,6 +13,7 @@ from ..attachments import AttachmentPaths, load_for_sending
 from ..email_parser import parse_addresses
 from . import _get_app, SENDS, tool
 from ._types import OptionalStr
+from .messages import _not_found
 
 # Svars- och vidarebefordringsprefix på olika språk: Re, SV (sv, da, no),
 # AW (de), VS (fi), Antw (nl), Fw/Fwd, VB (sv "vidarebefordrat"), med valfri
@@ -424,6 +425,10 @@ async def reply_to_email(
     Returns:
         True om svaret skickades. Vägrar servern några av mottagarna kastas
         ett fel som anger vilka — skicka då inte om till alla.
+
+    Raises:
+        ValueError: "Inget meddelande med UID … i …" när UID:t inte finns i
+            mailbox (oftast ett UID från en annan mapp) — inget skickas.
     """
     files = load_for_sending(attachments)
     app = _get_app(ctx)
@@ -432,7 +437,7 @@ async def reply_to_email(
         body_html=body_html, reply_all=reply_all, cc=cc, quote_original=quote_original,
     )
     if fields is None:
-        return False
+        raise _not_found(uid, mailbox)
     if files:
         fields["attachments"] = files
     return await app.smtp.send_email(**fields, bcc=bcc)
@@ -556,12 +561,16 @@ async def forward_email(
     Returns:
         True om mejlet skickades. Vägrar servern några av mottagarna kastas
         ett fel som anger vilka — skicka då inte om till alla.
+
+    Raises:
+        ValueError: "Inget meddelande med UID … i …" när UID:t inte finns i
+            mailbox (oftast ett UID från en annan mapp) — inget skickas.
     """
     files = load_for_sending(attachments)
     app = _get_app(ctx)
     fields = await build_forward(app, uid, mailbox, to, body, cc=cc)
     if fields is None:
-        return False
+        raise _not_found(uid, mailbox)
     if files:
         fields["attachments"] = (fields["attachments"] or []) + files
     return await app.smtp.send_email(**fields, bcc=bcc)
