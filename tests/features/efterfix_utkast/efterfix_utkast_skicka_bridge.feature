@@ -35,3 +35,8 @@ Feature: send_draft räknar med att Bridge själv tar bort det skickade utkastet
     Then SMTP-mottagarna ska vara "asa@example.se"
     And svaret ska ange att utkastet togs bort utan varning
     And svaret ska förklara att Bridge tar bort utkastet själv
+
+  Scenario: Protons interna rubriker skickas inte, men referensen som Bridge behöver behålls
+    When jag skickar utkastet
+    Then det skickade mejlet ska sakna rubriker som börjar med "X-Pm-"
+    And det skickade mejlets "References" ska innehålla "<utkast-7@protonmail.internalid>"

@@ -210,6 +210,20 @@ def _header_addr_specs(msg: Message, name: str) -> list[str]:
 
 
 _RECIPIENT_HEADERS = (("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"))
+_INTERNAL_HEADER_PREFIX = "x-pm-"
+
+
+def _strip_internal_headers(msg: Message) -> None:
+    """Ta bort Protons interna rubriker (X-Pm-Internal-Id, X-Pm-Gluon-Id,
+    X-Pm-Date, X-Pm-Origin, X-Pm-Content-Encryption …) ur ett utkast som skickas.
+
+    Bridge sätter dem när utkastet visas i Drafts (pkg/message/build.go) men
+    läser dem inte vid SMTP. För mottagare med PGP/MIME skickar Bridge hela
+    MIME-texten med rubriker (createSendReq → AddMIMEPackage), så de kunde
+    annars följa med ut med Protons interna id:n.
+    """
+    for name in {k for k in msg.keys() if k.lower().startswith(_INTERNAL_HEADER_PREFIX)}:
+        del msg[name]
 
 
 def prepared_recipients(msg: Message) -> dict[str, list[str]]:
@@ -356,7 +370,10 @@ class SMTPClient:
         tolkning som get_email visar; dubbla eller tvetydiga adressrubriker
         vägras) och valideras som i send_email. Bcc-headern tas bort ur det
         som skickas (de hemliga mottagarna får mejlet via RCPT TO), men
-        meddelandet som skickas in ändras inte. Samma TLS, inloggning och
+        meddelandet som skickas in ändras inte. Protons interna rubriker
+        (X-Pm-*, som Bridge sätter på utkast i Drafts) tas också bort; References
+        lämnas orörd, eftersom Bridge hittar utkastet och originalet med
+        <id@protonmail.internalid>-referenserna där. Samma TLS, inloggning och
         felhantering som send_email, inklusive SMTPPartialDeliveryError när
         bara några mottagare vägras.
         """
@@ -370,6 +387,7 @@ class SMTPClient:
 
         outgoing = copy.deepcopy(msg)
         del outgoing["Bcc"]
+        _strip_internal_headers(outgoing)
         return await self._deliver(outgoing, recipients)
 
     async def _deliver(self, msg: Message, all_recipients: list[str]) -> bool:

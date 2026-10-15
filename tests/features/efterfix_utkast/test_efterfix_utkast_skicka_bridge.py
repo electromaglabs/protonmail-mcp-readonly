@@ -42,3 +42,14 @@ def deleted_without_warning(outcome):
 @then("svaret ska förklara att Bridge tar bort utkastet själv")
 def explains_bridge_deletes(outcome):
     assert "Bridge" in outcome["result"]["note"]
+
+
+@then(parsers.parse('det skickade mejlet ska sakna rubriker som börjar med "{prefix}"'))
+def sent_lacks_prefix(captured, prefix):
+    assert not [k for k in captured.parsed.keys() if k.lower().startswith(prefix.lower())]
+    assert prefix.lower().encode() not in captured.raw.lower()
+
+
+@then(parsers.parse('det skickade mejlets "{name}" ska innehålla "{value}"'))
+def sent_header_contains(captured, name, value):
+    assert value in (captured.parsed[name] or "")
