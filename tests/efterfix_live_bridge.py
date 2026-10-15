@@ -8,8 +8,13 @@ Bygger på LabelBridge (tests/feat_etiketter_bridge.py) och lägger till:
 - ``no_then_vanish``: Bridge svarar NO på UID EXPUNGE i en vy (som "failed to
   unlabel messages: Message does not exist (Code=2501)") men mejlen försvinner
   ändå ur vyn några SELECT senare, när Bridge hämtat händelserna från Proton
-  (var 20:e–40:e sekund). Vanliga mejl försvinner då helt. Utkast blir kvar i
-  All Mail utan mapp (föräldralösa) — så såg det ut live.
+  (var 20:e–40:e sekund). Som i Bridges connector.go
+  (removeMessagesFromMailboxWithUnlabelCallOnFolders): UnlabelMessages för
+  hela omgången, och vid felet return FÖRE DeleteMessage. Mejl i ``phantoms``
+  (redan raderade i Proton — de som ger 2501) försvinner helt; alla andra,
+  vanliga mejl som utkast, tappar bara vyn och blir kvar i All Mail utan mapp
+  (föräldralösa). Live sågs det för ett utkast; för vanliga mejl följer det av
+  Bridge-koden, som inte gör något undantag för utkast.
 - \\Flagged tas bort direkt, men mejlet ligger kvar i Starred-vyn tills det
   tas bort därifrån (Starred-vyn uppdateras först vid nästa händelse).
 """
@@ -26,7 +31,8 @@ class LiveBridge(LabelBridge):
         # vy -> (antal SELECT innan mejlen försvinner, hur många EXPUNGE som nekas)
         self.no_then_vanish: dict[str, list[int]] = {}
         self._pending: list[tuple[str, list[str], int]] = []  # (vy, uid:n, SELECT kvar)
-        self.orphans: set[str] = set()  # Message-ID för föräldralösa utkast
+        self.orphans: set[str] = set()  # Message-ID för föräldralösa mejl
+        self.phantoms: set[str] = set()  # redan raderade i Proton, men syns ännu i vyn
 
     def put_mail(self, view: str, uid: str, message_id: str, *, draft: bool = False,
                  all_mail_uid: str | None = None, flags: tuple[str, ...] = ()) -> None:
@@ -54,12 +60,12 @@ class LiveBridge(LabelBridge):
                     mid = self.views[view].get(uid)
                     if mid is None:
                         continue
-                    if "\\Draft" in self.messages[mid]["flags"]:
-                        # Utkastet tappar platsen men raderas inte: kvar i All Mail
+                    if mid in self.phantoms:
+                        self._remove_everywhere(mid)
+                    else:
+                        # Tappar platsen men raderas inte: kvar i All Mail
                         self._detach(view, uid)
                         self.orphans.add(mid)
-                    else:
-                        self._remove_everywhere(mid)
             elif view == name:
                 still.append((view, uids, left - 1))
             else:

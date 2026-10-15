@@ -144,8 +144,10 @@ async def delete_email(
     tar Bridge bara bort det ur Trash/Drafts. Bara det angivna mejlet påverkas.
     Bridge kan neka raderingen ("Message does not exist", Code=2501) men ändå
     genomföra den när Bridge synkar med Proton; då väntar verktyget upp till
-    45 s och räknar mejl som försvunnit som raderade. Ett utkast som då blivit
-    kvar i All Mail utan mapp raderas via Trash.
+    45 s på att mejlen försvinner. Bridge avbryter då hela omgången före
+    raderingen, så ett mejl räknas som raderat först när det inte heller finns
+    i All Mail; mejl som blivit kvar där utan mapp raderas via Trash. Går det
+    inte att avgöra hamnar mejlet i failed med en förklaring.
 
     Args:
         uid: UID:t som sträng, eller en lista med upp till 100 UID:n ur

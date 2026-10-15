@@ -299,12 +299,19 @@ async def permanent_delete_found(
     """UID STORE \\Deleted + UID EXPUNGE på found, som finns i den valda mappen (Trash/Drafts).
 
     Returnerar (ok, failed). Nekar Bridge EXPUNGE tas \\Deleted bort igen och
-    det kontrolleras vilka UID:n som ändå är borta. Är felet Code=2501
-    ("Message does not exist") väntas det, högst imap_client._GONE_TIMEOUT
-    sekunder: Bridge kan ha gjort ändringen i Proton och visar den först efter
-    nästa händelsehämtning (var 20:e–40:e sekund). Utkast som då försvunnit ur
-    mappen men blivit kvar i All Mail utan mapp raderas via Trash
-    (_delete_orphaned_drafts). Aldrig EXPUNGE utan UID.
+    det kontrolleras vilka UID:n som ändå är borta. Aldrig EXPUNGE utan UID.
+
+    Är felet Code=2501 ("Message does not exist") har Bridge (connector.go)
+    gjort UnlabelMessages för hela omgången och avbrutit FÖRE DeleteMessage:
+    mejlet som redan var raderat i Proton ger felet, och alla andra mejl i
+    omgången — vanliga som utkast — tappar mappen men raderas inte. De blir
+    kvar i All Mail utan mapp. Därför: identiteten hämtas medan mejlen syns,
+    sedan väntas det högst imap_client._GONE_TIMEOUT sekunder tills de
+    försvunnit ur mappen (Bridge visar ändringen först efter nästa
+    händelsehämtning, var 20:e–40:e sekund), och ett försvunnet mejl räknas
+    som raderat först när det inte heller finns i All Mail. Ligger det kvar
+    där raderas det via Trash (_settle_vanished). Går det inte att avgöra
+    hamnar mejlet i failed med en förklaring, aldrig i ok.
     """
     targets = uid_set(found)
     resp = await imap._uid("store", targets, "+FLAGS", r"(\Deleted)")
@@ -316,46 +323,29 @@ async def permanent_delete_found(
     # Lämna inte \Deleted kvar: nästa EXPUNGE i mappen skulle annars ta mejlen
     await imap._uid("store", targets, "-FLAGS", r"(\Deleted)")
     error = _failure(what, resp)
-    ok, failed = await _split_after_failure(imap, mailbox, found, error)
-    if not failed or _DOES_NOT_EXIST not in _response_text(resp):
-        return ok, failed
-    left = [f["uid"] for f in failed]
-    drafts = await _draft_identities(imap, mailbox, left)
-    gone, failed = await _wait_until_gone(imap, mailbox, left, error)
-    ok += gone
-    vanished = {uid: drafts[uid] for uid in gone if uid in drafts}
-    if vanished:
-        orphan_failed = await _delete_orphaned_drafts(imap, vanished)
-        bad = {f["uid"] for f in orphan_failed}
-        ok = [u for u in ok if u not in bad]
-        failed += orphan_failed
-    return ok, failed
+    if _DOES_NOT_EXIST not in _response_text(resp):
+        return await _split_after_failure(imap, mailbox, found, error)
+    identities = await _identities_for_check(imap, mailbox, found)
+    vanished, failed = await _split_after_failure(imap, mailbox, found, error)
+    if failed and not any(_UNCHECKED in f["error"] for f in failed):
+        gone, failed = await _wait_until_gone(imap, mailbox, [f["uid"] for f in failed], error)
+        vanished += gone
+    ok, more = await _settle_vanished(imap, mailbox, vanished, identities)
+    return ok, failed + more
 
 
-async def _draft_identities(imap: IMAPClient, mailbox: str, uids: list[str]) -> dict[str, dict]:
-    """Identitet (Message-ID, tid, storlek) för de UID:n i vald mapp som är utkast.
+# I felet från _split_after_failure när det inte gick att kontrollera mappen
+_UNCHECKED = "kunde inte kontrollera vilka som genomfördes"
 
-    Bästa försök: går det inte att avgöra blir svaret tomt, och då görs ingen
-    återställning av föräldralösa utkast.
-    """
+
+async def _identities_for_check(imap: IMAPClient, mailbox: str, uids: list[str]) -> dict[str, dict] | str:
+    """Identiteten (imap_labels._parse_identities) för uids i vald mapp, eller felet som text."""
     from .imap_labels import _fetch_identities_by_uid  # imap_labels bygger på den här modulen
 
     try:
-        resp = await imap._uid("fetch", uid_set(uids), "(UID FLAGS)")
-        if resp.result != "OK":
-            return {}
-        drafts = []
-        for line in resp.lines:
-            text = _decode(line)
-            uid_m, flags_m = _UID_RE.search(text), _FLAGS_RE.search(text)
-            if uid_m and flags_m and "\\draft" in flags_m.group(1).casefold().split():
-                drafts.append(uid_m.group(1))
-        if not drafts:
-            return {}
-        identities = await _fetch_identities_by_uid(imap, mailbox, drafts)
-    except ValueError:
-        return {}
-    return {uid: info for uid, info in identities.items() if uid in drafts and info["message_id"]}
+        return await _fetch_identities_by_uid(imap, mailbox, uids)
+    except ValueError as exc:
+        return str(exc)
 
 
 async def _wait_until_gone(
@@ -377,7 +367,7 @@ async def _wait_until_gone(
             await imap._select(mailbox)
             left, _ = await existing_uids(imap, mailbox, left)
         except ValueError as exc:
-            return [], fail_all(uids, f"{error} (kunde inte kontrollera vilka som genomfördes: {exc})")
+            return [], fail_all(uids, f"{error} ({_UNCHECKED}: {exc})")
         if not left or time.monotonic() >= deadline:
             break
     left_set = set(left)
@@ -385,49 +375,84 @@ async def _wait_until_gone(
     return [u for u in uids if u not in left_set], fail_all(left, error + note)
 
 
-async def _delete_orphaned_drafts(imap: IMAPClient, drafts: dict[str, dict]) -> list[dict[str, str]]:
-    """Raderar utkast som försvann ur Trash/Drafts men blev kvar i All Mail utan mapp.
+def _maybe_in_all_mail(uid: str, mailbox: str, why: str) -> str:
+    return (
+        f"Mejlet med UID {uid} försvann ur {mailbox}, men {why}. Bridge svarade Code=2501 och "
+        f"avbröt då raderingen: mejlen i samma omgång kan ha tappat {mailbox} utan att raderas, "
+        f"och ligger i så fall kvar i All Mail utan mapp. Kontrollera All Mail (search_emails "
+        f"med mailbox=\"All Mail\") och radera mejlet därifrån via Trash om det finns kvar."
+    )
 
-    Live: när Bridge svarat NO (Code=2501) på permanent radering av ett utkast
-    i Trash tog Proton bort Trash från utkastet men raderade det inte, så det
-    låg kvar i All Mail, osynligt i Drafts och Trash. Bridge raderar bara när
-    EXPUNGE lyckas (connector.go: RemoveMessagesFromMailbox → DeleteMessage).
-    Utkastet läggs därför i Trash igen med UID COPY från All Mail och raderas
-    där med UID STORE \\Deleted + UID EXPUNGE på just det UID:t. Returnerar
-    failed för utkast som inte gick att radera.
+
+async def _settle_vanished(
+    imap: IMAPClient, mailbox: str, vanished: list[str], identities: dict[str, dict] | str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Avgör om mejlen som försvunnit ur mailbox efter Code=2501 verkligen är raderade.
+
+    Ett mejl är raderat när det inte heller finns i All Mail. Ligger det
+    kvar där (föräldralöst: live sågs det för ett utkast, och enligt Bridges
+    connector.go gäller det alla mejl i omgången) läggs det i Trash igen med
+    UID COPY från All Mail och raderas där med UID STORE \\Deleted + UID
+    EXPUNGE på just det UID:t (_delete_orphan). Returnerar (ok, failed).
     """
-    from .imap_labels import _find_in_label  # imap_labels bygger på den här modulen
+    from .imap_labels import AMBIGUOUS, _find_in_label, searchable
 
+    if not vanished:
+        return [], []
+    if isinstance(identities, str):
+        why = f"det gick inte att hämta dess identitet för kontrollen i All Mail ({identities})"
+        return [], [{"uid": uid, "error": _maybe_in_all_mail(uid, mailbox, why)} for uid in vanished]
+    failed = [
+        {"uid": uid, "error": _maybe_in_all_mail(
+            uid, mailbox, "det saknar både X-Pm-Internal-Id och Message-ID, så det går inte att leta upp i All Mail"
+        )}
+        for uid in vanished if not searchable(identities.get(uid, {}))
+    ]
+    sources = {uid: identities[uid] for uid in vanished if searchable(identities.get(uid, {}))}
+    if not sources:
+        return [], failed
     try:
         await imap._select(ALL_MAIL)
-        orphans, _ = await _find_in_label(imap, ALL_MAIL, drafts)
+        orphans, errors = await _find_in_label(imap, ALL_MAIL, sources)
     except ValueError as exc:
-        logger.warning("Kunde inte leta efter föräldralösa utkast i All Mail: %s", exc)
-        return []
-    failed = []
+        logger.warning("Kunde inte kontrollera i All Mail efter Code=2501: %s", exc)
+        why = f"kontrollen i All Mail misslyckades ({exc})"
+        return [], failed + [{"uid": uid, "error": _maybe_in_all_mail(uid, mailbox, why)} for uid in sources]
+    ok = [uid for uid, error in errors.items() if AMBIGUOUS not in error]
+    failed += [
+        {"uid": uid, "error": _maybe_in_all_mail(
+            uid, mailbox, "All Mail har flera mejl som inte går att skilja från det, så det går inte att "
+            "avgöra om det raderades"
+        )}
+        for uid, error in errors.items() if AMBIGUOUS in error
+    ]
     for src_uid, all_mail_uid in orphans.items():
-        problem = await _delete_orphan(imap, src_uid, all_mail_uid, drafts[src_uid])
+        problem = await _delete_orphan(imap, src_uid, all_mail_uid, sources[src_uid])
         if problem:
             failed.append({"uid": src_uid, "error": (
-                f"Utkastet med UID {src_uid} försvann ur mappen men Proton raderade det inte: "
-                f"det låg kvar i All Mail utan mapp (UID {all_mail_uid} där). Ett nytt försök "
-                f"via Trash misslyckades: {problem}. Utkastet kan ligga kvar i Trash eller "
-                "bara i All Mail."
+                f"Mejlet med UID {src_uid} försvann ur {mailbox} men Proton raderade det inte: det låg "
+                f"kvar i All Mail utan mapp (UID {all_mail_uid} där). Det händer med alla mejl, även "
+                f"utkast, i en omgång där Bridge svarar Code=2501. Ett nytt försök via Trash "
+                f"misslyckades: {problem}. Mejlet kan ligga kvar i Trash eller bara i All Mail."
             )})
-    return failed
+        else:
+            ok.append(src_uid)
+    return ok, failed
 
 
 async def _delete_orphan(imap: IMAPClient, src_uid: str, all_mail_uid: str, identity: dict) -> str | None:
     """COPY från All Mail till Trash och permanent radering där. None om det gick."""
     from .imap_labels import _find_in_label
 
+    # Väljs om för varje mejl: förra varvet slutade i Trash
+    await imap._select(ALL_MAIL)
     resp = await imap._uid("copy", uid_set([all_mail_uid]), _quote_mailbox(TRASH))
     if resp.result != "OK":
         return _failure(f"Kopieringen till {TRASH}", resp)
     await imap._select(TRASH)
     found, errors = await _find_in_label(imap, TRASH, {src_uid: identity})
     if src_uid not in found:
-        return f"utkastet hittades inte i {TRASH} efter kopieringen"
+        return f"mejlet hittades inte entydigt i {TRASH} efter kopieringen"
     trash_uid = uid_set([found[src_uid]])
     resp = await imap._uid("store", trash_uid, "+FLAGS", r"(\Deleted)")
     if resp.result != "OK":
