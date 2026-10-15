@@ -99,7 +99,7 @@ def none_ok(bridge):
 
 @then(parsers.parse('ska mejlet "{mid}" bara ligga i "{views}"'))
 def only_in(bridge, mid, views):
-    assert bridge.views_of(bridge.twins.get(mid, mid)) == uid_list(views)
+    assert sorted(bridge.views_of(bridge.twins.get(mid, mid))) == sorted(uid_list(views))
 
 
 @then(parsers.parse('ska mejlet "{mid}" inte finnas i någon vy, inte heller All Mail'))

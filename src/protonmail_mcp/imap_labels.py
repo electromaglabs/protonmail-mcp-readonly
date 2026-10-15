@@ -16,6 +16,7 @@ from typing import Any
 
 from . import policy
 from .imap_bulk import (
+    _FLAGS_RE,
     BulkResult,
     _split_after_failure,
     existing_uids,
@@ -403,6 +404,19 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
 
 
 
+async def _without_flag(imap: IMAPClient, uids: list[str]) -> list[str]:
+    """De av uids i Starred (som är vald) som inte har \\Flagged."""
+    resp = await imap._uid("fetch", uid_set(sorted(set(uids), key=int)), "(UID FLAGS)")
+    _require_ok(resp, f"Hämtningen av flaggorna i {STARRED}")
+    unflagged: set[str] = set()
+    for line in resp.lines:
+        text = _decode(line)
+        uid_m, flags_m = _UID_RE.search(text), _FLAGS_RE.search(text)
+        if uid_m and flags_m and "\\flagged" not in flags_m.group(1).casefold().split():
+            unflagged.add(uid_m.group(1))
+    return [uid for uid in uids if uid in unflagged]
+
+
 async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -> None:
     """Tar bort avmarkerade mejl ur Starred-vyn (UID EXPUNGE på just deras UID:n där).
 
@@ -411,7 +425,10 @@ async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -
     Bridge hämtar händelserna från Proton, var 20:e–40:e sekund
     (internal/user/user.go: EventPeriod + EventJitter). Till dess ligger mejlet
     kvar i Starred utan \\Flagged. EXPUNGE i Starred tar bara bort Starred,
-    som för en etikett. Bästa försök: stjärnan är redan borta, så ett fel här
+    som för en etikett — men det tar bort stjärnan i Proton. Därför tas bara
+    UID:n i Starred bort som är samma Proton-mejl (_find_in_label,
+    X-Pm-Internal-Id) och som saknar \\Flagged: en tvilling med samma
+    Message-ID, tid och storlek som har kvar stjärnan rörs inte. Bästa försök: stjärnan är redan borta, så ett fel här
     loggas men ändrar inte svaret.
     """
     try:
@@ -426,7 +443,10 @@ async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -
             mapping, _ = await _find_in_label(imap, STARRED, sources)
         if mapping:
             await imap._select(STARRED)
-            _, errors = await _expunge_in_label(imap, STARRED, list(mapping.values()))
+            starred_uids = await _without_flag(imap, list(mapping.values()))
+            if not starred_uids:
+                return
+            _, errors = await _expunge_in_label(imap, STARRED, starred_uids)
             if errors:
                 logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", next(iter(errors.values())))
     except ValueError as exc:
