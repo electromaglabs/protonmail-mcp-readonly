@@ -3,6 +3,7 @@
 pytestmark i en conftest.py gäller inte testerna i katalogen, så markeringen
 sätts av en collection-hook i tests/integration/conftest.py.
 """
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_pyproject_deselects_integration_by_default():
-    tomllib = pytest.importorskip("tomllib")
     opts = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
     assert "-m 'not integration'" in opts["addopts"]
 

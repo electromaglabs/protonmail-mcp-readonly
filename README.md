@@ -19,7 +19,7 @@ Tool descriptions, server instructions, prompts and error messages are written i
 ## Requirements
 
 - [ProtonMail Bridge](https://proton.me/mail/bridge) v3, installed and signed in
-- Python 3.10 or newer
+- Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
 
 ## Installation
@@ -268,7 +268,7 @@ uv run pytest -m integration
 
 They need `.env` (or `PROTONMAIL_USERNAME`/`PROTONMAIL_PASSWORD`) and only read: LIST, STATUS, SELECT, SEARCH and `BODY.PEEK` fetches. The one test that sends a real email (`tests/integration/test_smtp.py`, to your own address) is skipped unless you also set `PROTONMAIL_ALLOW_SEND=1`.
 
-CI runs the unit and BDD tests on Python 3.10, 3.11 and 3.12.
+CI runs the unit and BDD tests on Python 3.12, 3.13 and 3.14.
 
 ## Known limitations
 
