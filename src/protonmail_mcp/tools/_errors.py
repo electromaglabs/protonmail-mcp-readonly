@@ -37,11 +37,11 @@ _CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
     socket.gaierror,  # värdnamnet går inte att slå upp
 )
 
-_UNREACHABLE = (
-    "Kan inte nå ProtonMail Bridge ({detail}) — körs Bridge? Starta Bridge-appen "
-    "och kontrollera att kontot är inloggat där, samt PROTONMAIL_IMAP_HOST/"
-    "PROTONMAIL_IMAP_PORT och PROTONMAIL_SMTP_HOST/PROTONMAIL_SMTP_PORT. "
-    "Försök sedan igen."
+_UNREACHABLE_PREFIX = "Kan inte nå ProtonMail Bridge"
+_UNREACHABLE_ADVICE = (
+    "Starta Bridge-appen och kontrollera att kontot är inloggat där, samt "
+    "PROTONMAIL_IMAP_HOST/PROTONMAIL_IMAP_PORT och PROTONMAIL_SMTP_HOST/"
+    "PROTONMAIL_SMTP_PORT. Försök sedan igen."
 )
 _MAYBE_SENT = (
     " Det är okänt om mejlet hann skickas, så det kan ha skickats: kontrollera "
@@ -130,7 +130,12 @@ def describe_error(exc: BaseException, *, tool_name: str, open_world: bool) -> s
             "Inget mejl skickades."
         )
     if isinstance(exc, _CONNECTION_ERRORS):
-        text = _UNREACHABLE.format(detail=_detail(exc))
+        detail = _detail(exc)
+        if detail.startswith(_UNREACHABLE_PREFIX):
+            # imap_client har redan formulerat det (med värd och port)
+            text = f"{detail}. {_UNREACHABLE_ADVICE}"
+        else:
+            text = f"{_UNREACHABLE_PREFIX} ({detail}) — körs Bridge? {_UNREACHABLE_ADVICE}"
         if open_world:
             text += _MAYBE_SENT
         return _scrub(text)

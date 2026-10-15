@@ -190,3 +190,14 @@ def test_every_registered_tool_is_wrapped():
 
 def test_module_has_logger():
     assert _errors.logger.name == "protonmail_mcp.tools._errors"
+
+
+def test_imap_clients_own_unreachable_text_is_not_repeated():
+    exc = ConnectionError(
+        "Kan inte nå ProtonMail Bridge på 127.0.0.1:1143 — körs Bridge? ([Errno 61] Connect call failed)"
+    )
+    text = describe(exc)
+    assert text.startswith("Kan inte nå ProtonMail Bridge på 127.0.0.1:1143")
+    assert text.count("Kan inte nå ProtonMail Bridge") == 1
+    assert text.count("körs Bridge?") == 1
+    assert "Starta Bridge-appen" in text
