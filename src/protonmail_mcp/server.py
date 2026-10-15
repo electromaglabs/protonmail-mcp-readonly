@@ -14,12 +14,14 @@ logger = logging.getLogger(__name__)
 class AppContext:
     imap: object  # IMAPClient — undviker tidig import av config
     smtp: object  # SMTPClient
+    watcher: object = None  # MailWatcher (imap_idle.py): bevakning av nya mejl
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     from .config import get_settings
     from .imap_client import IMAPClient
+    from .imap_idle import MailWatcher
     from .smtp_client import SMTPClient
 
     try:
@@ -37,10 +39,16 @@ async def lifespan(server: FastMCP):
 
     prepare_attachment_dir(s)  # kastar aldrig, varnar bara
     imap = IMAPClient(s)
+    # Egna anslutningar i bakgrunden; start() väntar inte på Bridge
+    watcher = MailWatcher(s)
+    watcher.start()
     try:
-        yield AppContext(imap=imap, smtp=SMTPClient(s))
+        yield AppContext(imap=imap, smtp=SMTPClient(s), watcher=watcher)
     finally:
-        await imap.disconnect()
+        try:
+            await watcher.stop()
+        finally:
+            await imap.disconnect()
 
 
 # Skickas till modellen när sessionen startar (initialize). Kort: detaljerna
