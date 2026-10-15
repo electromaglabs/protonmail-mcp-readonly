@@ -817,7 +817,10 @@ class IMAPClient:
         await self._require_uid(mailbox, safe_uid)
         from . import imap_bulk  # imap_bulk bygger på den här modulen
 
-        if await imap_bulk.already_in_target(self, mailbox, [safe_uid], target):
+        skipped, unclear = await imap_bulk.already_in_target(self, mailbox, [safe_uid], target)
+        if unclear:
+            raise ValueError(unclear[0]["error"])
+        if skipped:
             return {
                 "ok": [safe_uid], "failed": [],
                 "note": imap_bulk.already_there_note([safe_uid], mailbox, target),

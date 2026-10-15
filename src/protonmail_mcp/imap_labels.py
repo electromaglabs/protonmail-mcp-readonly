@@ -51,12 +51,16 @@ LABEL_PREFIX = "Labels/"
 STARRED = "Starred"
 # Systemmappar (och behållarna Folders/Labels) som inte är etiketter
 _NOT_LABELS = ("inbox", "archive", "sent", "spam", "trash", "drafts", "all mail", "folders", "labels")
-# Mejlets identitet i en vy. Samma mejl har samma värden i alla vyer (verifierat
-# live mot Bridge). Ett mejl till sig själv är ETT Proton-mejl med både Inbox och
-# Sent (verifierat live), alltså samma värden i INBOX och Sent. Två olika mejl med
-# samma Message-ID (t.ex. samma mejl importerat två gånger, eller kopior via en
-# e-postlista) skiljs åt på tid och storlek.
-_IDENTITY_ITEMS = "(UID INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+# Mejlets identitet i en vy. X-Pm-Internal-Id är Protons eget mejl-id, som Bridge
+# sätter på alla mejl: samma i alla vyer för samma Proton-mejl, olika för olika
+# mejl (verifierat live). Ett mejl till sig själv är ETT Proton-mejl med både
+# Inbox och Sent, alltså samma id i INBOX och Sent. Message-ID, tid och storlek
+# räcker INTE: live finns två olika mejl i Trash med samma tre värden. De används
+# bara som reserv när rubriken saknas, och då räknas flera träffar som tvetydiga.
+_IDENTITY_ITEMS = "(UID INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID X-PM-INTERNAL-ID)])"
+_INTERNAL_ID_HEADER = "X-Pm-Internal-Id"
+# Protons id:n är base64url (88 tecken live); allt annat litar vi inte på
+_INTERNAL_ID_RE = re.compile(r"[A-Za-z0-9+/=_-]{1,200}")
 _INTERNALDATE_RE = re.compile(r'INTERNALDATE\s+"([^"]*)"', re.IGNORECASE)
 _SIZE_RE = re.compile(r'RFC822\.SIZE\s+(\d+)', re.IGNORECASE)
 # Så många Message-ID per SEARCH (OR-kedja); Bridge går igenom hela vyn per sökning
@@ -149,7 +153,7 @@ def _usable_message_id(value: str | None) -> str | None:
 
 
 def _parse_identities(lines: list) -> dict[str, dict[str, Any]]:
-    """UID → {"message_id", "date", "size"} ur ett FETCH-svar med _IDENTITY_ITEMS.
+    """UID → {"message_id", "internal_id", "date", "size"} ur ett FETCH-svar med _IDENTITY_ITEMS.
 
     UID och övriga fält kan stå både före och efter header-literalen (Bridge
     lägger UID efter vid UID FETCH), och svaren kan komma i valfri ordning.
@@ -183,13 +187,29 @@ def _parse_identities(lines: list) -> dict[str, dict[str, Any]]:
         size_m = _SIZE_RE.search(meta)
         # Som get_thread: UTF-8, annars latin-1 — aldrig surrogattecken som
         # skulle få aioimaplib att kasta mitt i SEARCH-kommandot
-        message_id = HeaderParser().parsestr(_decode_header_bytes(raw)).get("message-id") if raw else None
+        headers = HeaderParser().parsestr(_decode_header_bytes(raw)) if raw else None
+        message_id = headers.get("message-id") if headers is not None else None
+        internal_ids = (headers.get_all(_INTERNAL_ID_HEADER) or []) if headers is not None else []
         out[uid_m.group(1)] = {
             "message_id": _usable_message_id(str(message_id)) if message_id else None,
+            # Bara ett enda, välformat värde räknas; annars reservvägen
+            "internal_id": _usable_internal_id(internal_ids),
             "date": date_m.group(1) if date_m else None,
             "size": size_m.group(1) if size_m else None,
         }
     return out
+
+
+def _usable_internal_id(values: list) -> str | None:
+    if len(values) != 1:
+        return None
+    value = str(values[0]).strip()
+    return value if _INTERNAL_ID_RE.fullmatch(value) else None
+
+
+def searchable(info: dict) -> bool:
+    """Om mejlet går att leta upp i en annan vy (via X-Pm-Internal-Id eller Message-ID)."""
+    return bool(info.get("internal_id") or info.get("message_id"))
 
 
 async def _fetch_identities_by_uid(imap: IMAPClient, mailbox: str, uids: list[str]) -> dict[str, dict]:
@@ -198,21 +218,55 @@ async def _fetch_identities_by_uid(imap: IMAPClient, mailbox: str, uids: list[st
     return _parse_identities(resp.lines)
 
 
+# Felet från _find_in_label när mejlet inte finns i vyn, och när det inte går
+# att avgöra vilket av flera likadana mejl det är
+NOT_IN_VIEW = "har inte etiketten"
+AMBIGUOUS = "flera mejl"
+
+
+def _search_term(info: dict) -> str:
+    if info.get("internal_id"):
+        return f"HEADER {_INTERNAL_ID_HEADER} {_imap_quoted(info['internal_id'], _INTERNAL_ID_HEADER)}"
+    return f"HEADER Message-ID {_imap_quoted(info['message_id'], 'Message-ID')}"
+
+
+def _same_mail(info: dict, candidates: dict[str, dict]) -> tuple[list[str], bool]:
+    """(UID:n i vyn som är samma mejl som info, om svaret är säkert).
+
+    Med X-Pm-Internal-Id: exakt samma id. Ett mejl i vyn som saknar id men
+    har samma Message-ID, tid och storlek gör svaret osäkert. Utan id:
+    Message-ID, tid och storlek — mer än en träff är tvetydigt.
+    """
+    def legacy(cand: dict) -> bool:
+        return (
+            bool(info.get("message_id")) and cand["message_id"] == info["message_id"]
+            and cand["date"] == info["date"] and cand["size"] == info["size"]
+        )
+
+    if info.get("internal_id"):
+        same = [uid for uid, cand in candidates.items() if cand.get("internal_id") == info["internal_id"]]
+        unknown = [uid for uid, cand in candidates.items() if not cand.get("internal_id") and legacy(cand)]
+        return same + unknown, len(same) <= 1 and not unknown
+    same = [uid for uid, cand in candidates.items() if legacy(cand)]
+    return same, len(same) <= 1
+
+
 async def _find_in_label(
     imap: IMAPClient, label: str, sources: dict[str, dict]
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Hittar varje källmejls UID i etikettens vy (som måste vara vald).
 
-    Söker med SEARCH HEADER Message-ID (Bridge matchar som delsträng) och
-    jämför sedan exakt Message-ID, INTERNALDATE och storlek. Returnerar
-    (käll-UID → etikett-UID, käll-UID → fel).
+    Söker med SEARCH HEADER X-Pm-Internal-Id, eller HEADER Message-ID när
+    id:t saknas (Bridge matchar båda som delsträng), och jämför sedan exakt
+    (_same_mail). Returnerar (käll-UID → etikett-UID, käll-UID → fel); felet
+    innehåller NOT_IN_VIEW när mejlet inte finns i vyn och AMBIGUOUS när det
+    inte går att avgöra vilket av flera mejl det är.
     """
-    message_ids = sorted({info["message_id"] for info in sources.values()})
+    terms = sorted({_search_term(info) for info in sources.values() if searchable(info)})
     seqnums: set[str] = set()
-    for start in range(0, len(message_ids), _SEARCH_GROUP):
-        group = message_ids[start:start + _SEARCH_GROUP]
-        terms = [f"HEADER Message-ID {_imap_quoted(mid, 'Message-ID')}" for mid in group]
-        criteria = ["OR"] * (len(terms) - 1) + terms
+    for start in range(0, len(terms), _SEARCH_GROUP):
+        group = terms[start:start + _SEARCH_GROUP]
+        criteria = ["OR"] * (len(group) - 1) + group
         seqnums.update(await imap._search_seqnums(criteria))
 
     candidates: dict[str, dict] = {}
@@ -226,17 +280,13 @@ async def _find_in_label(
     found: dict[str, str] = {}
     errors: dict[str, str] = {}
     for src_uid, info in sources.items():
-        same = [
-            uid for uid, cand in candidates.items()
-            if cand["message_id"] == info["message_id"]
-            and cand["date"] == info["date"] and cand["size"] == info["size"]
-        ]
+        same, certain = _same_mail(info, candidates) if searchable(info) else ([], True)
         if not same:
-            errors[src_uid] = f"Mejlet med UID {src_uid} har inte etiketten {label}."
-        elif len(same) > 1:
+            errors[src_uid] = f"Mejlet med UID {src_uid} {NOT_IN_VIEW} {label}."
+        elif not certain:
             errors[src_uid] = (
-                f"Det finns flera mejl i {label} som inte går att skilja från UID {src_uid} "
-                f"(samma Message-ID, tid och storlek), så etiketten tas inte bort. "
+                f"Det finns {AMBIGUOUS} i {label} som inte går att skilja från UID {src_uid} "
+                f"(samma Message-ID, tid och storlek), så det går inte att avgöra vilket det är. "
                 f"Lista {label} och ange UID:t där med mailbox=\"{label}\"."
             )
         else:
@@ -305,7 +355,8 @@ async def add_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str)
 async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str) -> BulkResult:
     """Tar bort etiketten från mejlen utan att flytta eller radera dem.
 
-    Mejlets UID i etikettens vy hittas via Message-ID (UID:n gäller per vy);
+    Mejlets UID i etikettens vy hittas via X-Pm-Internal-Id, eller Message-ID
+    om id:t saknas (UID:n gäller per vy);
     där görs UID STORE \\Deleted + UID EXPUNGE på just de UID:na, vilket hos
     Bridge bara tar bort etiketten. Är mailbox etiketten själv används UID:na direkt.
     """
@@ -328,10 +379,10 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
             info = identities.get(uid)
             if info is None:
                 failed.append({"uid": uid, "error": missing_error(uid, mailbox)})
-            elif not info["message_id"]:
+            elif not searchable(info):
                 failed.append({"uid": uid, "error": (
-                    f"Mejlet med UID {uid} i {mailbox} saknar Message-ID (eller har ett som inte "
-                    f"går att söka på) och kan inte hittas i "
+                    f"Mejlet med UID {uid} i {mailbox} saknar Message-ID och X-Pm-Internal-Id "
+                    f"(eller har värden som inte går att söka på) och kan inte hittas i "
                     f"{target}. Lista {target} och ange UID:t där med mailbox=\"{target}\"."
                 )})
             else:
@@ -368,7 +419,7 @@ async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -
             mapping = {uid: uid for uid in uids}
         else:
             identities = await _fetch_identities_by_uid(imap, mailbox, uids)
-            sources = {uid: info for uid, info in identities.items() if uid in uids and info["message_id"]}
+            sources = {uid: info for uid, info in identities.items() if uid in uids and searchable(info)}
             if not sources:
                 return
             await imap._select(STARRED)

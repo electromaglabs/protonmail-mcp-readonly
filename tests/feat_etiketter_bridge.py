@@ -15,6 +15,7 @@ och vad som aldrig fick skickas (t.ex. EXPUNGE utan UID).
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -25,6 +26,7 @@ from protonmail_mcp.mailbox_names import decode_modified_utf7
 
 WRITES = {"UID MOVE", "UID COPY", "UID STORE", "UID EXPUNGE", "EXPUNGE", "CREATE", "DELETE", "RENAME"}
 _HEADER_MID_RE = re.compile(r'HEADER Message-ID "((?:[^"\\]|\\.)*)"', re.IGNORECASE)
+_HEADER_PMID_RE = re.compile(r'HEADER X-Pm-Internal-Id "((?:[^"\\]|\\.)*)"', re.IGNORECASE)
 
 
 def _ok(*lines):
@@ -41,6 +43,9 @@ def _is_label(name: str) -> bool:
 
 class LabelBridge:
     SYSTEM = ("INBOX", "Drafts", "Sent", "Starred", "Archive", "Spam", "Trash", "All Mail")
+    # Bridge sätter X-Pm-Internal-Id (Protons mejl-id) på alla mejl. Av som
+    # standard här, så att äldre tester prövar reservvägen utan rubriken.
+    internal_ids = False
 
     def __init__(self) -> None:
         # vy → {uid: Message-ID}
@@ -78,6 +83,14 @@ class LabelBridge:
         self.views.setdefault(view, {})[uid] = message_id
         self.next_uid[view] = max(self.next_uid.get(view, 0), int(uid))
         return message_id
+
+    def internal_id(self, key: str) -> str:
+        """Protons mejl-id för mejlet: samma i alla vyer, olika för olika mejl."""
+        return "pm" + hashlib.sha1(key.encode()).hexdigest()
+
+    def shown_message_id(self, key: str) -> str:
+        """Message-ID-rubriken som FETCH visar för mejlet med nyckeln key."""
+        return key
 
     def views_of(self, message_id: str) -> list[str]:
         return [v for v, uids in self.views.items() if message_id in uids.values()]
@@ -136,7 +149,10 @@ class LabelBridge:
             if "RFC822.SIZE" in items:
                 parts.append(f"RFC822.SIZE {msg['size']}")
             if "MESSAGE-ID" in items.upper():
-                literal = f"Message-Id: {mid}\r\n\r\n".encode()
+                text = f"Message-Id: {self.shown_message_id(mid)}\r\n"
+                if self.internal_ids and "X-PM-INTERNAL-ID" in items.upper():
+                    text += f"X-Pm-Internal-Id: {self.internal_id(mid)}\r\n"
+                literal = f"{text}\r\n".encode()
                 head = " ".join(parts + [f"BODY[HEADER.FIELDS (MESSAGE-ID)] {{{len(literal)}}}"])
                 lines.append(f"{seq} FETCH ({head}".encode())
                 lines.append(bytearray(literal))
@@ -176,9 +192,12 @@ class LabelBridge:
         if "SEARCH" in self.refuse:
             return _no(self.refuse["SEARCH"])
         terms = [re.sub(r'\\(.)', r'\1', t).casefold() for t in _HEADER_MID_RE.findall(text)]
+        pm_terms = [re.sub(r'\\(.)', r'\1', t).casefold() for t in _HEADER_PMID_RE.findall(text)]
+        view = self.views[self.selected]
         hits = [
             str(seq) for seq, uid in enumerate(self._sorted_uids(self.selected), start=1)
-            if any(t in self.views[self.selected][uid].casefold() for t in terms)
+            if any(t in self.shown_message_id(view[uid]).casefold() for t in terms)
+            or (self.internal_ids and any(t in self.internal_id(view[uid]) for t in pm_terms))
         ]
         return _ok(" ".join(hits).encode())
 

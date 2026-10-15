@@ -156,40 +156,48 @@ async def set_flags(imap: IMAPClient, mailbox: str, uids: list[str], flags: str,
     return await store_flags(imap, mailbox, uids, flags, add, "Ändringen av flaggorna")
 
 
-async def already_in_target(imap: IMAPClient, mailbox: str, uids: list[str], target: str) -> list[str]:
-    """De av uids (som finns i den valda mappen mailbox) vars mejl redan ligger i target.
+async def already_in_target(
+    imap: IMAPClient, mailbox: str, uids: list[str], target: str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """(UID:n vars mejl redan ligger i target, failed för UID:n där det inte går att avgöra).
 
-    Gäller bara när target är Trash eller Drafts: flyttas ett mejl dit som
-    redan ligger där tar Bridge (gluon) först bort det därifrån, och Proton
-    svarar sedan "Message does not exist" (Code=2501) — mejlet är då raderat
-    permanent. Det händer live med ett mejl till sig själv, som är ETT
-    Proton-mejl med både Inbox och Sent: efter att INBOX-kopian flyttats till
-    Trash visar Bridges Sent-vy det i 20–40 s till (händelsehämtningen).
+    uids finns i den valda mappen mailbox. Gäller bara när target är Trash
+    eller Drafts: flyttas ett mejl dit som redan ligger där tar Bridge (gluon)
+    först bort det därifrån, och Proton svarar sedan "Message does not exist"
+    (Code=2501) — mejlet är då raderat permanent. Det händer live med ett mejl
+    till sig själv, som är ETT Proton-mejl med både Inbox och Sent: efter att
+    INBOX-kopian flyttats till Trash visar Bridges Sent-vy det i 20–40 s till
+    (händelsehämtningen).
 
-    Mejlen känns igen på exakt Message-ID, tid och storlek, med en SEARCH i
-    target för upp till 20 Message-ID åt gången (imap_labels._find_in_label).
-    UID:n utan Message-ID kontrolleras inte. Mappen mailbox är vald igen
-    efteråt. Ett nekat FETCH eller SEARCH ger ValueError — då har inget skrivits.
+    Mejlen känns igen på X-Pm-Internal-Id (Protons mejl-id), med Message-ID,
+    tid och storlek som reserv när id:t saknas (imap_labels._find_in_label).
+    Fail-closed åt båda håll: finns flera mejl i target som inte går att
+    skilja från källan flyttas mejlet inte, men det räknas inte heller som
+    klart — det hamnar i failed med en förklaring. UID:n som saknar både id
+    och Message-ID kontrolleras inte. Mappen mailbox är vald igen efteråt.
+    Ett nekat FETCH eller SEARCH ger ValueError — då har inget skrivits.
     """
     if _mailbox_key(target) not in _READD_DELETES or not uids:
-        return []
-    from .imap_labels import _fetch_identities_by_uid, _find_in_label  # imap_labels bygger på den här modulen
+        return [], []
+    from .imap_labels import AMBIGUOUS, _fetch_identities_by_uid, _find_in_label, searchable
 
     identities = await _fetch_identities_by_uid(imap, mailbox, uids)
-    sources = {uid: identities[uid] for uid in uids if uid in identities and identities[uid]["message_id"]}
+    sources = {uid: identities[uid] for uid in uids if uid in identities and searchable(identities[uid])}
     if not sources:
-        return []
+        return [], []
     await imap._select(target)
     found, errors = await _find_in_label(imap, target, sources)
     await imap._select(mailbox)
-    # Fail-closed: bara "finns inte där" räknas som frånvarande. Flera
-    # likadana mejl i target räknas som att mejlet redan ligger där.
-    absent = {uid for uid, error in errors.items() if _NOT_IN_VIEW in error}
-    return [uid for uid in sources if uid in found or (uid in errors and uid not in absent)]
-
-
-# Felet från imap_labels._find_in_label när mejlet inte finns i vyn
-_NOT_IN_VIEW = "har inte etiketten"
+    unclear = [
+        {"uid": uid, "error": (
+            f"UID {uid} i {mailbox} flyttades inte till {target}: det går inte att avgöra om "
+            f"mejlet redan ligger där. {target} har flera mejl med samma Message-ID, tid och "
+            f"storlek, och en flytt dit av ett mejl som redan ligger där raderar det permanent. "
+            f"Kontrollera {target} med list_emails och flytta mejlet själv om det behövs."
+        )}
+        for uid, error in errors.items() if AMBIGUOUS in error
+    ]
+    return [uid for uid in sources if uid in found], unclear
 
 
 def already_there_note(uids: list[str], mailbox: str, target: str) -> str:
@@ -209,8 +217,10 @@ async def _move_found(imap: IMAPClient, mailbox: str, uids: list[str], target: s
     await imap._ensure_connected()
     await imap._select(mailbox)
     found, failed = await existing_uids(imap, mailbox, uids)
-    skipped = await already_in_target(imap, mailbox, found, target)
-    to_move = [uid for uid in found if uid not in skipped]
+    skipped, unclear = await already_in_target(imap, mailbox, found, target)
+    failed += unclear
+    held = set(skipped) | {f["uid"] for f in unclear}
+    to_move = [uid for uid in found if uid not in held]
     ok: list[str] = list(skipped)
     if to_move:
         resp = await imap._uid("move", uid_set(to_move), quoted_target)

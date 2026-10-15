@@ -88,6 +88,8 @@ async def move_email(
     mejl till sig själv i både INBOX och Sent, och Bridges vyer släpar 20–40 s
     efter en flytt. En ny flytt dit skulle få Bridge att radera mejlet
     permanent. Mejlet räknas som ok och svaret förklarar det i "note".
+    Samma mejl känns igen på Protons mejl-id; går det inte att avgöra (flera
+    likadana mejl i målet) flyttas mejlet inte och det blir ett fel.
 
     Args:
         uid: UID:t som sträng, eller en lista med upp till 100 UID:n ur
@@ -134,7 +136,8 @@ async def delete_email(
     flytt. Ligger mejlet redan i Trash (t.ex. Sent-kopian strax efter att
     INBOX-kopian tagits bort) görs ingenting med det, eftersom Bridge då
     skulle radera det permanent; det räknas som ok och svaret förklarar det
-    i "note".
+    i "note". Samma mejl känns igen på Protons mejl-id; går det inte att
+    avgöra (flera likadana mejl i Trash) flyttas mejlet inte och det blir ett fel.
 
     permanent=True: raderar mejlet permanent. Går bara när mailbox är Trash
     (eller Drafts för utkast) och kan inte ångras. Har mejlet kvar en etikett
