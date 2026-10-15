@@ -91,7 +91,7 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
 
 
 def _strip_dots_and_space(text: str) -> str:
-    """Ta bort inledande punkter (dolda filer, "..") och avslutande punkter,
+    r"""Ta bort inledande punkter (dolda filer, "..") och avslutande punkter,
     även blandat med blanktecken som " . .dold". Linjär tid — ett regex som
     [\s.]+$ blir kvadratiskt på långa serier, och namnet styrs av avsändaren."""
     start, end = 0, len(text)

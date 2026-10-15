@@ -84,15 +84,24 @@ def has_entry(state, audit_records, action, result):
     state["entry"] = entry
 
 
-@then(parsers.parse('ska raden ha mottagarna "{addresses}" och mejlets Message-ID'))
-def entry_recipients_and_id(state, addresses):
-    assert state["entry"]["recipients"] == addresses.split(", ")
+@then(parsers.parse('ska raden ha antalet mottagare {count:d} men inte adressen "{address}", och mejlets Message-ID'))
+def entry_recipients_and_id(state, count, address):
+    assert state["entry"]["recipients"] == {"count": count}
+    assert address not in json.dumps(state["entry"], ensure_ascii=False)
     assert state["entry"]["message_id"] == state["captured"].message["Message-ID"]
 
 
-@then(parsers.parse('ska raden ha mottagarna "{addresses}"'))
-def entry_recipients(state, addresses):
-    assert state["entry"]["recipients"] == addresses.split(", ")
+@then(parsers.parse('ska raden ha antalet mottagare {count:d} men inte adressen "{address}"'))
+def entry_recipients(state, count, address):
+    assert state["entry"]["recipients"] == {"count": count}
+    assert address not in json.dumps(state["entry"], ensure_ascii=False)
+
+
+@then(parsers.parse('ska filens rad ha mottagarna "{addresses}"'))
+def file_entry_recipients(state, addresses):
+    lines = state["audit_path"].read_text().strip().splitlines()
+    entries = [json.loads(line) for line in lines if json.loads(line)["action"] == "send"]
+    assert entries[-1]["recipients"] == addresses.split(", ")
 
 
 @then(parsers.parse('ska raden inte innehålla "{subject}", "{body}" eller lösenordet'))

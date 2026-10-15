@@ -32,7 +32,7 @@ def test_record_has_fixed_and_given_fields(records):
     assert entry["action"] == "send"
     assert entry["result"] == "ok"
     assert entry["tool"] is None
-    assert entry["recipients"] == ["a@x.se"]
+    assert entry["recipients"] == {"count": 1}  # adresserna bara i granskningsfilen
     assert entry["message_id"] == "<m@x>"
     assert entry["ts"].endswith("+00:00")
 

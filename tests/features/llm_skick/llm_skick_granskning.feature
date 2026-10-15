@@ -2,19 +2,21 @@ Feature: Granskningslogg över skick och ändringar
   Som användare som låter en LLM arbeta med mitt konto
   vill jag i efterhand kunna se vad som skickades och ändrades, och när,
   utan att loggen själv läcker innehållet i mina mejl eller lösenordet.
+  Raden på stderr (som klienten ofta sparar i sin loggfil) har bara antalet
+  mottagare; adresserna — även Bcc — finns bara i den uttryckliga granskningsfilen.
 
   Scenario: Ett skick loggas som en JSON-rad utan ämne, brödtext eller lösenord
     Given en SMTP-klient för ett konto utan begränsningar
     When koden skickar ett mejl till "anna@exempel.se" med ämnet "Hemligt ämne" och texten "Hemlig text"
     Then ska granskningsloggen ha en rad med åtgärden "send" och resultatet "ok"
-    And ska raden ha mottagarna "anna@exempel.se" och mejlets Message-ID
+    And ska raden ha antalet mottagare 1 men inte adressen "anna@exempel.se", och mejlets Message-ID
     And ska raden inte innehålla "Hemligt ämne", "Hemlig text" eller lösenordet
 
   Scenario: Ett vägrat skick loggas med resultatet fel
     Given en SMTP-klient för ett konto med inställningen "allowed_recipients" satt till "@exempel.se"
     When koden skickar ett mejl till "ond@annat.se" med ämnet "Hej" och texten "Hej"
     Then ska granskningsloggen ha en rad med åtgärden "send" och resultatet "error"
-    And ska raden ha mottagarna "ond@annat.se"
+    And ska raden ha antalet mottagare 1 men inte adressen "ond@annat.se"
 
   Scenario: En flytt via ett verktyg loggas med verktyg, mapp och UID
     Given Bridge har mejlen med UID "5" i varje mapp
@@ -40,6 +42,7 @@ Feature: Granskningslogg över skick och ändringar
     When koden skickar ett mejl till "anna@exempel.se" med ämnet "Hej" och texten "Hej"
     Then ska filen ha rättigheterna 0600
     And ska filen innehålla en JSON-rad med åtgärden "send"
+    And ska filens rad ha mottagarna "anna@exempel.se"
 
   Scenario: Granskningsloggen skrivs aldrig genom en symlänk
     Given granskningsloggen ska skrivas till en symlänk som pekar på en annan fil
