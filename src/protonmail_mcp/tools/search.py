@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 from pydantic import Field
 
 from . import _get_app, READ_ONLY, tool

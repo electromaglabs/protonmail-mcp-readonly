@@ -3,8 +3,8 @@ import logging
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from mcp.server.fastmcp import Context
-from mcp.types import ToolAnnotations
+from .._sdk import Context
+from .._sdk import ToolAnnotations
 
 from ..server import AppContext, mcp
 from ._errors import with_error_messages

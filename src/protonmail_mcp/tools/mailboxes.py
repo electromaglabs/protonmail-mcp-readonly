@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from ._types import Mailbox
 from . import _get_app, READ_ONLY, tool

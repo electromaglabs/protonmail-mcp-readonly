@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 from pydantic import Field
 
 from ..email_parser import clean_raw_headers, decode_header_value, parse_email, suspicious_reasons

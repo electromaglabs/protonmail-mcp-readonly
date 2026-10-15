@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from ..imap_client import _LEVEL_SEP_RE
 from . import _get_app, ADDS, DESTRUCTIVE, tool

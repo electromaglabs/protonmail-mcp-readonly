@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from ..attachments import load_for_sending
 from . import _get_app, SENDS, tool

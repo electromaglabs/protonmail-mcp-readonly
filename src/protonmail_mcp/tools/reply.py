@@ -8,7 +8,7 @@ from email.headerregistry import Address
 from email.message import EmailMessage, Message
 from email.utils import parseaddr, parsedate_to_datetime
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from .. import imap_labels
 from ..attachments import load_for_sending

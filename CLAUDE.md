@@ -28,8 +28,9 @@ startar `MailWatcher` (egna IDLE-anslutningar). Loggning går bara till stderr �
 | Modul | Ansvar |
 |-------|--------|
 | `__init__.py` | `__version__` ur paketets metadata; versionens enda källa är `version` i pyproject.toml (servern anger den i serverInfo) |
+| `_sdk.py` | Det enda stället som importerar MCP-SDK:ns serverdelar (`MCPServer`, `Context`, `ToolError`, `Resource`, `ResourceTemplate`, `ToolAnnotations`); övriga moduler importerar härifrån |
 | `__main__.py` | `python -m protonmail_mcp` startar `server.main()` |
-| `server.py` | FastMCP-instansen `mcp` (`_GuardedFastMCP` vägrar verktyg efter policy innan de körs), `INSTRUCTIONS` till modellen, `lifespan`, `register_tools()`, `main()` och lyssnaren som gör nya mejl till resursnotiser |
+| `server.py` | Serverinstansen `mcp` (`_GuardedMCPServer` vägrar verktyg efter policy innan de körs), `INSTRUCTIONS` till modellen, `lifespan`, `register_tools()`, `main()` och lyssnaren som gör nya mejl till resursnotiser |
 | `config.py` | `Settings` (pydantic-settings, prefix `PROTONMAIL_`), tolkning av `ALLOWED_RECIPIENTS` (IDNA2008) och `WATCH_MAILBOXES` |
 | `policy.py` | Skrivskydd, skickläge, mottagarlista, mottagar- och timgräns; `write_operation`-dekoratorn och verktygslistorna `WRITE_TOOLS`/`DRAFT_TOOLS`/`SEND_TOOLS` |
 | `audit.py` | Granskningslogg: en JSON-rad per skick och skrivande IMAP-operation, maskerad på stderr, fullständig i `PROTONMAIL_AUDIT_LOG` |

@@ -3,7 +3,7 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from mcp.server.fastmcp import FastMCP
+from ._sdk import MCPServer
 
 from . import __version__
 
@@ -33,7 +33,7 @@ async def notify_new_mail(mailbox: str, messages: list[dict]) -> None:
 
 
 @asynccontextmanager
-async def lifespan(server: FastMCP):
+async def lifespan(server: MCPServer):
     from .config import get_settings
     from .imap_client import IMAPClient
     from .imap_idle import MailWatcher
@@ -92,8 +92,8 @@ E-post i Proton Mail via ProtonMail Bridge.
 """
 
 
-class _GuardedFastMCP(FastMCP):
-    """FastMCP som vägrar verktyg som policyn inte tillåter, innan de körs.
+class _GuardedMCPServer(MCPServer):
+    """MCP-server som vägrar verktyg som policyn inte tillåter, innan de körs.
 
     Den egentliga spärren sitter i IMAP- och SMTP-klienterna (policy.py);
     här vägras t.ex. reply_to_email redan innan originalet läses.
@@ -115,7 +115,7 @@ class _GuardedFastMCP(FastMCP):
             audit.current_tool.reset(token)
 
 
-mcp = _GuardedFastMCP("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
+mcp = _GuardedMCPServer("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
 # serverInfo.version i initialize: FastMCP tar annars mcp-bibliotekets version
 mcp._mcp_server.version = __version__
 

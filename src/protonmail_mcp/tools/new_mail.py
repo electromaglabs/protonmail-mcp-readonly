@@ -15,7 +15,7 @@ så ett påhittat högt since_uid kan inte dölja kommande mejl.
 import asyncio
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 from pydantic import Field
 
 from ..imap_client import _quote_mailbox, _validate_uid

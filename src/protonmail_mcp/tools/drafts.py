@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from email.message import EmailMessage, Message
 from typing import Any, Literal
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from .. import imap_drafts
 from ..email_parser import decode_header_value

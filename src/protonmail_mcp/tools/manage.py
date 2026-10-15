@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 
 from .. import imap_bulk
 from ..imap_bulk import BulkResult

@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote, unquote
 
-from mcp.server.fastmcp.resources import Resource, ResourceTemplate
+from ._sdk import Resource, ResourceTemplate
 from pydantic import Field
 
 MAILBOXES_URI = "mailboxes://"

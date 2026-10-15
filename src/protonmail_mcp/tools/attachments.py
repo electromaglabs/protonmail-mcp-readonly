@@ -2,7 +2,7 @@ import base64
 import hashlib
 from typing import Annotated
 
-from mcp.server.fastmcp import Context
+from .._sdk import Context
 from pydantic import Field
 
 from .. import attachments as attachment_files

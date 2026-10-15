@@ -19,7 +19,7 @@ from urllib.parse import quote, quote_plus
 
 import aioimaplib
 import aiosmtplib
-from mcp.server.fastmcp.exceptions import ToolError
+from .._sdk import ToolError
 
 from .. import config
 from ..imap_client import IMAPAuthenticationError
