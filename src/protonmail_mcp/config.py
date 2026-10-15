@@ -64,6 +64,45 @@ def parse_allowed_recipients(raw: str) -> tuple[tuple[str, str], ...]:
     return tuple(rules)
 
 
+# Varje bevakad mapp är en egen IMAP-anslutning till Bridge
+MAX_WATCH_MAILBOXES = 5
+# Samma regel som imap_client._validate_mailbox (importeras inte härifrån:
+# imap_client importerar config): inga kontrolltecken eller ensamma surrogater
+_WATCH_MAILBOX_RE = re.compile(r'[^\x00-\x1F\x7F\uD800-\uDFFF]{1,255}')
+
+
+@lru_cache(maxsize=8)
+def parse_watch_mailboxes(raw: str) -> tuple[str, ...]:
+    """Tolka PROTONMAIL_WATCH_MAILBOXES till en lista med unika mappnamn.
+
+    Kommaseparerat, blanktecken runt namnen tas bort. INBOX jämförs utan
+    hänsyn till skiftläge (RFC 3501) och skrivs alltid "INBOX"; övriga namn
+    behålls exakt. ValueError för ett ogiltigt namn, en tom lista eller fler
+    än MAX_WATCH_MAILBOXES mappar.
+    """
+    names: list[str] = []
+    for entry in (part.strip() for part in raw.split(",")):
+        if not entry:
+            continue
+        if not _WATCH_MAILBOX_RE.fullmatch(entry):
+            raise ValueError(f"Ogiltigt mappnamn i PROTONMAIL_WATCH_MAILBOXES: {entry!r}")
+        if entry.upper() == "INBOX":
+            entry = "INBOX"
+        if entry not in names:
+            names.append(entry)
+    if not names:
+        raise ValueError(
+            "PROTONMAIL_WATCH_MAILBOXES måste innehålla minst en mapp. Stäng av "
+            "bevakningen med PROTONMAIL_WATCH_ENABLED=false i stället."
+        )
+    if len(names) > MAX_WATCH_MAILBOXES:
+        raise ValueError(
+            f"PROTONMAIL_WATCH_MAILBOXES får innehålla högst {MAX_WATCH_MAILBOXES} mappar "
+            f"(fick {len(names)}): varje mapp är en egen anslutning till Bridge."
+        )
+    return tuple(names)
+
+
 class Settings(BaseSettings):
     imap_host: str = "127.0.0.1"
     imap_port: int = 1143
@@ -129,6 +168,16 @@ class Settings(BaseSettings):
     # (eller ~). Standard: ingen fil.
     audit_log: Path | None = None
 
+    # --- Bevakning av nya mejl (imap_idle.py) ---
+    # PROTONMAIL_WATCH_ENABLED: bevaka mapparna med IMAP IDLE i egna
+    # anslutningar till Bridge (en per mapp, aldrig verktygens delade), så
+    # att check_new_emails och wait_for_new_email ser nya mejl direkt. Är den
+    # avstängd frågar verktygen Bridge i stället. Standard: true.
+    watch_enabled: bool = True
+    # PROTONMAIL_WATCH_MAILBOXES: kommaseparerade mappar att bevaka, högst
+    # MAX_WATCH_MAILBOXES (5). Standard: INBOX.
+    watch_mailboxes: str = "INBOX"
+
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
         # Senare filer vinner: en .env i arbetskatalogen går före projektrotens
@@ -148,6 +197,17 @@ class Settings(BaseSettings):
     def _check_allowed_recipients(cls, value: str) -> str:
         parse_allowed_recipients(value)  # ValueError för en felskriven post
         return value
+
+    @field_validator("watch_mailboxes", mode="after")
+    @classmethod
+    def _check_watch_mailboxes(cls, value: str) -> str:
+        parse_watch_mailboxes(value)  # ValueError för en felskriven lista
+        return value
+
+    @property
+    def watch_mailbox_list(self) -> list[str]:
+        """De bevakade mapparna (PROTONMAIL_WATCH_MAILBOXES), tolkade."""
+        return list(parse_watch_mailboxes(self.watch_mailboxes))
 
     @field_validator("audit_log", mode="after")
     @classmethod
