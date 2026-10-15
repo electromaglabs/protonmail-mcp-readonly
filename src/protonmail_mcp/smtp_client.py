@@ -365,6 +365,7 @@ class SMTPClient:
         innan Bridge kontaktas, så att ingen väg kan skicka förbi den.
         """
         policy.require_send(self._settings, "skicket")
+        policy.check_recipients(self._settings, all_recipients)
         logger.info(
             "Skickar e-post (%d mottagare) via SMTP %s:%d",
             len(all_recipients),

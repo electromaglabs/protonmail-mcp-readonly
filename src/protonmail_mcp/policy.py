@@ -18,6 +18,8 @@ from __future__ import annotations
 import functools
 from typing import Any
 
+from .config import normalize_domain, parse_allowed_recipients
+
 # Verktygen per kategori. Används av MCP-servern för att vägra tidigt; den
 # egentliga spärren sitter i klienterna. Ett verktyg som saknas här
 # släpps igenom till klienternas spärrar (tests/unit/test_llm_skick_skrivskydd.py
@@ -108,6 +110,31 @@ def check_tool(settings: Any, tool: str) -> None:
         require_draft(settings, tool)
     elif tool in WRITE_TOOLS:
         require_write(settings, tool)
+
+
+def _is_allowed(address: str, rules: tuple[tuple[str, str], ...]) -> bool:
+    local, _, domain = address.rpartition("@")
+    normalized = normalize_domain(domain)
+    if not local or normalized is None:
+        return False
+    return ("", normalized) in rules or (local, normalized) in rules
+
+
+def check_recipients(settings: Any, recipients: list[str]) -> None:
+    """ValueError om någon mottagare inte är tillåten. Inget skickas då."""
+    raw = getattr(settings, "allowed_recipients", "")
+    rules = parse_allowed_recipients(raw) if isinstance(raw, str) else ()
+    if not rules:
+        return
+    refused: list[str] = []
+    for address in recipients:
+        if not _is_allowed(address, rules) and address not in refused:
+            refused.append(address)
+    if refused:
+        raise ValueError(
+            f"Skicket vägrades: {', '.join(refused)} finns inte bland de tillåtna "
+            f"mottagarna (PROTONMAIL_ALLOWED_RECIPIENTS). Inget mejl skickades till någon."
+        )
 
 
 def write_operation(action: str, *, draft: bool = False):

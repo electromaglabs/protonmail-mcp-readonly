@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -8,6 +9,45 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # <repo>/src/protonmail_mcp/config.py → <repo>/.env. Läses även när servern
 # startas från en annan katalog (t.ex. uv run --project <repo>).
 PROJECT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+# Domän efter normalisering: punycode-etiketter, minst två, inga tomma led
+_DOMAIN_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))+$")
+_LOCAL_RE = re.compile(r'^[^@\s<>,"]+$')
+
+
+def normalize_domain(domain: str) -> str | None:
+    """Domänen i gemener och som punycode, eller None om den är ogiltig."""
+    value = domain.strip().lower()
+    if not value.isascii():
+        try:
+            value = value.encode("idna").decode("ascii")
+        except UnicodeError:
+            return None
+    return value if _DOMAIN_RE.match(value) else None
+
+
+@lru_cache(maxsize=8)
+def parse_allowed_recipients(raw: str) -> tuple[tuple[str, str], ...]:
+    """Tolka PROTONMAIL_ALLOWED_RECIPIENTS till (lokal del, domän)-par.
+
+    En domänpost (@exempel.se) får tom lokal del. Domänen normaliseras till
+    gemener och punycode; den lokala delen behålls exakt. ValueError för en
+    post som inte är en adress eller en domän.
+    """
+    rules: list[tuple[str, str]] = []
+    for entry in (part.strip() for part in raw.split(",")):
+        if not entry:
+            continue
+        local, at, domain = entry.rpartition("@")
+        normalized = normalize_domain(domain) if at else None
+        if normalized is None or (local and not _LOCAL_RE.match(local)) or (not local and not entry.startswith("@")):
+            raise ValueError(
+                f"Ogiltig post i PROTONMAIL_ALLOWED_RECIPIENTS: {entry!r}. Ange adresser "
+                "(anna@exempel.se) och/eller domäner (@exempel.se), åtskilda med kommatecken."
+            )
+        rules.append((local, normalized))
+    return tuple(rules)
 
 
 class Settings(BaseSettings):
@@ -47,6 +87,15 @@ class Settings(BaseSettings):
     #       själv granskar och skickar från Proton.
     #   "disabled" — även utkasten vägras.
     send_mode: Literal["send", "draft_only", "disabled"] = "send"
+    # PROTONMAIL_ALLOWED_RECIPIENTS: kommaseparerad lista med adresser
+    # (anna@exempel.se) och/eller domäner (@exempel.se). När den är satt måste
+    # VARJE mottagare i ett skick (To, Cc och Bcc, även i send_draft och
+    # vidarebefordran) matcha en post, annars vägras hela skicket och felet
+    # anger vilka adresser som inte är tillåtna. Domänen jämförs utan hänsyn
+    # till skiftläge och som punycode (exämple.se = xn--exmple-cua.se); en
+    # domänpost gäller bara den domänen, inte underdomäner. Delen före @ i en
+    # adresspost jämförs exakt. Tom (standard) = alla mottagare tillåtna.
+    allowed_recipients: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
@@ -61,6 +110,12 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_send_mode(cls, value: object) -> object:
         return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("allowed_recipients", mode="after")
+    @classmethod
+    def _check_allowed_recipients(cls, value: str) -> str:
+        parse_allowed_recipients(value)  # ValueError för en felskriven post
+        return value
 
     @field_validator("attachment_dir", mode="after")
     @classmethod

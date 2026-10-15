@@ -7,6 +7,7 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from pytest_bdd import given, parsers, then, when
 
 from protonmail_mcp.smtp_client import SMTPClient
@@ -98,7 +99,11 @@ def smtp_send_directly(state, to):
 @then(parsers.parse('ska anropet vägras med ett fel som nämner "{text}"'))
 def refused_with(state, text):
     error = state["error"]
-    assert isinstance(error, ValueError), f"väntade ValueError, fick {error!r} (resultat {state['result']!r})"
+    # Ett ValueError inifrån verktyget når klienten som ToolError med samma text
+    cause = error
+    while isinstance(cause, ToolError) and cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert isinstance(cause, ValueError), f"väntade ValueError, fick {error!r} (resultat {state['result']!r})"
     assert text in str(error)
 
 
