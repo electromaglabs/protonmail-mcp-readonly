@@ -87,7 +87,7 @@ class TestGetEmail:
 
     async def test_returns_parsed_dict_when_mail_exists(self, mock_ctx, sample_raw_email):
         mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
-        result = await get_email(mock_ctx, uid="456")
+        result = await get_email(mock_ctx, uid="456", mailbox="INBOX")
         assert isinstance(result, dict)
         assert result["subject"] == "Test subject"
         assert result["from"] == "sender@example.com"
@@ -251,7 +251,7 @@ class TestGetEmailHeaders:
     async def test_get_email_headers_raises_when_not_found(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.get_message_headers.return_value = None
         with pytest.raises(ValueError, match="Inget meddelande med UID 999 i INBOX"):
-            await get_email_headers(mock_ctx, uid="999")
+            await get_email_headers(mock_ctx, uid="999", mailbox="INBOX")
 
 
 # --- folders.py ---

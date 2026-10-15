@@ -30,7 +30,7 @@ def newsletter(mock_ctx, size):
 
 @when("jag hämtar mejlet med get_email med förvalda parametrar", target_fixture="result")
 def fetch_default(mock_ctx, raw):
-    return asyncio.run(get_email(mock_ctx, uid="1"))
+    return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX"))
 
 
 @when(
@@ -38,7 +38,7 @@ def fetch_default(mock_ctx, raw):
     target_fixture="result",
 )
 def fetch_with_format(mock_ctx, raw, fmt):
-    return asyncio.run(get_email(mock_ctx, uid="1", body_format=fmt))
+    return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX", body_format=fmt))
 
 
 @then(parsers.parse("ska body_html vara högst {n:d} tecken"))
@@ -224,12 +224,12 @@ def _try(coro):
 
 @when(parsers.parse('jag försöker hämta mejlet med body_format "{fmt}"'), target_fixture="result")
 def try_format(mock_ctx, raw, fmt):
-    return _try(get_email(mock_ctx, uid="1", body_format=fmt))
+    return _try(get_email(mock_ctx, uid="1", mailbox="INBOX", body_format=fmt))
 
 
 @when(parsers.parse("jag försöker hämta mejlet med max_length {n:d}"), target_fixture="result")
 def try_max_length(mock_ctx, raw, n):
-    return _try(get_email(mock_ctx, uid="1", max_length=n))
+    return _try(get_email(mock_ctx, uid="1", mailbox="INBOX", max_length=n))
 
 
 @then(parsers.parse('ska anropet avvisas med ett fel som nämner "{word}"'))

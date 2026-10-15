@@ -39,19 +39,19 @@ class TestGetEmailSchema:
     @pytest.mark.parametrize("fmt", ["html", "TEXT", "", "raw"])
     async def test_unknown_body_format_is_rejected(self, mock_ctx, fmt):
         with pytest.raises(ToolError, match="body_format"):
-            await _run({"uid": "1", "body_format": fmt}, mock_ctx)
+            await _run({"uid": "1", "mailbox": "INBOX", "body_format": fmt}, mock_ctx)
         mock_ctx.request_context.lifespan_context.imap.get_message.assert_not_called()
 
     async def test_negative_max_length_is_rejected(self, mock_ctx):
         with pytest.raises(ToolError, match="max_length"):
-            await _run({"uid": "1", "max_length": -5}, mock_ctx)
+            await _run({"uid": "1", "mailbox": "INBOX", "max_length": -5}, mock_ctx)
 
     @pytest.mark.parametrize("fmt", ["text", "full", "stripped"])
     async def test_valid_formats_are_accepted(self, mock_ctx, fmt):
-        result = await _run({"uid": "1", "body_format": fmt}, mock_ctx)
+        result = await _run({"uid": "1", "mailbox": "INBOX", "body_format": fmt}, mock_ctx)
         assert result["subject"] == "Test subject"
 
     @pytest.mark.parametrize("n", [0, None, 10])
     async def test_valid_max_length_is_accepted(self, mock_ctx, n):
-        result = await _run({"uid": "1", "max_length": n}, mock_ctx)
+        result = await _run({"uid": "1", "mailbox": "INBOX", "max_length": n}, mock_ctx)
         assert result["subject"] == "Test subject"

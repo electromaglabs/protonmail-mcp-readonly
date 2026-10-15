@@ -24,17 +24,35 @@ def _not_found(uid: str, mailbox: str) -> ValueError:
 async def get_email_headers(
     ctx: Context,
     uid: str,
-    mailbox: str = "INBOX",
+    mailbox: str,
 ) -> dict:
-    """Hämta headers för ett e-post utan att ladda body (snabb operation).
+    """Hämta ett mejls rubriker utan brödtext (snabbt). Ingenting ändras.
+
+    Mejlet läses med BODY.PEEK och markeras inte som läst.
+
+    Värdena är RÅA rubrikvärden, avsedda för analys (t.ex. Message-ID eller
+    Reply-To): RFC 2047-kodade ord avkodas inte, så ett ämne eller namn med
+    å, ä och ö kan se ut som "=?UTF-8?B?w4RyZW5kZQ==?=". Rå UTF-8 visas som
+    text. to och cc är här en enda rå sträng med alla adresser, inte en
+    lista som i get_email. Läsbar text (avkodade namn och ämne, to och cc
+    som listor) ger get_email, list_emails och search_emails.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
+        uid: Mejlets UID i mailbox
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails, get_thread
+            eller utkastsverktygen.
 
     Returns:
-        Dict med from, to, cc, subject, date, message_id, reply_to och mailbox.
-        Kastar fel om det inte finns något meddelande med UID:t i mappen.
+        Dict med mailbox och de rubriker som finns i mejlet: from, to, cc,
+        subject, date, message_id och reply_to. En rubrik som saknas i mejlet
+        (ofta cc och reply_to) saknas också i svaret — nyckeln finns inte
+        med, den är inte tom.
+
+    Raises:
+        ValueError: inget meddelande med UID:t i mappen, ogiltigt UID eller
+            mappnamn, eller mappen finns inte.
     """
     app = _get_app(ctx)
     headers = await app.imap.get_message_headers(mailbox, uid)
@@ -75,15 +93,18 @@ async def list_emails(
 async def get_email(
     ctx: Context,
     uid: str,
-    mailbox: str = "INBOX",
+    mailbox: str,
     body_format: Literal["text", "full", "stripped"] = "text",
     max_length: Annotated[int, Field(ge=0)] | None = 500,
 ) -> dict:
     """Hämta fullständigt innehåll för ett e-post via UID.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
+        uid: Mejlets UID i mailbox
+        mailbox: Mappen som UID:t kom från (obligatorisk). UID:n gäller per mapp:
+            samma nummer i en annan mapp är ett annat mejl. Använd fältet
+            mailbox från svaret av list_emails, search_emails, get_thread
+            eller utkastsverktygen.
         body_format: Format för body — "text" (plain text, default), "full" (rå body utan
             trunkering), eller "stripped" (text utan citat och signaturblock)
         max_length: Max antal tecken i body (standard: 500). None = ingen trunkering.
@@ -91,6 +112,10 @@ async def get_email(
 
     Returns:
         Det parsade meddelandet, inklusive mailbox som UID:t gäller i.
+
+    Raises:
+        ValueError: inget meddelande med UID:t i mappen, ogiltigt UID eller
+            mappnamn, eller mappen finns inte.
     """
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)

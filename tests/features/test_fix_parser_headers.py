@@ -18,7 +18,7 @@ def mail_with_header(mock_ctx, line):
 
 @when("jag hämtar mejlet med get_email", target_fixture="result")
 def fetch_mail(mock_ctx, raw):
-    return asyncio.run(get_email(mock_ctx, uid="1"))
+    return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX"))
 
 
 @then(parsers.parse('ska ämnet vara "{subject}"'))

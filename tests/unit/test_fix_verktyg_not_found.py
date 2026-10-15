@@ -22,11 +22,11 @@ class TestNotFound:
     async def test_get_email_headers_raises_with_uid_and_mailbox(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.get_message_headers.return_value = None
         with pytest.raises(ValueError, match=r"^Inget meddelande med UID 7 i INBOX"):
-            await get_email_headers(mock_ctx, uid="7")
+            await get_email_headers(mock_ctx, uid="7", mailbox="INBOX")
 
     async def test_get_email_headers_returns_dict_when_found(self, mock_ctx):
         mock_ctx.request_context.lifespan_context.imap.get_message_headers.return_value = {
             "subject": "Hej"
         }
-        result = await get_email_headers(mock_ctx, uid="7")
+        result = await get_email_headers(mock_ctx, uid="7", mailbox="INBOX")
         assert result["subject"] == "Hej"

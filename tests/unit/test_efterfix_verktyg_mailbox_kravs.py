@@ -1,7 +1,8 @@
 """Enhetstester: skrivverktygen saknar standardmapp (efterfix-verktyg, F2).
 
 UID gäller per mapp. Ett UID från Starred eller Labels/X som skickas utan
-mailbox träffade tidigare ett annat brev i INBOX. Läsverktygen behåller INBOX.
+mailbox träffade tidigare ett annat brev i INBOX. Listnings- och sökverktygen
+behåller INBOX; get_email och get_email_headers kräver mailbox (llm-kontrakt, K4).
 """
 import inspect
 from unittest.mock import AsyncMock, MagicMock
@@ -14,11 +15,11 @@ from protonmail_mcp.tools.manage import (
     mark_email_unread,
     move_email,
 )
-from protonmail_mcp.tools.messages import get_email, get_email_headers, list_emails
+from protonmail_mcp.tools.messages import list_emails
 from protonmail_mcp.tools.search import search_emails
 
 WRITE_TOOLS = [delete_email, move_email, mark_email_read, mark_email_unread]
-READ_TOOLS = [get_email, get_email_headers, list_emails, search_emails]
+READ_TOOLS = [list_emails, search_emails]
 
 
 @pytest.fixture

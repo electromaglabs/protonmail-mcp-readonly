@@ -27,17 +27,17 @@ def message_exists(mock_ctx, sample_raw_email, uid):
 
 @when(parsers.parse('jag hämtar brevet med body_format "{fmt}" och max_length {n:d}'), target_fixture="outcome")
 def get_with_format_and_length(mock_ctx, uid, fmt, n):
-    return _call(mock_ctx, {"uid": uid, "body_format": fmt, "max_length": n})
+    return _call(mock_ctx, {"uid": uid, "mailbox": "INBOX", "body_format": fmt, "max_length": n})
 
 
 @when(parsers.parse('jag hämtar brevet med body_format "{fmt}"'), target_fixture="outcome")
 def get_with_format(mock_ctx, uid, fmt):
-    return _call(mock_ctx, {"uid": uid, "body_format": fmt})
+    return _call(mock_ctx, {"uid": uid, "mailbox": "INBOX", "body_format": fmt})
 
 
 @when(parsers.parse("jag hämtar brevet med max_length {n:d}"), target_fixture="outcome")
 def get_with_length(mock_ctx, uid, n):
-    return _call(mock_ctx, {"uid": uid, "max_length": n})
+    return _call(mock_ctx, {"uid": uid, "mailbox": "INBOX", "max_length": n})
 
 
 @then(parsers.parse('ska anropet avvisas med ett valideringsfel om "{field}"'))

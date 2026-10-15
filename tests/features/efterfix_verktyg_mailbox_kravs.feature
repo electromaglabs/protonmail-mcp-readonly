@@ -39,13 +39,13 @@ Feature: Skrivverktyg kräver mappen som UID:t kom från
       | mark_email_read   |
       | mark_email_unread |
 
-  Scenario Outline: Läsverktyg har fortfarande INBOX som standard
+  # get_email och get_email_headers kräver mailbox sedan llm-kontrakt (K4),
+  # se llm_kontrakt_lasverktyg_mailbox.feature
+  Scenario Outline: Listnings- och sökverktyg har fortfarande INBOX som standard
     When jag läser verktygsbeskrivningen för <verktyg>
     Then ska mailbox ha standardvärdet "INBOX"
 
     Examples:
       | verktyg           |
-      | get_email         |
-      | get_email_headers |
       | list_emails       |
       | search_emails     |

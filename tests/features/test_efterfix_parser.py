@@ -19,7 +19,7 @@ def mail_with_header(mock_ctx, line):
 
 @when("jag hämtar mejlet med get_email", target_fixture="result")
 def fetch_mail(mock_ctx, raw):
-    return asyncio.run(get_email(mock_ctx, uid="1"))
+    return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX"))
 
 
 @then(parsers.parse('ska ämnet vara "{subject}"'))
@@ -90,7 +90,7 @@ def html_mail(mock_ctx, markup):
 
 @when("jag hämtar mejlet som text med get_email", target_fixture="result")
 def fetch_mail_as_text(mock_ctx, raw):
-    return asyncio.run(get_email(mock_ctx, uid="1", body_format="text", max_length=None))
+    return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX", body_format="text", max_length=None))
 
 
 @then(parsers.parse("ska brödtexten vara '{body}'"))
