@@ -299,3 +299,89 @@ def sanitize_address_text(text: str | None) -> Sanitized:
         pending_start = m.end()
     flush(len(text))
     return Sanitized("".join(out), removed, kept)
+
+
+# --- Heuristik för promptinjektion -------------------------------------------
+# Fraserna matchas mot ord: texten NFKC-normaliseras (fullbreddstecken blir
+# ASCII), accenter tas bort (ö → o), gemener, och bara ord (\w+) med ett
+# blanksteg emellan finns kvar — så "Ignore-ALL  previous_instructions!!!"
+# blir "ignore all previous_instructions". Körs på redan rensad text, så
+# osynliga tecken mellan bokstäverna hjälper inte. Bara flagga, aldrig blockera.
+_W = r"(?: \w+)"  # ett ord till
+_PHRASES: list[tuple[str, re.Pattern[str]]] = [
+    ("ignorera tidigare instruktioner", re.compile(
+        r"\b(?:ignore|disregard|forget|override|bypass|skip)(?: (?:all|any|the|your|my|of|these|those))*"
+        r" (?:previous|prior|above|earlier|preceding|former|original|existing|system)"
+        r" (?:instructions?|prompts?|rules|directions|guidelines|commands|context)\b"
+        r"|\b(?:ignorera|strunta i|bortse fran|glom|overskrid)(?: (?:alla|dina|de|samtliga|era))*"
+        r" (?:tidigare|foregaende|ovanstaende|forra|ursprungliga)"
+        r" (?:instruktioner(?:na)?|instruktionen|instruktion|uppmaningar(?:na)?|regler(?:na)?|direktiv(?:en)?)\b"
+    )),
+    ("byta roll", re.compile(
+        r"\byou are now (?:an? |in |the |my )?(?:ai|assistant|chatbot|dan|unrestricted|jailbroken|uncensored"
+        r"|developer mode|evil|unfiltered)\b"
+        r"|\bdu ar nu (?:en |ett |i )?(?:ai|assistent|chattbot|chatbot|dan|obegransad|ocensurerad|utvecklarlage"
+        r"|ofiltrerad)\b"
+        r"|\b(?:enable|activate|enter) (?:developer|god|dan) mode\b"
+    )),
+    ("tilltalar en AI", re.compile(
+        r"\b(?:if|when) you are an? (?:ai|llm|language model|large language model|ai assistant|ai agent"
+        r"|assistant|agent|chatbot|bot)\b"
+        # "instructions for AI agents" och "AIs processing these" förekommer i
+        # nyhetsbrev om AI (mätt: 2 av 1000 mejl), så de räknas inte
+        r"|\b(?:note|message|attention|important|notice) (?:to|for) (?:the |any |all |an )?"
+        r"(?:ai|llm|assistant|agent|chatbot|language model|ai assistant|ai agent)s?\b"
+        r"|\b(?:ai|llm|assistant|agent) (?:reading|processing|summari[sz]ing|parsing) this"
+        r" (?:e ?mail|message|mail|text|document)\b"
+        r"|\b(?:om|nar) du ar en (?:ai|sprakmodell|assistent|agent|chattbot|bot)\b"
+        r"|\b(?:meddelande|instruktion(?:er)?|uppmaning|till) (?:till|for) (?:en |den )?"
+        r"(?:ai|ai assistent(?:en)?|assistent(?:en)?|agent(?:en)?|sprakmodell(?:en)?)\b"
+    )),
+    ("dölja för användaren", re.compile(
+        r"\b(?:do not|don t|dont|never) (?:tell|inform|alert|notify|show|mention (?:this |it )?to) the user\b"
+        r"|\bwithout (?:telling|informing|notifying|alerting) the user\b"
+        rf"|\b(?:sag|beratta|namn|avsloja|visa) (?:inte|aldrig){_W}{{0,3}} (?:till|for|om) anvandaren\b"
+        r"|\butan att (?:beratta for|meddela|informera|saga till|visa) anvandaren\b"
+    )),
+    ("systemprompt", re.compile(
+        r"\b(?:reveal|print|show|output|repeat|leak|ignore)(?: (?:your|the|my))? (?:system|initial) prompt\b"
+        r"|\b(?:visa|skriv ut|upprepa|avsloja|ignorera)(?: (?:din|den|er))? (?:systemprompt(?:en)?|system prompt)\b"
+    )),
+    ("vidarebefordra all post", re.compile(
+        r"\bforward (?:all|every|each) (?:of (?:the|my|your) )?(?:e ?mails?|messages?|mail|correspondence)\b"
+        r"|\bvidarebefordra (?:alla|samtliga|varje) (?:mejl|mail|e post|meddelanden|brev)\b"
+    )),
+]
+# Styrtoken från chattmallar (OpenAI/ChatML, Llama, Mistral) och låtsade
+# systemtaggar. Matchas mot NFKC-text i gemener utan blanktecken.
+_TOKENS_RE = re.compile(
+    r"<\|(?:im_start|im_end|im_sep|system|user|assistant|endoftext|begin_of_text|end_of_text"
+    r"|start_header_id|end_header_id|eot_id)\|>"
+    r"|\[/?inst\]|<</?sys>>|</?(?:system|system_prompt|systemprompt|instructions?)>"
+)
+_WORD_RE = re.compile(r"\w+")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _strip_marks(text: str) -> str:
+    return re.sub(_MARK_CLASS, "", unicodedata.normalize("NFKD", text))
+
+
+def injection_signals(text: str | None) -> list[str]:
+    """Etiketter för typiska promptinjektionsmönster i texten (tom lista om
+    inget hittas). Texten rensas med sanitize_text först, så osynliga tecken
+    mellan bokstäverna inte döljer en fras.
+
+    Etiketterna är fasta (inget av avsändarens text följer med):
+    "ignorera tidigare instruktioner", "byta roll", "tilltalar en AI",
+    "dölja för användaren", "systemprompt", "vidarebefordra all post",
+    "styrtoken för chattmall". Linjär tid.
+    """
+    if not text:
+        return []
+    folded = unicodedata.normalize("NFKC", sanitize_text(text).text).casefold()
+    words = " ".join(_WORD_RE.findall(_strip_marks(folded)))
+    found = [label for label, pattern in _PHRASES if pattern.search(words)]
+    if _TOKENS_RE.search(_SPACE_RE.sub("", folded)):
+        found.append("styrtoken för chattmall")
+    return found

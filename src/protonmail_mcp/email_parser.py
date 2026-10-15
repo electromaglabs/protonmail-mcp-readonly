@@ -8,8 +8,16 @@ import re
 from email.message import Message
 from typing import Any
 
-from .html_text import html_to_text
-from .sanitize import UNTRUSTED_CONTENT_NOTICE, Sanitized, clean_text, sanitize_address, sanitize_address_text, sanitize_text
+from .html_text import HtmlText, html_to_text, html_to_text_report
+from .sanitize import (
+    UNTRUSTED_CONTENT_NOTICE,
+    Sanitized,
+    clean_text,
+    injection_signals,
+    sanitize_address,
+    sanitize_address_text,
+    sanitize_text,
+)
 
 # Etiketter som är vanliga i post men saknas i Python eller oftast är fel
 _CHARSET_ALIASES = {
@@ -542,6 +550,46 @@ class _Cleaner:
         return self.text(key, name), self.add(key, sanitize_address(addr))
 
 
+def _suspicious(texts: list[str], html_report: HtmlText, clean: _Cleaner) -> list[str]:
+    """Orsaker till att mejlet ser ut att innehålla promptinjektion.
+
+    Fasta texter och antal — inget av avsändarens text följer med. Mejlet
+    blockeras inte; listan är en varning till klienten.
+    """
+    reasons: list[str] = []
+    visible = injection_signals("\n".join(texts + [html_report.text, html_report.white_text]))
+    reasons += [f"misstänkt instruktion till modellen: {label}" for label in visible]
+    hidden = injection_signals(html_report.hidden_text)
+    reasons += [
+        f"misstänkt instruktion till modellen i gömd HTML-text: {label}"
+        for label in hidden if label not in visible
+    ]
+    # Gömd och vit HTML-text i sig flaggas inte: i en mätning på 300 riktiga
+    # mejl hade 228 gömda element (förhandstext, mobilversioner) och 30 vit
+    # text, utan något injektionsmönster. Den räknas i hidden_html i stället.
+    if n := clean.categories.get("tag"):
+        reasons.append(f"osynliga Unicode-taggtecken borttagna: {n} (kan bära dolda instruktioner)")
+    if n := clean.categories.get("bidi"):
+        reasons.append(f"bidi-styrtecken borttagna: {n} (kan vända visningsordningen för läsaren)")
+    if clean.kept_in_address:
+        reasons.append(
+            f"osynliga tecken i en adress: {clean.kept_in_address} (adressen är lämnad orörd)"
+        )
+    return reasons
+
+
+def _hidden_html(report: HtmlText) -> dict[str, Any]:
+    """Gömt innehåll i HTML-delen (antal, aldrig text). Tom dict om inget."""
+    out: dict[str, Any] = {}
+    if report.hidden_elements:
+        out["elements"] = report.hidden_elements
+        out["reasons"] = dict(sorted(report.hidden_reasons.items()))
+        out["hidden_chars"] = len(report.hidden_text)
+    if report.white_text:
+        out["white_text_chars"] = len(report.white_text)
+    return out
+
+
 def parse_email(
     raw: bytes,
     body_format: str = "text",
@@ -564,6 +612,10 @@ def parse_email(
     # till osynliga tecken.
     body_plain = clean.text("body_plain", "\n".join(parts["plain"]))
     body_html = clean.text("body_html", "\n".join(parts["html"]))
+    # HTML-texten (utan gömda element) behövs även när det finns en textdel:
+    # injektionsvarningen tittar på både synlig och gömd HTML-text
+    html_report = html_to_text_report(body_html) if body_html else HtmlText("")
+    full_plain = body_plain
 
     if body_format == "full":
         # Returnera råa body utan trunkering
@@ -571,11 +623,11 @@ def parse_email(
     elif body_format == "text":
         # Saknas text (eller är den bara blanktecken, vanligt i utskick): använd HTML
         if not body_plain.strip() and body_html:
-            body_plain = clean.text("body_plain", _strip_html(body_html))
+            body_plain = clean.text("body_plain", html_report.text)
         body_plain = _truncate(body_plain, max_length)
     elif body_format == "stripped":
         if not body_plain.strip() and body_html:
-            body_plain = clean.text("body_plain", _strip_html(body_html))
+            body_plain = clean.text("body_plain", html_report.text)
         body_plain = _strip_quotes_and_signature(body_plain)
         body_plain = _truncate(body_plain, max_length)
 
@@ -606,9 +658,10 @@ def parse_email(
         if not any("@" in a for _, a in email.utils.getaddresses([decoded])):
             from_ = clean.address_text("from", decoded)
 
+    subject = clean.text("subject", decode_header_value(_raw_header(msg, "Subject")))
     result = {
         "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
-        "subject": clean.text("subject", decode_header_value(_raw_header(msg, "Subject"))),
+        "subject": subject,
         "from": from_,
         "to": formatted["to"],
         "cc": formatted["cc"],
@@ -628,6 +681,10 @@ def parse_email(
     # rensats bort (antal tecken per fält, bara fält där något togs bort)
     result["untrusted_content_notice"] = UNTRUSTED_CONTENT_NOTICE
     result["sanitized"] = dict(clean.counts)
+    result["suspicious_content"] = _suspicious([subject, full_plain], html_report, clean)
+    # Gömda HTML-element (finns kvar i body_html men inte i body_plain) och
+    # vit text utan bakgrundsfärg, som antal
+    result["hidden_html"] = _hidden_html(html_report)
     return result
 
 
