@@ -15,6 +15,7 @@ import aiosmtplib
 from . import audit, policy
 from .config import Settings, idna_domain
 from .email_parser import parse_addresses
+from .sanitize import sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +32,52 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$')
 _MAX_SUBJECT_LENGTH = 10_000
 
 
+# Kategorierna i sanitize_text, som de beskrivs i felet om dolda tecken
+_HIDDEN_KINDS = {
+    "tag": "taggtecken",
+    "bidi": "bidi-styrtecken",
+    "bidi_mark": "riktningsmarkeringar",
+    "zero_width": "nollbreddstecken",
+    "format": "formattecken",
+    "control": "kontrolltecken",
+    "variation_selector": "variationsväljare",
+    "combining_excess": "kombinationstecken",
+    "surrogate": "ensamma surrogattecken",
+}
+
+
+def _reject_hidden_characters(addr: str, spec: str) -> None:
+    """ValueError om adressen (addr-spec) innehåller tecken som inte syns.
+
+    Taggtecken, bidi-styrtecken, nollbreddstecken och andra formattecken (Cf)
+    ritas inte, så en adress med sådana ser ut som en annan adress än den
+    som mejlet går till. Samma tecken som sanitize.sanitize_text tar bort ur
+    text räknas. Visningsnamnet kontrolleras inte här.
+    """
+    removed = sanitize_text(spec).removed
+    if removed:
+        kinds = ", ".join(f"{_HIDDEN_KINDS.get(k, k)}: {n}" for k, n in removed.items())
+        # ascii(): de dolda tecknen syns som \U000e0041 osv. i felet
+        raise ValueError(
+            f"Ogiltig e-postadress: {ascii(addr)} innehåller dolda tecken ({kinds}). "
+            "En sådan adress ser ut som en annan adress än den som mejlet skulle gå till, "
+            "så inget skickas eller sparas. Skriv adressen utan de dolda tecknen."
+        )
+
+
 def _validate_email_addr(addr: str) -> str:
     """Kastar ValueError om adressen innehåller CRLF eller är ogiltig.
 
-    Adressen byggs också som ett Address-objekt (_to_address), så att en
-    adress som klarar mönstret men inte går att lägga i ett mejl vägras här
-    som ogiltig, innan något byggs eller skickas.
+    Adresser med dolda tecken (taggtecken, bidi-styrtecken, nollbreddstecken,
+    andra formattecken) vägras. Adressen byggs också som ett Address-objekt
+    (_to_address), så att en adress som klarar mönstret men inte går att
+    lägga i ett mejl vägras här som ogiltig, innan något byggs eller skickas.
     """
     if '\r' in addr or '\n' in addr:
         raise ValueError(f"Ogiltig e-postadress (CRLF): {addr!r}")
     _, parsed = parseaddr(addr)
+    if parsed:
+        _reject_hidden_characters(addr, parsed)
     if not parsed or not _EMAIL_RE.match(parsed):
         raise ValueError(f"Ogiltig e-postadress: {addr!r}")
     _to_address(addr)
