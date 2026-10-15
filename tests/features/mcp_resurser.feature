@@ -41,6 +41,7 @@ Feature: Brevlådan som MCP-resurser
     Given att mejlet med UID 42 i "Labels/Näs Samfällighet" finns
     When klienten läser mejlresursen för UID 42 i "Labels/Näs Samfällighet"
     Then ska innehållet vara samma som get_email ger med body_format "text"
+    And ska innehållet märka mejlet som opålitligt
     And ska mejlet ha hämtats från mappen "Labels/Näs Samfällighet"
     And ska mejlet inte ha markerats som läst
 

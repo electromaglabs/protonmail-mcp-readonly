@@ -205,6 +205,12 @@ def same_as_get_email(monkeypatch, state, body_format):
     assert json.loads(state["text"]) == expected
 
 
+@then("ska innehållet märka mejlet som opålitligt")
+def marked_untrusted(state):
+    data = json.loads(state["text"])
+    assert "opålitligt" in data["untrusted_content_notice"]
+
+
 @then(parsers.parse('ska mejlet ha hämtats från mappen "{mailbox}"'))
 def fetched_from(state, mailbox):
     state["imap"].get_message.assert_awaited_with(mailbox, state["uid"])
