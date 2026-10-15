@@ -83,6 +83,12 @@ async def move_email(
     - UID:t finns inte i källmappen (UID:n gäller per mapp).
     Vakterna gäller också när en lista med UID:n anges.
 
+    Ligger mejlet redan i Trash (eller Drafts, vid flytt dit) görs ingenting
+    med det: ett Proton-mejl kan synas i flera mappar samtidigt, t.ex. ett
+    mejl till sig själv i både INBOX och Sent, och Bridges vyer släpar 20–40 s
+    efter en flytt. En ny flytt dit skulle få Bridge att radera mejlet
+    permanent. Mejlet räknas som ok och svaret förklarar det i "note".
+
     Args:
         uid: UID:t som sträng, eller en lista med upp till 100 UID:n ur
             samma källmapp
@@ -94,10 +100,13 @@ async def move_email(
 
     Returns:
         True när flytten är klar. Misslyckas den kastas ett fel med Bridges förklaring.
+        Låg mejlet redan i Trash/Drafts blir svaret {"ok": [UID], "failed": [],
+        "note": "... ligger redan i papperskorgen ..."} i stället för True.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID, i ett enda
         IMAP-kommando. UID:n som inte finns eller som Bridge nekar hamnar i
-        failed medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller
+        failed medan de andra genomförs. UID:n vars mejl redan låg i målet
+        räknas som ok och nämns i "note". Ett ogiltigt UID (inte heltal) eller
         fler än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)
@@ -120,6 +129,13 @@ async def delete_email(
     kan ligga i Trash och Bridge i så fall raderar det permanent — ange
     mappen där mejlet ligger i stället.
 
+    Ett Proton-mejl kan synas i flera mappar: ett mejl till sig själv är ETT
+    mejl i både INBOX och Sent, och Bridges vyer släpar 20–40 s efter en
+    flytt. Ligger mejlet redan i Trash (t.ex. Sent-kopian strax efter att
+    INBOX-kopian tagits bort) görs ingenting med det, eftersom Bridge då
+    skulle radera det permanent; det räknas som ok och svaret förklarar det
+    i "note".
+
     permanent=True: raderar mejlet permanent. Går bara när mailbox är Trash
     (eller Drafts för utkast) och kan inte ångras. Har mejlet kvar en etikett
     tar Bridge bara bort det ur Trash/Drafts. Bara det angivna mejlet påverkas.
@@ -138,11 +154,14 @@ async def delete_email(
 
     Returns:
         True när mejlet är flyttat eller raderat. Annars kastas ett fel med förklaring,
-        t.ex. om UID:t inte finns i mailbox.
+        t.ex. om UID:t inte finns i mailbox. Låg mejlet redan i Trash blir
+        svaret {"ok": [UID], "failed": [], "note": "... ligger redan i
+        papperskorgen ..."} i stället för True.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID, i ett enda
         IMAP-kommando. UID:n som inte finns eller som Bridge nekar hamnar i
-        failed medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller
+        failed medan de andra genomförs. UID:n vars mejl redan låg i Trash
+        räknas som ok och nämns i "note". Ett ogiltigt UID (inte heltal) eller
         fler än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)

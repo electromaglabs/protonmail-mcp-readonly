@@ -156,22 +156,76 @@ async def set_flags(imap: IMAPClient, mailbox: str, uids: list[str], flags: str,
     return await store_flags(imap, mailbox, uids, flags, add, "Ändringen av flaggorna")
 
 
+async def already_in_target(imap: IMAPClient, mailbox: str, uids: list[str], target: str) -> list[str]:
+    """De av uids (som finns i den valda mappen mailbox) vars mejl redan ligger i target.
+
+    Gäller bara när target är Trash eller Drafts: flyttas ett mejl dit som
+    redan ligger där tar Bridge (gluon) först bort det därifrån, och Proton
+    svarar sedan "Message does not exist" (Code=2501) — mejlet är då raderat
+    permanent. Det händer live med ett mejl till sig själv, som är ETT
+    Proton-mejl med både Inbox och Sent: efter att INBOX-kopian flyttats till
+    Trash visar Bridges Sent-vy det i 20–40 s till (händelsehämtningen).
+
+    Mejlen känns igen på exakt Message-ID, tid och storlek, med en SEARCH i
+    target för upp till 20 Message-ID åt gången (imap_labels._find_in_label).
+    UID:n utan Message-ID kontrolleras inte. Mappen mailbox är vald igen
+    efteråt. Ett nekat FETCH eller SEARCH ger ValueError — då har inget skrivits.
+    """
+    if _mailbox_key(target) not in _READD_DELETES or not uids:
+        return []
+    from .imap_labels import _fetch_identities_by_uid, _find_in_label  # imap_labels bygger på den här modulen
+
+    identities = await _fetch_identities_by_uid(imap, mailbox, uids)
+    sources = {uid: identities[uid] for uid in uids if uid in identities and identities[uid]["message_id"]}
+    if not sources:
+        return []
+    await imap._select(target)
+    found, errors = await _find_in_label(imap, target, sources)
+    await imap._select(mailbox)
+    # Fail-closed: bara "finns inte där" räknas som frånvarande. Flera
+    # likadana mejl i target räknas som att mejlet redan ligger där.
+    absent = {uid for uid, error in errors.items() if _NOT_IN_VIEW in error}
+    return [uid for uid in sources if uid in found or (uid in errors and uid not in absent)]
+
+
+# Felet från imap_labels._find_in_label när mejlet inte finns i vyn
+_NOT_IN_VIEW = "har inte etiketten"
+
+
+def already_there_note(uids: list[str], mailbox: str, target: str) -> str:
+    """Förklaringen i svaret när mejl redan låg i target och lämnades orörda."""
+    where = "papperskorgen (Trash)" if _mailbox_key(target) == "trash" else target
+    which = "det" if len(uids) == 1 else "dem"
+    return (
+        f"UID {', '.join(uids)} i {mailbox} ligger redan i {where}: det är samma Proton-mejl "
+        f"som syns i båda vyerna, t.ex. ett mejl till sig själv som ligger i både INBOX och Sent. "
+        f"Inget skickades till Bridge för {which}, eftersom en ny flytt dit skulle radera "
+        f"mejlet permanent. Bridge-vyn uppdateras inom ~40 s."
+    )
+
+
 async def _move_found(imap: IMAPClient, mailbox: str, uids: list[str], target: str) -> BulkResult:
     quoted_target = _quote_mailbox(target)
     await imap._ensure_connected()
     await imap._select(mailbox)
     found, failed = await existing_uids(imap, mailbox, uids)
-    ok: list[str] = []
-    if found:
-        resp = await imap._uid("move", uid_set(found), quoted_target)
+    skipped = await already_in_target(imap, mailbox, found, target)
+    to_move = [uid for uid in found if uid not in skipped]
+    ok: list[str] = list(skipped)
+    if to_move:
+        resp = await imap._uid("move", uid_set(to_move), quoted_target)
         if resp.result == "OK":
-            ok = found
+            ok += to_move
         else:
-            ok, more = await _split_after_failure(
-                imap, mailbox, found, _failure(f"Flytten från {mailbox} till {target}", resp)
+            moved, more = await _split_after_failure(
+                imap, mailbox, to_move, _failure(f"Flytten från {mailbox} till {target}", resp)
             )
+            ok += moved
             failed += more
-    return result(uids, ok, failed)
+    res = result(uids, ok, failed)
+    if skipped:
+        res["note"] = already_there_note(skipped, mailbox, target)
+    return res
 
 
 @_serialized

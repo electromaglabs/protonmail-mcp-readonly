@@ -777,16 +777,24 @@ class IMAPClient:
 
     @_serialized
     @policy.write_operation("move_message")
-    async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
+    async def move_message(self, mailbox: str, uid: str, target: str) -> bool | dict[str, Any]:
         """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas.
 
         Till en etikett (Labels/…) läggs etiketten till och mejlet ligger kvar
         i källmappen. Starred avvisas som mål: Bridge tar då bort mejlet ur
-        källmappen (stjärnmärkning är flaggan \\Flagged).
+        källmappen (stjärnmärkning är flaggan \\Flagged). Ligger mejlet redan i
+        Trash/Drafts och det är målet görs ingenting, se _move.
         """
         return await self._move(mailbox, uid, target)
 
-    async def _move(self, mailbox: str, uid: str, target: str) -> bool:
+    async def _move(self, mailbox: str, uid: str, target: str) -> bool | dict[str, Any]:
+        """UID MOVE av ett mejl. True, eller ett svar med "note" om mejlet redan låg i target.
+
+        Ligger mejlet redan i Trash/Drafts (samma Proton-mejl i en annan vy,
+        t.ex. Sent-kopian av ett mejl till sig själv) skickas ingen flytt:
+        Bridge skulle då radera det permanent (imap_bulk.already_in_target).
+        Svaret blir {"ok": [uid], "failed": [], "note": förklaring}.
+        """
         safe_uid = _validate_uid(uid)
         _quote_mailbox(mailbox)
         quoted_target = _quote_mailbox(target)
@@ -794,14 +802,23 @@ class IMAPClient:
         await self._ensure_connected()
         await self._select(mailbox)
         await self._require_uid(mailbox, safe_uid)
+        from . import imap_bulk  # imap_bulk bygger på den här modulen
+
+        if await imap_bulk.already_in_target(self, mailbox, [safe_uid], target):
+            return {
+                "ok": [safe_uid], "failed": [],
+                "note": imap_bulk.already_there_note([safe_uid], mailbox, target),
+            }
         resp = await self._uid("move", safe_uid, quoted_target)
         _require_ok(resp, f"Flytten av UID {safe_uid} från {mailbox} till {target}")
         return True
 
     @_serialized
     @policy.write_operation("delete_message")
-    async def delete_message(self, mailbox: str, uid: str, permanent: bool = False) -> bool:
+    async def delete_message(self, mailbox: str, uid: str, permanent: bool = False) -> bool | dict[str, Any]:
         """Flyttar ett mejl till Trash, eller raderar det permanent ur Trash/Drafts.
+
+        Ligger mejlet redan i Trash (i en annan vy) flyttas det inte, se _move.
 
         Permanent radering görs med UID STORE \\Deleted + UID EXPUNGE på just
         det UID:t, aldrig med EXPUNGE på hela mappen.
