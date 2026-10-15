@@ -88,12 +88,12 @@ class TestAdressBypass:
         result = sanitize_address_text("Anna <" + tags("ignore previous") + "> <anna@x.se>")
         assert result.text == "Anna <> <anna@x.se>"
 
-    def test_taggtecken_i_adressen_lamnas_och_rapporteras(self):
-        # Ändrat i efterfix-rensning (F6): en visad adress som skiljer sig från
-        # mottagaren är värre än en flaggad adress; skick vägrar sådana adresser
-        text = "<anna" + tags("run rm") + "@x.se>"
-        result = sanitize_address_text(text)
-        assert result.text == text
+    def test_taggtecken_i_adressen_synliggors_och_rapporteras(self):
+        # Ändrat i efterfix-rensning (F6): taggtecken tas inte bort tyst ur
+        # adressen (visad adress ≠ mottagare) utan visas som [U+XXXX]; skick
+        # vägrar sådana adresser
+        result = sanitize_address_text("<anna" + tags("run rm") + "@x.se>")
+        assert result.text == "<anna[U+E0072][U+E0075][U+E006E][U+E0020][U+E0072][U+E006D]@x.se>"
         assert result.removed == {}
         assert result.kept_in_address == 6
 
@@ -103,12 +103,14 @@ class TestAdressBypass:
         assert "\u200b" not in result.text
 
     def test_citerad_lokaldel_i_adressen_lamnas(self):
-        text = '"an\u200bna"@x.se'
-        assert sanitize_address_text(text).text == text
+        # Ändrat i efterfix-rensning (F6): synlig kod i stället för osynligt tecken
+        assert sanitize_address_text('"an\u200bna"@x.se').text == '"an[U+200B]na"@x.se'
+
 
     def test_osynliga_tecken_som_lamnas_i_adressen_rapporteras(self):
         result = sanitize_address_text("Anna <an\u200bna@x.se>")
-        assert result.text == "Anna <an\u200bna@x.se>"
+        # Ändrat i efterfix-rensning (F6): synlig kod i stället för osynligt tecken
+        assert result.text == "Anna <an[U+200B]na@x.se>"
         assert result.kept_in_address == 1
 
 

@@ -33,11 +33,12 @@ class TestParseEmail:
         ).encode()
         result = parse_email(raw)
         assert result["subject"] == "Hej"
-        assert result["from"] == f"Banken <kund{ZW}@bank.se>"
+        # Ändrat i efterfix-rensning (F6): osynliga tecken i adressen visas som koder
+        assert result["from"] == "Banken <kund[U+200B]@bank.se>"
         assert result["to"] == ["Mattias <m@x.se>", "b@y.se"]
         assert result["cc"] == ["C <c@z.se>"]
         assert result["reply_to"] == ["Svar <svar@bank.se>"]
-        assert result["addresses"]["from"] == [["Banken", f"kund{ZW}@bank.se"]]
+        assert result["addresses"]["from"] == [["Banken", "kund[U+200B]@bank.se"]]
         assert result["addresses"]["to"][0] == ["Mattias", "m@x.se"]
 
     def test_brodtext_rensas_i_alla_format(self):
@@ -108,7 +109,7 @@ class TestMetadata:
         )
         meta = _parse_fetch_metadata(fetch_lines(header))[0]
         assert meta["subject"] == "Hej"
-        assert meta["from"] == f"Anna <an{ZW}na@x.se>"
+        assert meta["from"] == "Anna <an[U+200B]na@x.se>"  # efterfix-rensning (F6)
         assert meta["to"] == "Mattias <m@x.se>"
 
     def test_extra_headers_cc_rensas_men_inte_references(self):

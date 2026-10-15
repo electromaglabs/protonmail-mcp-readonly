@@ -126,12 +126,12 @@ class TestLegitimText:
 class TestAdresser:
     def test_visningsnamn_rensas_men_inte_adressen(self):
         result = sanitize_address_text("An\u200bna" + tags("hi") + " <an\u200bna@x.se>")
-        assert result.text == "Anna <an\u200bna@x.se>"
+        assert result.text == "Anna <an[U+200B]na@x.se>"  # efterfix-rensning (F6): synlig kod
         assert result.count == 3
 
     def test_citerat_namn_rensas(self):
         result = sanitize_address_text('"Svensson,\u202e Anna" <a@x.se>, b\u200b@y.se')
-        assert result.text == '"Svensson, Anna" <a@x.se>, b\u200b@y.se'
+        assert result.text == '"Svensson, Anna" <a@x.se>, b[U+200B]@y.se'  # efterfix-rensning (F6)
         assert result.count == 1
 
     def test_flera_adresser_utan_namn_lamnas(self):

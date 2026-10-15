@@ -253,6 +253,17 @@ def format_address(name: str, addr: str) -> str:
     return ""
 
 
+def _format_shown(name: str, raw: str, shown: str) -> str:
+    """format_address för den råa adressen, med adressdelen visad som shown
+    (råadressen med osynliga tecken som [U+XXXX], se sanitize_address)."""
+    formatted = format_address(name, raw)
+    if shown == raw or not formatted:
+        return formatted
+    if formatted == raw:
+        return shown
+    return formatted[: -len(raw) - 2] + f"<{shown}>"
+
+
 def extract_addresses(header_value: str | None) -> list[str]:
     formatted = (format_address(name, addr) for name, addr in parse_addresses(header_value))
     return [a for a in formatted if a]
@@ -608,7 +619,8 @@ def suspicious_reasons(
         reasons.append(f"bidi-styrtecken borttagna: {n} (kan vända visningsordningen för läsaren)")
     if clean.kept_in_address:
         reasons.append(
-            f"osynliga tecken i en adress: {clean.kept_in_address} (adressen är lämnad orörd)"
+            f"osynliga tecken i en adress: {clean.kept_in_address} (visas som [U+XXXX]; "
+            "svara inte till adressen)"
         )
     return reasons
 
@@ -695,17 +707,26 @@ def parse_email(
         # finns i "full" eller med max_length=None.
         body_html = _truncate(body_html, max_length)
 
-    # Visningsnamnen rensas; adresserna lämnas helt orörda (osynliga tecken i
-    # dem flaggas), så att ett svar aldrig går till en annan adress än den
-    # som visas
+    # Visningsnamnen rensas. Ur adresserna tas inget bort: osynliga tecken
+    # visas som [U+XXXX] och flaggas, så att visningen avslöjar exakt vad
+    # som står i rubriken (och skick vägrar sådana adresser)
     addresses = {
         key: [clean.pair(key, n, a) for n, a in parse_addresses(_raw_header(msg, name))]
         for key, name in (
             ("from", "From"), ("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"), ("reply_to", "Reply-To")
         )
     }
+    raw_addresses = {
+        key: [a for _, a in parse_addresses(_raw_header(msg, name))]
+        for key, name in (
+            ("from", "From"), ("to", "To"), ("cc", "Cc"), ("bcc", "Bcc"), ("reply_to", "Reply-To")
+        )
+    }
     formatted = {
-        key: [f for f in (format_address(n, a) for n, a in pairs) if f]
+        key: [
+            f for f in (_format_shown(n, raw, shown) for (n, shown), raw in zip(pairs, raw_addresses[key]))
+            if f
+        ]
         for key, pairs in addresses.items()
     }
     # Utan parsbar adress (bara ett namn, trasig rubrik): visa den avkodade texten

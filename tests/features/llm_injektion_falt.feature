@@ -30,8 +30,9 @@ Feature: Avsändarstyrda fält rensas innan de når klienten
     When jag hämtar mejlet med get_email
     Then ska bilagan heta "fakturafdp.exe"
 
-  Scenario: Listningen rensar ämne och namn men inte adresser
+  # Ändrat i efterfix-rensning (F6): osynliga tecken i adressen visas som synliga koder
+  Scenario: Listningen rensar ämne och namn och synliggör osynliga tecken i adresser
     Given en IMAP-sida med ett mejl från "Ann{U+200B}a <an{U+200B}na@x.se>" med ämnet "Hej{U+E0041}{U+E0042}"
     When sidans metadata parsas
     Then ska listningens ämne vara "Hej"
-    And listningens avsändare ska vara "Anna <an{U+200B}na@x.se>"
+    And listningens avsändare ska vara "Anna <an[U+200B]na@x.se>"

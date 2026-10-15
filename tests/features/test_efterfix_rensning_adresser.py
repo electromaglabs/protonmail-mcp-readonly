@@ -40,9 +40,23 @@ def fetch(mock_ctx, raw):
     return asyncio.run(get_email(mock_ctx, uid="1", mailbox="INBOX"))
 
 
-@then(parsers.parse('ska reply_to vara adressen "{addr}" oförändrad'))
-def reply_to_unchanged(result, addr):
+@then(parsers.parse('ska reply_to vara "{addr}"'))
+def reply_to_is(result, addr):
     assert result["reply_to"] == [_expand(addr)]
+
+
+@then(parsers.parse('ska adressen i addresses vara "{addr}"'))
+def address_pair_is(result, addr):
+    assert result["addresses"]["reply_to"][0][1] == addr
+
+
+@then("ska inget fält i svaret innehålla osynliga tecken")
+def nothing_invisible(result):
+    import json
+    import unicodedata
+
+    text = json.dumps(result, ensure_ascii=False)
+    assert not [c for c in text if unicodedata.category(c) == "Cf" or 0xE0000 <= ord(c) <= 0xE0FFF]
 
 
 @then("ska suspicious_content nämna osynliga tecken i en adress")

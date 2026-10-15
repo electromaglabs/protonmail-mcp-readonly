@@ -180,6 +180,16 @@ _ANY_RE = re.compile(
     )
 )
 _ASCII_UNSAFE_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f]")
+# Tecken som synliggörs i en adress (allt sanitize_text kan ta bort utom
+# kombinationstecken, som syns), och en bokstavlig "[U+…]" i adressen, vars
+# "[" också kodas så att koderna blir entydiga
+_ADDRESS_ESCAPE_RE = re.compile(
+    _fast_class(
+        [*range(0xD800, 0xE000), *range(0x00, 0x20), *range(0x7F, 0xA0), _ZWJ, *_TAGS, *_BIDI,
+         *_BIDI_MARKS, *_ZERO_WIDTH, *_OTHER_FORMAT, *_VARIATION_SELECTORS]
+    )
+    + r"|\[(?=U\+[0-9A-F]{4,6}\])"
+)
 
 
 @dataclass(frozen=True)
@@ -254,27 +264,45 @@ def _is_angle_address(token: str) -> bool:
     return token.startswith("<") and "@" in token and len(token) <= _MAX_ADDRESS_LEN + 2
 
 
-def sanitize_address(addr: str | None) -> Sanitized:
-    """En enskild adress (local@domain): lämnas helt orörd.
+def _escape(m: re.Match[str]) -> str:
+    return f"[U+{ord(m.group()):04X}]"
 
-    En ändrad adress kunde peka på en annan mottagare än den som ett svar
-    går till, så inget tas bort — inte ens taggtecken. Tecken som
-    sanitize_text skulle ha tagit bort räknas i kept_in_address, så att
-    anroparen kan varna (suspicious_content). Att skicka till en sådan
-    adress vägras vid skick.
+
+def sanitize_address(addr: str | None) -> Sanitized:
+    """En enskild adress (local@domain): osynliga tecken görs synliga.
+
+    Inget tas bort — en adress som visas utan ett tecken som finns i
+    rubriken kunde se ut som en annan mottagare än den som ett svar går
+    till. I stället ersätts varje osynligt tecken (taggtecken, bidi,
+    nollbredd, övriga formattecken, kontrolltecken, variationsväljare) med
+    en synlig kod "[U+XXXX]", så att ingen osynlig text når modellen och
+    visningen avslöjar exakt vad som står i rubriken. En bokstavlig
+    "[U+XXXX]" i adressen får sitt "[" kodat ("[U+005B]U+XXXX]"), så att
+    koderna är entydiga. Antal synliggjorda tecken räknas i
+    kept_in_address så att anroparen kan varna (suspicious_content); att
+    skicka till en sådan adress vägras vid skick. Deterministiskt och
+    linjärt.
     """
     if not addr:
         return Sanitized("")
-    if addr.isascii() and not _ASCII_UNSAFE_RE.search(addr):
+    if "[" not in addr and addr.isascii() and not _ASCII_UNSAFE_RE.search(addr):
         return Sanitized(addr)
-    return Sanitized(addr, {}, sanitize_text(addr).count)
+    escaped = 0
+
+    def escape(m: re.Match[str]) -> str:
+        nonlocal escaped
+        if m.group() != "[":
+            escaped += 1
+        return _escape(m)
+
+    return Sanitized(_ADDRESS_ESCAPE_RE.sub(escape, addr), {}, escaped)
 
 
 def sanitize_address_text(text: str | None) -> Sanitized:
     """Rensa en adressrad ("Anna <anna@x.se>, b@y.se") utan att röra adresserna.
 
-    Adressdelen ändras aldrig (se sanitize_address); osynliga tecken i den
-    räknas i kept_in_address. Som adress räknas, per element mellan komma
+    Inget tas bort ur adressdelen; osynliga tecken i den visas som synliga
+    koder "[U+XXXX]" och räknas i kept_in_address (se sanitize_address). Som adress räknas, per element mellan komma
     eller semikolon:
 
     - <…> med @ (högst 320 tecken), och
@@ -287,7 +315,7 @@ def sanitize_address_text(text: str | None) -> Sanitized:
     """
     if not text:
         return Sanitized("")
-    if text.isascii() and not _ASCII_UNSAFE_RE.search(text):
+    if "[U+" not in text and text.isascii() and not _ASCII_UNSAFE_RE.search(text):
         return Sanitized(text)
     tokens = list(_ADDRESS_TOKEN_RE.finditer(text))
     # Element (mellan , och ;) som har en <…>-adress
