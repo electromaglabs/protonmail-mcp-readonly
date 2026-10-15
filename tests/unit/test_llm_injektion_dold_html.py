@@ -1,9 +1,8 @@
 """html_text: dolt innehåll utesluts och rapporteras (llm-injektion)."""
-import time
-
 import pytest
 
 from protonmail_mcp.html_text import html_to_text, html_to_text_report
+from tests.tidsmatning import assert_linear
 
 
 class TestDoltInnehall:
@@ -99,19 +98,20 @@ class TestVitText:
 
 
 class TestLinjarTid:
+    """Tiden jämförs mellan n och 4n (4n = halva den tidigare storleken) i
+    stället för mot en absolut gräns, som föll på långsamma CI-maskiner trots
+    linjär kod."""
+
     @pytest.mark.parametrize(
-        "html",
+        "make, n",
         [
-            '<div style="display:none">' * 100_000 + "x",
-            '<div style="font-size:0">' * 100_000 + "x" + "</div>" * 100_000,
-            '<span style="font-size:0">' * 50_000 + "</div>" * 50_000,
-            '<p style="color:#fff">x' * 50_000,
-            ('<td style="font-size:0"><div style="font-size:1px">x</div>' * 50_000),
+            (lambda n: '<div style="display:none">' * n + "x", 12_500),
+            (lambda n: '<div style="font-size:0">' * n + "x" + "</div>" * n, 12_500),
+            (lambda n: '<span style="font-size:0">' * n + "</div>" * n, 6_250),
+            (lambda n: '<p style="color:#fff">x' * n, 6_250),
+            (lambda n: '<td style="font-size:0"><div style="font-size:1px">x</div>' * n, 6_250),
         ],
         ids=["gomda-nastlade", "font-size-nastlade", "felmatchade", "ostangda-p", "kolumner"],
     )
-    def test_snabb(self, html):
-        start = time.perf_counter()
-        html_to_text_report(html)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 5, f"tog {elapsed:.2f} s"
+    def test_snabb(self, make, n):
+        assert_linear(html_to_text_report, make, n)

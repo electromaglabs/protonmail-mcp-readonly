@@ -2,6 +2,7 @@
 import pytest
 
 from protonmail_mcp.html_text import html_to_text
+from tests.tidsmatning import assert_linear
 
 
 @pytest.mark.parametrize(
@@ -57,13 +58,12 @@ class TestHostileHtml:
     Så tar det linjär tid och utdata växer inte mer än indata."""
 
     def test_many_inline_fragments_on_one_line_is_linear(self):
-        import time
-
-        # Linjärt ≈ 1,3 s, kvadratiskt (str +=) ≈ 10 s — marginal för belastad CI
-        html = "<b>x</b> " * 400_000
-        start = time.perf_counter()
-        html_to_text(html)
-        assert time.perf_counter() - start < 5
+        # En lång rad av inline-fragment: med str += blir det kvadratiskt.
+        # Tiden jämförs mellan n och 4n i stället för mot en absolut gräns,
+        # som föll på långsamma CI-maskiner trots linjär kod. 100 tecken per
+        # fragment gör att en kvadratisk kopiering av raden syns (≈ 18×).
+        fragment = "<b>" + "x" * 100 + "</b> "
+        assert_linear(html_to_text, lambda n: fragment * n, 10_000)
 
     def test_deep_blockquote_nesting_does_not_amplify(self):
         html = "<blockquote>x<br>" * 5_000

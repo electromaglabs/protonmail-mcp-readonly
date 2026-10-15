@@ -2,6 +2,7 @@
 import pytest
 
 from protonmail_mcp.sanitize import injection_signals, sanitize_text
+from tests.tidsmatning import assert_linear
 
 
 def _tags(text: str) -> str:
@@ -101,9 +102,6 @@ class TestIngenSmugglingViaFlaggor:
             assert not any(0xE0000 <= ord(c) <= 0xE007F for c in out), repr(text)
 
     def test_manga_flaggor_ar_linjart(self):
-        import time
-
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
         flag = BLACK_FLAG + _tags("gbwls") + CANCEL
-        start = time.perf_counter()
-        sanitize_text((flag + _tags("x")) * 100_000)
-        assert time.perf_counter() - start < 3.0
+        assert_linear(sanitize_text, lambda n: (flag + _tags("x")) * n, 25_000)

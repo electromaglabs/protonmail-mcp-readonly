@@ -4,6 +4,7 @@ import time
 import pytest
 
 from protonmail_mcp.sanitize import sanitize_address_text, sanitize_text
+from tests.tidsmatning import assert_linear
 
 
 def tags(text: str) -> str:
@@ -148,45 +149,43 @@ class TestAdresser:
 
 
 class TestLinjarTid:
+    """Tiden jämförs mellan n och 4n (4n = halva den tidigare storleken) i
+    stället för mot en absolut gräns, som föll på långsamma CI-maskiner trots
+    linjär kod. En kvadratisk variant tar minuter vid de här storlekarna."""
+
     @pytest.mark.parametrize(
-        "text",
+        "make, n",
         [
-            "a" + "\u0300\u0316" * 200_000,  # zalgo: NFC är kvadratisk i 3.14 utan tak
-            "\U0001F600" + "\ufe0f" * 500_000,
-            tags("x") * 500_000,
-            "\u200d\U0001F600" * 300_000,
-            "x\u200d" * 500_000,
-            ("abcdefghi\u200b") * 200_000,
+            (lambda n: "a" + "\u0300\u0316" * n, 25_000),  # zalgo: NFC är kvadratisk i 3.14 utan tak
+            (lambda n: "\U0001F600" + "\ufe0f" * n, 62_500),
+            (lambda n: tags("x") * n, 62_500),
+            (lambda n: "\u200d\U0001F600" * n, 37_500),
+            (lambda n: "x\u200d" * n, 62_500),
+            (lambda n: ("abcdefghi\u200b") * n, 25_000),
         ],
         ids=["zalgo", "variationsval", "taggar", "zwj-emoji", "zwj-text", "blandat"],
     )
-    def test_patologisk_text_ar_snabb(self, text):
-        start = time.perf_counter()
-        sanitize_text(text)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 2, f"tog {elapsed:.2f} s"
+    def test_patologisk_text_ar_snabb(self, make, n):
+        assert_linear(sanitize_text, make, n)
 
     @pytest.mark.parametrize(
-        "text",
+        "make, n",
         [
-            "<" * 300_000,
-            '"' + "a" * 500_000,
-            "<a" * 300_000,
-            "a" * 500_000 + "@",
-            "a@" * 300_000,
-            '"\\' * 300_000,
-            "a@b.se \u200bx, " * 100_000,
+            (lambda n: "<" * n, 37_500),
+            (lambda n: '"' + "a" * n, 62_500),
+            (lambda n: "<a" * n, 37_500),
+            (lambda n: "a" * n + "@", 62_500),
+            (lambda n: "a@" * n, 37_500),
+            (lambda n: '"\\' * n, 37_500),
+            (lambda n: "a@b.se \u200bx, " * n, 25_000),  # 4n = 100 000: kopiering syns
         ],
         ids=[
             "vinklar", "oavslutat-citat", "oavslutade-vinklar", "langt-ord", "manga-snabel-a", "escape",
             "manga-segment",
         ],
     )
-    def test_patologisk_adressrad_ar_snabb(self, text):
-        start = time.perf_counter()
-        sanitize_address_text(text)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 2, f"tog {elapsed:.2f} s"
+    def test_patologisk_adressrad_ar_snabb(self, make, n):
+        assert_linear(sanitize_address_text, make, n)
 
     def test_tiden_vaxer_linjart(self):
         def measure(n):

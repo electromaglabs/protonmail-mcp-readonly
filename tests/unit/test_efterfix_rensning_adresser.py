@@ -5,6 +5,7 @@ import pytest
 
 from protonmail_mcp.email_parser import parse_email
 from protonmail_mcp.sanitize import sanitize_address, sanitize_address_text
+from tests.tidsmatning import assert_linear
 
 TAGS = "\U000E0041\U000E0042"
 RLO, LRO, ZW = "‮", "‭", "​"
@@ -155,9 +156,10 @@ class TestListningar:
         assert "suspicious_content" not in self._meta("From: Anna <a@x.se>\r\nSubject: Hej")
 
 
-@pytest.mark.parametrize("n", [20_000, 40_000])
-def test_adressraden_ar_linjar(n):
-    text = ", ".join(f"N{ZW}{i}@x <a{i}@x.se> b{ZW}@y.se" for i in range(n))
-    start = time.perf_counter()
-    sanitize_address_text(text)
-    assert time.perf_counter() - start < 2.0
+def test_adressraden_ar_linjar():
+    # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+    assert_linear(
+        sanitize_address_text,
+        lambda n: ", ".join(f"N{ZW}{i}@x <a{i}@x.se> b{ZW}@y.se" for i in range(n)),
+        10_000,
+    )

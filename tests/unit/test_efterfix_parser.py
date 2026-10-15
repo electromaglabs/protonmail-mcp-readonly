@@ -5,6 +5,7 @@ import time
 import pytest
 
 from protonmail_mcp.email_parser import decode_header_value
+from tests.tidsmatning import assert_linear
 
 
 def _stdlib(value: str) -> str:
@@ -157,9 +158,9 @@ class TestUnclosedHead:
     def test_still_linear(self):
         from protonmail_mcp.html_text import html_to_text
 
-        markup = "<head><meta a=b>" + "<p>x</p><title>t</title>" * 50_000
-        start = time.perf_counter()
-        text = html_to_text(markup)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 5, f"tog {elapsed:.2f} s"
-        assert text.count("x") == 50_000
+        def make(n):
+            return "<head><meta a=b>" + "<p>x</p><title>t</title>" * n
+
+        assert html_to_text(make(50_000)).count("x") == 50_000
+        # n mot 4n i stället för en absolut gräns, som föll på långsamma maskiner
+        assert_linear(html_to_text, make, 6_250)

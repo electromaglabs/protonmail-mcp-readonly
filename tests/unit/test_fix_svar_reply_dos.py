@@ -6,6 +6,12 @@ import pytest
 
 from protonmail_mcp.tools.reply import reply_to_email
 from tests.fix_svar_support import KONTO, capture_smtp
+from tests.tidsmatning import (
+    assert_cheaper_than,
+    assert_linear_async,
+    best_time,
+    best_time_async,
+)
 from tests.unit.test_fix_svar_reply import _ctx, _raw
 
 
@@ -79,8 +85,13 @@ async def test_huge_headers_spread_over_mime_parts_are_rejected_fast(tool):
 @pytest.mark.parametrize("tool", ["reply", "forward"])
 async def test_huge_number_of_mime_parts_is_rejected_fast(tool):
     """Varje del parsas (Content-Type) med email.policy; 20 000 små delar
-    tog flera sekunder innan något skickades."""
-    import time
+    tog flera sekunder innan något skickades.
+
+    Tiden jämförs med en billig compat32-parsning av samma meddelande, som
+    görs ändå, i stället för mot en absolut gräns som föll på långsamma
+    CI-maskiner. Med email.policy för varje del tar det ≈ 12 gånger så lång tid."""
+    import email
+    import email.policy
 
     from protonmail_mcp.tools.reply import forward_email
 
@@ -92,15 +103,19 @@ async def test_huge_number_of_mime_parts_is_rejected_fast(tool):
         'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
         f"--B\r\nContent-Type: text/plain\r\n\r\nhej\r\n{parts}--B--\r\n"
     ).encode()
-    with capture_smtp() as cap:
-        start = time.perf_counter()
+    reference = best_time(lambda: email.message_from_bytes(raw, policy=email.policy.compat32))
+
+    async def run():
         with pytest.raises(ValueError, match="delar"):
             if tool == "reply":
                 await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
             else:
                 await forward_email(_ctx(raw), mailbox="INBOX", uid="1", to="b@x.se")
-        assert time.perf_counter() - start < 1.0
+
+    with capture_smtp() as cap:
+        elapsed = await best_time_async(run)
     assert cap.sent == []
+    assert_cheaper_than(elapsed, reference, 4, "Att avvisa 20 000 MIME-delar")
 
 
 async def test_normal_number_of_attachments_still_forwarded():
@@ -168,12 +183,23 @@ async def test_content_type_with_comments_in_many_parts_is_cheap(tool):
 
 @pytest.mark.parametrize("tool", ["reply", "forward"])
 async def test_address_header_with_many_comments_is_cheap(tool):
-    raw = (
-        f"From: a@x.se {'(a)' * 16_600}\r\nTo: {KONTO}\r\nSubject: s\r\n"
-        "Content-Type: text/plain\r\n\r\nhej\r\n"
-    ).encode()
-    with capture_smtp() as cap:
-        assert await _timed(tool, raw, cap) < 1.0
+    """Adressparsern i email.policy är kvadratisk i antalet kommentarer.
+    Tiden jämförs mellan n och 4n kommentarer (4n = 16 600, strax under
+    taket för en header) i stället för mot en absolut gräns, som föll på
+    långsamma CI-maskiner: svaret tar ≈ 0,3 s på en snabb Mac även linjärt."""
+
+    def make(n):
+        return (
+            f"From: a@x.se {'(a)' * n}\r\nTo: {KONTO}\r\nSubject: s\r\n"
+            "Content-Type: text/plain\r\n\r\nhej\r\n"
+        ).encode()
+
+    async def run(raw):
+        with capture_smtp() as cap:
+            await _timed(tool, raw, cap)
+        assert len(cap.sent) == 1
+
+    await assert_linear_async(run, make, 4_150)
 
 
 @pytest.mark.parametrize("tool", ["reply", "forward"])
