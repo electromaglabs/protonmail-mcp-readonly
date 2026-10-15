@@ -65,6 +65,14 @@ _BIDI_MARKS = [0x200E, 0x200F, 0x061C]
 _ZERO_WIDTH = [0x200B, 0x200C, 0x2060, 0xFEFF, 0x180E, 0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0,
                0x17B4, 0x17B5]
 _VARIATION_SELECTORS = [*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0), *range(0x180B, 0x1810)]
+# De enda emoji-taggsekvenserna i bruk (RGI): flaggorna för England,
+# Skottland och Wales — svart flagga, taggbokstäverna "gbeng"/"gbsct"/"gbwls"
+# och U+E007F. De behålls; alla andra taggtecken tas bort. Bara exakt dessa
+# tre, så att taggbokstäver efter en flagga inte kan bära annan text.
+_FLAG_TAG_SEQUENCES = [
+    "\U0001F3F4" + "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000E007F"
+    for code in ("gbeng", "gbsct", "gbwls")
+]
 # Högst så många kombinationstecken i följd (UAX #15)
 _MAX_MARKS = 30
 # Högsta längd för en adress (RFC 5321 \u00a74.5.3.1.3); längre ord är inga adresser
@@ -149,7 +157,8 @@ _MARK_CLASS = _fast_class(_MARKS)
 # ZWJ, eftersom ZWJ bara får stå kvar efter en väljare som själv står kvar.
 _PASSES: list[tuple[str, re.Pattern[str]]] = [
     ("surrogate", re.compile("[\ud800-\udfff]")),
-    ("tag", re.compile(_char_class(_TAGS))),
+    # Ersätts med grupp 1: en hel flaggsekvens står kvar, övriga taggtecken försvinner
+    ("tag", re.compile(f"({'|'.join(_FLAG_TAG_SEQUENCES)})|{_char_class(_TAGS)}")),
     ("bidi", re.compile(_fast_class(_BIDI))),
     ("bidi_mark", re.compile(_fast_class(_BIDI_MARKS))),
     ("zero_width", re.compile(_fast_class(_ZERO_WIDTH))),
@@ -161,6 +170,8 @@ _PASSES: list[tuple[str, re.Pattern[str]]] = [
     # först så att bakåtblicken bara görs för kombinationstecken.
     ("combining_excess", re.compile(f"{_MARK_CLASS}(?<={_MARK_CLASS}{{{_MAX_MARKS + 1}}})")),
 ]
+# Ersättning per kategori (standard: ta bort). \1 är tomt när gruppen inte matchat.
+_REPLACEMENT = {"tag": r"\1"}
 # Allt som någon pass kan ta bort — saknas det räcker NFC-kontrollen
 _ANY_RE = re.compile(
     _fast_class(
@@ -215,7 +226,7 @@ def sanitize_text(text: str | None) -> Sanitized:
         if _ANY_RE.search(text):
             for category, pattern in _PASSES:
                 before = len(text)
-                text = pattern.sub("", text)
+                text = pattern.sub(_REPLACEMENT.get(category, ""), text)
                 if n := before - len(text):  # tecken, inte träffar
                     removed[category] = removed.get(category, 0) + n
                     changed = True
