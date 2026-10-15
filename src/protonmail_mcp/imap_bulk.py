@@ -312,6 +312,9 @@ async def permanent_delete_found(
     som raderat först när det inte heller finns i All Mail. Ligger det kvar
     där raderas det via Trash (_settle_vanished). Går det inte att avgöra
     hamnar mejlet i failed med en förklaring, aldrig i ok.
+
+    Kräver låset. Under väntan släpps det mellan kontrollerna (_wait_until_gone),
+    så att andra verktyg inte blockeras; anropet som helhet kan ändå ta ~50 s.
     """
     targets = uid_set(found)
     resp = await imap._uid("store", targets, "+FLAGS", r"(\Deleted)")
@@ -353,7 +356,11 @@ async def _wait_until_gone(
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Väntar tills UID:na inte längre finns i mailbox, högst _GONE_TIMEOUT sekunder.
 
-    Mappen väljs om inför varje kontroll, så att Bridges köade ändringar syns.
+    Kräver låset. Väntan mellan kontrollerna sker utan låset (_sleep_unlocked),
+    så att andra verktyg inte står still i upp till 45 s; varje kontroll görs
+    med låset. Mappen väljs om inför varje kontroll — ett annat anrop kan ha
+    valt en annan mapp, och Bridges köade ändringar syns först då. \\Deleted är
+    redan borttagen, så en EXPUNGE från ett annat anrop kan inte ta mejlen.
     Returnerar (borta, failed med error för de som finns kvar).
     """
     from . import imap_client  # läses vid anropet, så att testerna kan korta tiderna
@@ -362,8 +369,9 @@ async def _wait_until_gone(
     deadline = time.monotonic() + timeout
     left = uids
     while True:
-        await asyncio.sleep(imap_client._GONE_INTERVAL)
+        await _sleep_unlocked(imap, imap_client._GONE_INTERVAL)
         try:
+            await imap._ensure_connected()
             await imap._select(mailbox)
             left, _ = await existing_uids(imap, mailbox, left)
         except ValueError as exc:
@@ -373,6 +381,20 @@ async def _wait_until_gone(
     left_set = set(left)
     note = f" Mejlet finns kvar i {mailbox} efter {timeout:g} s väntan på att Bridge skulle ta bort det."
     return [u for u in uids if u not in left_set], fail_all(left, error + note)
+
+
+async def _sleep_unlocked(imap: IMAPClient, seconds: float) -> None:
+    """Sover utan klientens lås och har det igen efteråt. Kräver låset.
+
+    Som get_thread, som tar låset per steg: ett anrop som bara väntar på
+    Bridge ska inte blockera andra verktyg. Avbryts väntan tas låset ändå
+    tillbaka innan avbrottet går vidare, så att _serialized släpper det.
+    """
+    imap._lock.release()
+    try:
+        await asyncio.sleep(seconds)
+    finally:
+        await imap._lock.acquire()
 
 
 def _maybe_in_all_mail(uid: str, mailbox: str, why: str) -> str:
