@@ -298,6 +298,13 @@ def _reply_recipients(
     if not to_list:
         # T.ex. ett eget mejl som bara hade Cc: låt kopian bli mottagare
         to_list, cc_list = cc_list, []
+    if not to_list and own and senders and all(a.lower() == own for _, a in senders):
+        # Ett mejl från det egna kontot till bara sig självt (t.ex. en
+        # påminnelse): svaret går också till det egna kontot, med namn och
+        # stavning som i originalet. Kräver att avsändaren är det egna kontot,
+        # så att en avsändare som inte går att tolka aldrig blir "mig själv".
+        display, addr = senders[0]
+        to_list = [_format_address(display, addr) if display else addr]
     if not to_list:
         raise ValueError(
             "Hittar ingen mottagare att svara till: originalet har inga andra "
@@ -405,7 +412,8 @@ async def reply_to_email(
     """Svara på ett e-post. Sätter In-Reply-To, References och Re:-prefix automatiskt.
 
     Svaret går till originalets Reply-To om den finns, annars till From. Är
-    originalet ett mejl du själv skickat går svaret till dess mottagare.
+    originalet ett mejl du själv skickat går svaret till dess mottagare, och
+    hade det bara dig själv som mottagare går svaret till dig själv.
     Originalet citeras under svaret ("Den <datum> skrev <namn>:" och "> "-rader).
 
     Args:

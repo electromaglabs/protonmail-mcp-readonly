@@ -302,12 +302,12 @@ async def test_reply_all_to_own_sent_message_includes_cc():
     assert [a for _, a in _cc(cap)] == ["c@x.se"]
 
 
-async def test_reply_to_note_to_self_without_other_recipients_is_an_error():
+async def test_reply_to_note_to_self_without_other_recipients_goes_to_self():
+    # Avsiktligt beteendebyte (efterfix-live L4): tidigare ett fel
     raw = _raw(f"From: {KONTO}\nTo: {KONTO}\nSubject: s")
     with capture_smtp() as cap:
-        with pytest.raises(ValueError, match="mottagare"):
-            await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
-    assert cap.sent == []
+        await reply_to_email(_ctx(raw), mailbox="INBOX", uid="1", body="ok")
+    assert cap.recipients == [KONTO]
 
 
 async def test_reply_with_extra_cc_and_bcc():
