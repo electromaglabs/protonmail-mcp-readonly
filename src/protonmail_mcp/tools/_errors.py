@@ -16,6 +16,7 @@ import socket
 import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import quote, quote_plus
 
 import aioimaplib
 import aiosmtplib
@@ -63,26 +64,52 @@ def _password() -> str:
     return password if isinstance(password, str) else ""
 
 
+def _password_forms(password: str) -> list[str]:
+    """Formerna som lösenordet kan stå i en feltext, längsta först: som det
+    är, URL-kodat (t.ex. i en URL med inloggning) och med blankstegen
+    hopslagna (som _detail och _smtp_reply gör)."""
+    forms = {
+        password,
+        quote(password, safe=""),
+        quote(password),
+        quote_plus(password),
+        " ".join(password.split()),
+    }
+    return sorted((f for f in forms if f), key=len, reverse=True)
+
+
 def _scrub(text: str) -> str:
     password = _password()
-    return text.replace(password, "***") if password else text
+    if not password:
+        return text
+    for form in _password_forms(password):
+        text = text.replace(form, "***")
+    return text
+
+
+def _one_line(text: str) -> str:
+    """Texten på en rad, maskerad både före och efter att blankstegen slagits ihop."""
+    return _scrub(" ".join(_scrub(text).split()))
 
 
 def _detail(exc: BaseException) -> str:
-    """Undantagets text på en rad, eller typnamnet om texten är tom."""
-    text = " ".join(str(exc).split()) or type(exc).__name__
+    """Undantagets text på en rad, eller typnamnet om texten är tom.
+
+    Lösenordet maskeras före kapningen, så att ingen början av det blir kvar.
+    """
+    text = _one_line(str(exc)) or type(exc).__name__
     if len(text) > _MAX_DETAIL_CHARS:
         text = text[:_MAX_DETAIL_CHARS] + " …"
     return text
 
 
 def _smtp_reply(exc: aiosmtplib.SMTPResponseException) -> str:
-    return " ".join(f"{exc.code} {exc.message}".split())
+    return _one_line(f"{exc.code} {exc.message}")
 
 
 def _partial_delivery(exc: SMTPPartialDeliveryError) -> str:
     refused = "; ".join(
-        f"{addr} ({code} {' '.join(str(text).split())})" for addr, (code, text) in exc.refused.items()
+        f"{addr} ({code} {_one_line(str(text))})" for addr, (code, text) in exc.refused.items()
     )
     return (
         f"Mejlet skickades bara delvis. Fick mejlet: {', '.join(exc.delivered)}. "
