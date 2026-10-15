@@ -14,6 +14,8 @@ from typing import Any, Literal
 from mcp.server.fastmcp import Context
 
 from .. import imap_drafts
+from ..email_parser import decode_header_value
+from ..sanitize import clean_text
 from ..smtp_client import (
     _build_message,
     prepared_recipients,
@@ -250,7 +252,13 @@ def _internal_ref_id(ref: str) -> str | None:
 
 
 def _part_name(part: Message) -> str:
-    return part.get_filename() or part.get_content_type()
+    """Bilagans namn för svaret: avkodat och rensat från osynliga tecken och
+    bidi-styrtecken (som i get_email), annars MIME-typen. Själva bilagan ändras inte."""
+    try:
+        name = clean_text(decode_header_value(part.get_filename()))
+    except Exception:
+        name = ""
+    return name or part.get_content_type()
 
 
 def _kept_from_old(old_raw: bytes, body_html: str | None) -> tuple[dict[str, Any], dict[str, list[str]]]:
@@ -341,7 +349,8 @@ async def update_draft(
         "replaced_moved_to": "Trash", "kept_headers", "kept_attachments"}
         där uid är det nya utkastets UID, replaced_uid det gamla (som nu
         ligger i Trash), kept_headers de trådheaders som fördes över och
-        kept_attachments filnamnen (eller MIME-typen) för de delar som följde med.
+        kept_attachments filnamnen (rensade från osynliga tecken, annars
+        MIME-typen) för de delar som följde med.
 
     Raises:
         ValueError: utkastet finns inte i Drafts, ogiltig adress eller
