@@ -9,7 +9,7 @@ from email.message import Message
 from typing import Any
 
 from .html_text import html_to_text
-from .sanitize import Sanitized, clean_text, sanitize_address, sanitize_address_text, sanitize_text
+from .sanitize import UNTRUSTED_CONTENT_NOTICE, Sanitized, clean_text, sanitize_address, sanitize_address_text, sanitize_text
 
 # Etiketter som är vanliga i post men saknas i Python eller oftast är fel
 _CHARSET_ALIASES = {
@@ -606,7 +606,7 @@ def parse_email(
         if not any("@" in a for _, a in email.utils.getaddresses([decoded])):
             from_ = clean.address_text("from", decoded)
 
-    return {
+    result = {
         "message_id": decode_header_value(_raw_header(msg, "Message-ID")),
         "subject": clean.text("subject", decode_header_value(_raw_header(msg, "Subject"))),
         "from": from_,
@@ -624,6 +624,11 @@ def parse_email(
         "references": decode_header_value(_raw_header(msg, "References")),
         "headers": _headers_dict(msg, clean.counts),
     }
+    # Märkning för klienten: innehållet ovan är avsändarens, och vad som
+    # rensats bort (antal tecken per fält, bara fält där något togs bort)
+    result["untrusted_content_notice"] = UNTRUSTED_CONTENT_NOTICE
+    result["sanitized"] = dict(clean.counts)
+    return result
 
 
 def parse_envelope(envelope_data: str) -> dict[str, str]:
