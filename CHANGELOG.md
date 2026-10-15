@@ -146,7 +146,7 @@ Grouped by area, most serious first. Fixes to features that are new in this rele
 - **The new-mail high-water mark cannot be poisoned**: `since_uid` never moves it, so a crafted value cannot hide future email.
 - **Prompt arguments** refuse line breaks (including U+2028/U+2029) and control characters.
 - **Denial of service through crafted email**: linear-time handling of line breaks, RFC 2047 words, HTML-to-text (also nested quotes), header unfolding, address validation and reply threading; limits on header size, MIME parts and recipient entries.
-- Dependency update: `cryptography` 46.0.6 (CVE-2026-34073).
+- Dependency updates: `cryptography` 46.0.6 (CVE-2026-34073), and in #4 `aiosmtplib` 5.1.2 (GHSA-vxj7-4xrp-5vr4, STARTTLS response injection — not reachable here since Bridge uses direct TLS), `cryptography` 50.0.0, `mcp` 1.28.1, `starlette` 1.3.1, `pydantic-settings` 2.14.2, `idna` 3.15 and others.
 
 ## [0.2.0] - 2026-03-16
 
