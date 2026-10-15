@@ -8,7 +8,7 @@ authors = [{ name = "Mattias Wahlberg", email = "mattias.wahlberg@proton.me" }]
 keywords = ["mcp", "protonmail", "email", "claude", "llm"]
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.26.0",
+    "mcp[cli]>=1.26.0,<2",
     "aioimaplib>=2.0.1",
     "aiosmtplib>=5.1.2",
     "pydantic>=2.11.0",
