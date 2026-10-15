@@ -5,6 +5,7 @@ import email.header
 import email.quoprimime
 import email.utils
 import re
+from datetime import timezone
 from email.message import Message
 from typing import Any
 
@@ -578,6 +579,29 @@ def _suspicious(texts: list[str], html_report: HtmlText, clean: _Cleaner) -> lis
     return reasons
 
 
+# Längre än så är inget datum (RFC 5322 date-time är under 40 tecken, med
+# kommentar som "(CEST)" något mer); längre text tolkas inte alls
+_MAX_DATE_LEN = 200
+
+
+def iso_date(value: str | None) -> str | None:
+    """RFC 5322-datum som ISO 8601 med tidszon ("2026-10-14T21:45:52+02:00").
+
+    Avsändarens egen tidszon behålls. Saknas zonen, eller är den -0000
+    ("okänd lokal tid", RFC 5322 §3.3), räknas tiden som UTC. None om
+    datumet inte går att tolka.
+    """
+    if not value or len(value) > _MAX_DATE_LEN:
+        return None
+    try:
+        when = email.utils.parsedate_to_datetime(value.strip())
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return when.isoformat()
+    except Exception:  # ValueError, TypeError, IndexError, OverflowError …
+        return None
+
+
 def _hidden_html(report: HtmlText) -> dict[str, Any]:
     """Gömt innehåll i HTML-delen (antal, aldrig text). Tom dict om inget."""
     out: dict[str, Any] = {}
@@ -669,7 +693,8 @@ def parse_email(
         "reply_to": formatted["reply_to"],
         # (namn, adress)-par, för anropare som vill ha adressen utan att parsa om
         "addresses": {key: [[n, a] for n, a in pairs] for key, pairs in addresses.items()},
-        "date": clean_text(decode_header_value(_raw_header(msg, "Date"))),
+        "date": (date := clean_text(decode_header_value(_raw_header(msg, "Date")))),
+        "date_iso": iso_date(date),
         "body_plain": body_plain,
         "body_html": body_html,
         "attachments": parts["attachments"],

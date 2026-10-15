@@ -12,7 +12,7 @@ import aioimaplib
 
 from . import policy
 from .config import Settings
-from .email_parser import decode_header_value
+from .email_parser import decode_header_value, iso_date
 from .sanitize import clean_text, sanitize_address_text
 from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
 
@@ -1163,7 +1163,8 @@ def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> l
             "subject": _metadata_value(hdrs, "subject"),
             "from": _metadata_value(hdrs, "from"),
             "to": _metadata_value(hdrs, "to"),
-            "date": _metadata_value(hdrs, "date"),
+            "date": (date := _metadata_value(hdrs, "date")),
+            "date_iso": iso_date(date),  # jämförbart och sorterbart för klienten
             "message_id": _metadata_value(hdrs, "message-id"),
         }
         for name in extra_headers:
