@@ -111,7 +111,9 @@ class Settings(BaseSettings):
     # adresspost jämförs exakt. Tom (standard) = alla mottagare tillåtna.
     allowed_recipients: str = ""
     # PROTONMAIL_MAX_RECIPIENTS: högst så många (unika) mottagare per skick,
-    # To, Cc och Bcc tillsammans. 0 = ingen gräns. Standard: 50.
+    # To, Cc och Bcc tillsammans. Samma adress (oavsett skiftläge) räknas och
+    # får mejlet en gång. 0 = ingen gräns. Standard: 50. Oavsett gräns vägras
+    # fler än 1000 adressposter (smtp_client.MAX_RECIPIENT_ENTRIES).
     max_recipients: int = Field(default=50, ge=0)
     # PROTONMAIL_MAX_SENDS_PER_HOUR: högst så många skick under en glidande
     # timme (räknas i minnet, nollställs när servern startas om). Felet säger

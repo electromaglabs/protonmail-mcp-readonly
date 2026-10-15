@@ -17,7 +17,7 @@ from .. import imap_drafts
 from ..smtp_client import (
     _build_message,
     prepared_recipients,
-    _normalize_recipients,
+    _recipient_lists,
     _to_address,
     _validate_email_addr,
     _validate_subject,
@@ -62,9 +62,7 @@ def _build_draft(
     därifrån (och tar bort headern ur det som skickas).
     """
     _validate_subject(subject)
-    to_list = _normalize_recipients(to)
-    cc_list = _normalize_recipients(cc)
-    bcc_list = _normalize_recipients(bcc)
+    to_list, cc_list, bcc_list = _recipient_lists(to, cc, bcc)
     for addr in to_list + cc_list + bcc_list:
         _validate_email_addr(addr)
     if reply_to:

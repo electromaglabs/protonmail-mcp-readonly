@@ -115,6 +115,45 @@ def _normalize_recipients(value: str | Sequence[str] | None) -> list[str]:
     return list(value)
 
 
+# Hårt tak för antalet adressposter (To, Cc och Bcc tillsammans, före
+# deduplicering) i ett skick eller utkast, oavsett PROTONMAIL_MAX_RECIPIENTS.
+# Kontrolleras innan någon adress valideras, så att en jättelista inte ens
+# bearbetas. Proton själv tar emot långt färre mottagare per mejl.
+MAX_RECIPIENT_ENTRIES = 1000
+
+
+def _recipient_lists(
+    to: str | Sequence[str] | None,
+    cc: str | Sequence[str] | None,
+    bcc: str | Sequence[str] | None,
+) -> tuple[list[str], list[str], list[str]]:
+    """To, Cc och Bcc som listor; ValueError om de tillsammans har fler än
+    MAX_RECIPIENT_ENTRIES poster."""
+    lists = (_normalize_recipients(to), _normalize_recipients(cc), _normalize_recipients(bcc))
+    total = sum(len(lst) for lst in lists)
+    if total > MAX_RECIPIENT_ENTRIES:
+        raise ValueError(
+            f"Mottagarlistan har för många adresser ({total} i To, Cc och Bcc tillsammans; "
+            f"högst {MAX_RECIPIENT_ENTRIES}). Inget mejl skickades eller sparades."
+        )
+    return lists
+
+
+def _unique_recipients(addrs: Sequence[str]) -> list[str]:
+    """Adresserna utan dubbletter, utan hänsyn till skiftläge; den första
+    förekomsten behålls. Det är den listan som RCPT TO får och som
+    PROTONMAIL_MAX_RECIPIENTS räknar, så att en upprepad adress (eller samma
+    adress med andra versaler) inte blir flera mottagare hos Bridge."""
+    unique: list[str] = []
+    seen: set[str] = set()
+    for addr in addrs:
+        key = addr.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(addr)
+    return unique
+
+
 def _build_message(
     *,
     from_addr: str,
@@ -308,9 +347,7 @@ class SMTPClient:
     ) -> bool:
         _validate_subject(subject)
 
-        to_list = _normalize_recipients(to)
-        cc_list = _normalize_recipients(cc)
-        bcc_list = _normalize_recipients(bcc)
+        to_list, cc_list, bcc_list = _recipient_lists(to, cc, bcc)
 
         for addr in to_list + cc_list + bcc_list:
             _validate_email_addr(addr)
@@ -330,10 +367,11 @@ class SMTPClient:
             inline_parts=inline_parts,
         )
 
-        # RCPT TO får bara den nakna adressen (med punycode-domän)
-        all_recipients = [
-            _to_address(a).addr_spec for a in to_list + cc_list + bcc_list
-        ]
+        # RCPT TO får bara den nakna adressen (med punycode-domän), en gång
+        # per mottagare oavsett skiftläge (som send_prepared_message)
+        all_recipients = _unique_recipients(
+            [_to_address(a).addr_spec for a in to_list + cc_list + bcc_list]
+        )
         return await self._deliver(msg, all_recipients)
 
     async def send_prepared_message(self, msg: Message) -> bool:
@@ -350,13 +388,9 @@ class SMTPClient:
         felhantering som send_email, inklusive SMTPPartialDeliveryError när
         bara några mottagare vägras.
         """
-        recipients: list[str] = []
-        seen: set[str] = set()
-        for addrs in prepared_recipients(msg).values():
-            for rcpt in addrs:
-                if rcpt.lower() not in seen:
-                    seen.add(rcpt.lower())
-                    recipients.append(rcpt)
+        recipients = _unique_recipients(
+            [rcpt for addrs in prepared_recipients(msg).values() for rcpt in addrs]
+        )
 
         outgoing = copy.deepcopy(msg)
         del outgoing["Bcc"]
