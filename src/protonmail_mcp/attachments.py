@@ -15,10 +15,12 @@ kommer från klienten (en AI-modell). Båda behandlas som opålitliga:
   räcker det att en uppackad zip lägger symlänken "protonmail-mcp -> .." i
   ~/Downloads för att hela hemkatalogen ska räknas som "inuti". Katalogen
   skapas därför redan när servern startar.
-- En fil som ska skickas öppnas med O_NOFOLLOW och jämförs (fstat) med den
-  fil som kontrollerades, så att den inte kan bytas ut däremellan. Hårda
-  länkar, andra filtyper än vanliga filer och filer som ser ut att innehålla
-  hemligheter (nycklar, .env, .netrc, nyckelringar) skickas aldrig.
+- En fil som ska skickas öppnas med O_NOFOLLOW och jämförs (fstat: enhet,
+  inod, storlek, mtime och ctime) med den fil som kontrollerades, så att den
+  inte kan bytas ut däremellan — inte heller på filsystem som återanvänder
+  inodnummer. Hårda länkar, andra filtyper än vanliga filer och filer som ser
+  ut att innehålla hemligheter (nycklar, .env, .netrc, nyckelringar) skickas
+  aldrig.
 - En sparad fil får com.apple.quarantine på macOS, som filer från Mail och
   Safari, så att Gatekeeper och Terminal varnar innan den körs.
 """
@@ -431,12 +433,24 @@ def _sensitive_reason(name: str, checked: _CheckedFile) -> str | None:
     return None
 
 
+def _identity(st: os.stat_result) -> tuple[int, ...]:
+    """Det som skiljer en fil från en annan som tagit dess plats.
+
+    st_dev/st_ino räcker inte: ext4 och overlayfs (Linux, Docker, GitHub
+    Actions) återanvänder ofta inodnumret direkt när en fil tas bort och en ny
+    skapas. Storlek, mtime och ctime (som användaren inte kan sätta) avslöjar
+    då bytet.
+    """
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
 def _read_checked(name: str, checked: _CheckedFile, limit: int) -> bytes:
     """Läs högst ``limit`` byte ur filen som kontrollerades — och bara den.
 
     O_NOFOLLOW gör att en fil som bytts mot en symlänk inte öppnas, och
-    st_dev/st_ino jämförs så att en annan fil (eller en katalog på vägen som
-    bytts mot en symlänk) upptäcks. O_NONBLOCK gör att en FIFO inte hänger.
+    filens identitet (_identity) jämförs så att en annan fil (eller en katalog
+    på vägen som bytts mot en symlänk) upptäcks. O_NONBLOCK gör att en FIFO
+    inte hänger.
     """
     changed = ValueError(f"{name!r} ändrades medan den kontrollerades och skickas inte")
     try:
@@ -448,7 +462,7 @@ def _read_checked(name: str, checked: _CheckedFile, limit: int) -> bytes:
         if (
             not stat.S_ISREG(st.st_mode)
             or st.st_nlink != 1
-            or (st.st_dev, st.st_ino) != (checked.stat.st_dev, checked.stat.st_ino)
+            or _identity(st) != _identity(checked.stat)
         ):
             raise changed
         return fh.read(limit)
