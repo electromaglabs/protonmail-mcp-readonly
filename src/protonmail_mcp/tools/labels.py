@@ -89,7 +89,9 @@ async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
         [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
         finns, som saknar etiketten eller som Bridge nekar hamnar i failed
-        medan de andra genomförs. Ett ogiltigt UID (inte heltal) eller fler
+        medan de andra genomförs. Nekar Bridge borttagningen efter att ha
+        hunnit med en del, kontrolleras vilka mejl som inte längre har
+        etiketten; de räknas som ok. Ett ogiltigt UID (inte heltal) eller fler
         än 100 avvisar hela anropet innan något ändras.
     """
     app = _get_app(ctx)

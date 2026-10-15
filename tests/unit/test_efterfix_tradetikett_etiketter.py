@@ -1,0 +1,85 @@
+"""imap_labels (efterfix-tradetikett): delvis nekad EXPUNGE, Message-ID med kommentar och etikettnamn med fel versal."""
+import pytest
+
+from protonmail_mcp import imap_labels
+from tests.feat_etiketter_bridge import _no, make_client
+
+
+@pytest.fixture
+def imap_and_bridge(monkeypatch):
+    return make_client(monkeypatch)
+
+
+def _expunge_only(bridge, done: set[str], text: str = "backend error"):
+    """Bridge tar bort de UID:n i done ur vyn och svarar sedan NO på UID EXPUNGE."""
+    original = bridge.client.uid.side_effect
+
+    async def uid(command, *args):
+        if command.upper() == "EXPUNGE":
+            bridge.commands.append(("UID EXPUNGE", *args))
+            for u in done:
+                if (bridge.selected, u) in bridge.deleted:
+                    bridge._detach(bridge.selected, u)
+            return _no(text)
+        return await original(command, *args)
+
+    bridge.client.uid.side_effect = uid
+
+
+class TestPartialExpunge:
+    def _two(self, bridge):
+        bridge.add_label("Labels/K")
+        bridge.put("INBOX", "41", "<a@x>")
+        bridge.put("Labels/K", "7", "<a@x>")
+        bridge.put("INBOX", "42", "<b@x>")
+        bridge.put("Labels/K", "8", "<b@x>")
+
+    async def test_removed_ones_are_ok_and_the_rest_failed(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        self._two(bridge)
+        _expunge_only(bridge, {"7"})
+        result = await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert result["ok"] == ["41"]
+        assert [f["uid"] for f in result["failed"]] == ["42"]
+        assert "backend error" in result["failed"][0]["error"]
+
+    async def test_deleted_flag_is_cleared_only_on_the_remaining(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        self._two(bridge)
+        _expunge_only(bridge, {"7"})
+        await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert ("UID STORE", "8", "-FLAGS", r"(\Deleted)") in bridge.writes()
+        assert bridge.deleted == set()
+
+    async def test_in_label_view_too(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        self._two(bridge)
+        _expunge_only(bridge, {"8"})
+        result = await imap_labels.remove_label(imap, "Labels/K", ["7", "8"], "K")
+        assert result["ok"] == ["8"]
+        assert [f["uid"] for f in result["failed"]] == ["7"]
+
+    async def test_all_removed_despite_no_counts_as_ok(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        self._two(bridge)
+        _expunge_only(bridge, {"7", "8"})
+        result = await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert result == {"ok": ["41", "42"], "failed": []}
+
+    async def test_check_that_fails_counts_all_as_failed(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        self._two(bridge)
+        _expunge_only(bridge, {"7"})
+        inner = bridge.client.uid.side_effect
+
+        async def uid(command, *args):
+            # Kontrollen efter EXPUNGE (UID FETCH (UID)) nekas också
+            if command.upper() == "FETCH" and args[1] == "(UID)" and bridge.sent("UID EXPUNGE"):
+                return _no("fetch refused")
+            return await inner(command, *args)
+
+        bridge.client.uid.side_effect = uid
+        result = await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert result["ok"] == []
+        assert {f["uid"] for f in result["failed"]} == {"41", "42"}
+        assert all("kunde inte kontrollera" in f["error"] for f in result["failed"])

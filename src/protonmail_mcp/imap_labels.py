@@ -15,6 +15,7 @@ from typing import Any
 
 from .imap_bulk import (
     BulkResult,
+    _split_after_failure,
     existing_uids,
     fail_all,
     missing_error,
@@ -193,21 +194,32 @@ async def _find_in_label(
     return found, errors
 
 
-async def _expunge_in_label(imap: IMAPClient, label: str, label_uids: list[str]) -> str | None:
+async def _expunge_in_label(
+    imap: IMAPClient, label: str, label_uids: list[str]
+) -> tuple[list[str], dict[str, str]]:
     """Tar bort etiketten: UID STORE \\Deleted + UID EXPUNGE på just de UID:na i etikettens vy.
 
-    Returnerar None om det lyckades, annars felet. Aldrig EXPUNGE utan UID.
+    Returnerar (etikett-UID:n som är klara, etikett-UID → fel). Nekar Bridge
+    EXPUNGE kan den ha hunnit ta bort etiketten från en del av mejlen; de
+    UID:n som inte längre finns i vyn räknas då som klara, som för move och
+    delete. Aldrig EXPUNGE utan UID.
     """
-    uids = uid_set(sorted(set(label_uids), key=int))
+    ordered = sorted(set(label_uids), key=int)
+    uids = uid_set(ordered)
     resp = await imap._uid("store", uids, "+FLAGS", r"(\Deleted)")
     if resp.result != "OK":
-        return f"Borttagningen av etiketten {label} misslyckades ({resp.result}): {_response_text(resp)}"
+        error = f"Borttagningen av etiketten {label} misslyckades ({resp.result}): {_response_text(resp)}"
+        return [], {uid: error for uid in ordered}
     resp = await imap._uid("expunge", uids)
-    if resp.result != "OK":
+    if resp.result == "OK":
+        return ordered, {}
+    error = f"Borttagningen av etiketten {label} misslyckades ({resp.result}): {_response_text(resp)}"
+    done, failed = await _split_after_failure(imap, label, ordered, error)
+    left = [f["uid"] for f in failed]
+    if left:
         # Lämna inte \Deleted kvar: nästa EXPUNGE i vyn skulle annars ta bort etiketten
-        await imap._uid("store", uids, "-FLAGS", r"(\Deleted)")
-        return f"Borttagningen av etiketten {label} misslyckades ({resp.result}): {_response_text(resp)}"
-    return None
+        await imap._uid("store", uid_set(left), "-FLAGS", r"(\Deleted)")
+    return done, {f["uid"]: f["error"] for f in failed}
 
 
 @_serialized
@@ -280,11 +292,10 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
 
     ok: list[str] = []
     if mapping:
-        error = await _expunge_in_label(imap, target, list(mapping.values()))
-        if error is None:
-            ok = list(mapping)
-        else:
-            failed += fail_all(list(mapping), error)
+        done, errors = await _expunge_in_label(imap, target, list(mapping.values()))
+        done_set = set(done)
+        ok = [src for src, label_uid in mapping.items() if label_uid in done_set]
+        failed += [{"uid": src, "error": errors[label_uid]} for src, label_uid in mapping.items() if label_uid in errors]
     return result(uids, ok, failed)
 
 
