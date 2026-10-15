@@ -70,6 +70,10 @@ class TestSynligt:
         f"<div style='background:#000'><span>{S}</span></div>",  # färg okänd (kan komma från CSS)
         f"<div style='background:#fff'><span style='color:#fff;background:#c00'>{S}</span></div>",
         f"<div style='color:transparent'><span style='color:#333'>{S}</span></div>",
+        # Mätt på riktiga nyhetsbrev: färg satt högt upp och en mörk cell längre ned,
+        # där texten färgas av en klassregel som inte tolkas — ska inte räknas som gömt
+        f"<table style='color:#000'><tr><td style='background-color:#000000' class=inner>"
+        f"<span class=mceText>{S}</span></td></tr></table>",
     ])
     def test_synlig_text_visas(self, inner):
         assert S in _report(inner).text
