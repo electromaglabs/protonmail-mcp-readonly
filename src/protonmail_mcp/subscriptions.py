@@ -7,9 +7,13 @@ prenumererar på den får notisen. URI:er jämförs i kanonisk form
 "mailbox://Folders%2FA%2FB" är samma resurs. Notisen skickas med den URI som
 sessionen själv prenumererade med, så att klienten känner igen den.
 
-En session glöms när den stängs (via sessionens exit-stack) och när en notis
-till den visar att anslutningen är stängd. Notiserna skickas parallellt med en
-tidsgräns per session: ett fel eller en hängande session stoppar inte de andra.
+En session glöms när den stängs (via sessionens exit-stack), när en notis
+till den visar att anslutningen är stängd, och när MAX_CONSECUTIVE_TIMEOUTS
+notiser i rad har tagit längre tid än SEND_TIMEOUT_SECONDS (en klient som
+slutat läsa skulle annars få varje ny notis att vänta ut hela tidsgränsen,
+för alltid). En lyckad notis nollställer räkningen. Notiserna skickas
+parallellt med en tidsgräns per session: ett fel eller en hängande session
+stoppar inte de andra.
 
 FastMCP:s lågnivåserver annonserar alltid resources.subscribe=False; register()
 skriver över det, eftersom servern nu hanterar prenumerationer.
@@ -26,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 # Tidsgräns för en notis till en session
 SEND_TIMEOUT_SECONDS = 5.0
+# Så många tidsgränser i rad innan sessionens prenumerationer tas bort
+MAX_CONSECUTIVE_TIMEOUTS = 3
 
 
 class SubscriptionRegistry:
@@ -35,6 +41,8 @@ class SubscriptionRegistry:
         # kanonisk URI → session → URI:n som sessionen prenumererade med
         self._subscriptions: dict[str, dict[Any, str]] = {}
         self._hooked: set[int] = set()
+        # id(session) → antal notiser i rad som inte hunnit skickas
+        self._timeouts: dict[int, int] = {}
 
     def subscribe(self, session: Any, uri: str) -> None:
         """Lägg till en prenumeration. ValueError om URI:n inte är en av serverns resurser."""
@@ -62,6 +70,23 @@ class SubscriptionRegistry:
             if not subscribers:
                 del self._subscriptions[key]
         self._hooked.discard(id(session))
+        self._timeouts.pop(id(session), None)
+
+    def record_timeout(self, session: Any) -> bool:
+        """Räkna en tidsgräns i rad; glöm sessionen vid MAX_CONSECUTIVE_TIMEOUTS.
+
+        True om sessionen glömdes.
+        """
+        count = self._timeouts.get(id(session), 0) + 1
+        if count >= MAX_CONSECUTIVE_TIMEOUTS:
+            self.forget(session)
+            return True
+        self._timeouts[id(session)] = count
+        return False
+
+    def record_success(self, session: Any) -> None:
+        """En notis gick fram: nollställ räkningen av tidsgränser i rad."""
+        self._timeouts.pop(id(session), None)
 
     def subscribers(self, uri: str) -> list[tuple[Any, str]]:
         """(session, prenumererad URI) för alla som prenumererar på uri."""
@@ -82,6 +107,7 @@ class SubscriptionRegistry:
     def clear(self) -> None:
         self._subscriptions.clear()
         self._hooked.clear()
+        self._timeouts.clear()
 
     def _forget_on_exit(self, session: Any) -> None:
         # BaseSession stänger sin exit-stack när sessionen avslutas. Det är
@@ -107,9 +133,18 @@ async def _send(session: Any, uri: str) -> None:
         logger.info("Sessionen är stängd; prenumerationerna tas bort (%s)", uri)
         registry.forget(session)
     except TimeoutError:
-        logger.warning("Notisen om %s hann inte skickas inom %s s", uri, SEND_TIMEOUT_SECONDS)
+        if registry.record_timeout(session):
+            logger.warning(
+                "Notisen om %s hann inte skickas inom %s s, %s gånger i rad; sessionen "
+                "verkar ha slutat läsa och dess prenumerationer tas bort",
+                uri, SEND_TIMEOUT_SECONDS, MAX_CONSECUTIVE_TIMEOUTS,
+            )
+        else:
+            logger.warning("Notisen om %s hann inte skickas inom %s s", uri, SEND_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 — en session får inte stoppa de andra
         logger.warning("Notisen om %s kunde inte skickas: %s", uri, exc)
+    else:
+        registry.record_success(session)
 
 
 async def notify_resource_updated(uri: str) -> None:
