@@ -15,3 +15,19 @@ Feature: remove_label och add_label ger rätt svar per UID i svåra fall
     And ska mejlet med Message-ID "<a@x>" inte ligga i "Labels/Kvitton"
     And ska mejlet med Message-ID "<b@x>" ligga i "Labels/Kvitton"
     And ska Bridge ha fått "UID STORE" med "8 -FLAGS (\Deleted)"
+
+  Scenario: Ett vikt Message-ID med kommentar stoppar inte massborttagningen
+    Given att etiketten "Labels/Kvitton" finns
+    And att mejlet med UID "41" har det vikta Message-ID:t "<c@x>" med kommentaren "(kommentar)" i "INBOX" och i "Labels/Kvitton" med UID "9"
+    And att mejlet med UID "42" och Message-ID "<b@x>" ligger i "INBOX"
+    And att mejlet med Message-ID "<b@x>" har etiketten "Labels/Kvitton" med UID "8"
+    When jag tar bort etiketten "Kvitton" från UID-listan "41, 42" i "INBOX"
+    Then ska resultatet ha ok "41, 42" och inga misslyckade
+
+  Scenario: Ett mejl vars Message-ID inte går att söka på ger fel bara för det UID:t
+    Given att etiketten "Labels/Kvitton" finns
+    And att mejlet med UID "41" har det tomma Message-ID:t "   " i "INBOX"
+    And att mejlet med UID "42" och Message-ID "<b@x>" ligger i "INBOX"
+    And att mejlet med Message-ID "<b@x>" har etiketten "Labels/Kvitton" med UID "8"
+    When jag tar bort etiketten "Kvitton" från UID-listan "41, 42" i "INBOX"
+    Then ska resultatet ha ok "42" och UID "41" misslyckat med "saknar Message-ID"

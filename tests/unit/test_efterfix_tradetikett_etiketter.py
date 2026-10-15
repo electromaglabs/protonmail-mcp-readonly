@@ -83,3 +83,61 @@ class TestPartialExpunge:
         assert result["ok"] == []
         assert {f["uid"] for f in result["failed"]} == {"41", "42"}
         assert all("kunde inte kontrollera" in f["error"] for f in result["failed"])
+
+
+def _identity_lines(header: bytes, uid: str = "5") -> list:
+    return [
+        f'1 FETCH (UID {uid} INTERNALDATE "01-Jan-2026 00:00:00 +0000" RFC822.SIZE 100 '
+        f"BODY[HEADER.FIELDS (MESSAGE-ID)] {{{len(header)}}}".encode(),
+        bytearray(header),
+        b")",
+    ]
+
+
+class TestMessageIdFromHeader:
+    @pytest.mark.parametrize("header", [
+        b"Message-ID: <abc@x>\r\n (kommentar)\r\n\r\n",
+        b"Message-ID:\r\n <abc@x>\r\n\r\n",
+        b"Message-ID: <abc@x> (kommentar)\r\n\r\n",
+    ])
+    def test_folding_and_comments_are_removed(self, header):
+        assert imap_labels._parse_identities(_identity_lines(header))["5"]["message_id"] == "<abc@x>"
+
+    def test_eight_bit_id_can_be_sent_to_bridge(self):
+        header = b"Message-ID: <r\xc3\xa4ksm\xf6rg\xe5s@evil.example>\r\n\r\n"
+        mid = imap_labels._parse_identities(_identity_lines(header))["5"]["message_id"]
+        assert mid is not None
+        mid.encode("utf-8")  # inga surrogattecken som får aioimaplib att kasta mitt i kommandot
+
+    def test_id_without_angle_brackets_is_kept(self):
+        header = b"Message-ID: abc@x\r\n\r\n"
+        assert imap_labels._parse_identities(_identity_lines(header))["5"]["message_id"] == "abc@x"
+
+    def test_blank_id_is_none(self):
+        header = b"Message-ID:   \r\n\r\n"
+        assert imap_labels._parse_identities(_identity_lines(header))["5"]["message_id"] is None
+
+
+class TestUnusableMessageIdIsPerUid:
+    async def test_folded_comment_does_not_refuse_the_whole_call(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/K")
+        raw = "<c@x>\r\n (kommentar)"
+        bridge.put("INBOX", "41", raw)
+        bridge.put("Labels/K", "9", raw)
+        bridge.put("INBOX", "42", "<b@x>")
+        bridge.put("Labels/K", "8", "<b@x>")
+        result = await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert result == {"ok": ["41", "42"], "failed": []}
+        assert bridge.views["Labels/K"] == {}
+
+    async def test_unusable_id_fails_only_that_uid(self, imap_and_bridge):
+        imap, bridge = imap_and_bridge
+        bridge.add_label("Labels/K")
+        bridge.put("INBOX", "41", "   ")
+        bridge.put("INBOX", "42", "<b@x>")
+        bridge.put("Labels/K", "8", "<b@x>")
+        result = await imap_labels.remove_label(imap, "INBOX", ["41", "42"], "K")
+        assert result["ok"] == ["42"]
+        assert [f["uid"] for f in result["failed"]] == ["41"]
+        assert "saknar Message-ID" in result["failed"][0]["error"]

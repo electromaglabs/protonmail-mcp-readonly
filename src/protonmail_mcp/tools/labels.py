@@ -72,8 +72,9 @@ async def remove_label(ctx: Context, uid: UidArg, mailbox: Mailbox, label: Label
     - etiketten finns inte (create_folder("Labels/Namn") skapar den),
     - label är Starred (använd unflag_email), en mapp eller en systemmapp,
     - UID:t finns inte i mailbox (UID:n gäller per mapp),
-    - mejlet saknar Message-ID eller går inte att skilja från ett annat mejl
-      i etiketten — ange då etiketten som mailbox och UID:t därifrån,
+    - mejlet saknar ett Message-ID som går att söka på, eller går inte att
+      skilja från ett annat mejl i etiketten — ange då etiketten som mailbox
+      och UID:t därifrån (i en lista gäller felet bara det UID:t),
     - Bridge nekar (felet innehåller Bridges förklaring).
 
     Args:

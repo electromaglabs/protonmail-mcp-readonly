@@ -10,7 +10,7 @@ Funktionerna är modulnivåfunktioner med IMAPClient som första argument och
 körs under klientens lås (_serialized), som IMAPClient:s egna metoder.
 """
 import re
-from email.parser import BytesHeaderParser
+from email.parser import HeaderParser
 from typing import Any
 
 from .imap_bulk import (
@@ -30,8 +30,10 @@ from .imap_client import (
     _LITERAL_END_RE,
     _UID_RE,
     IMAPClient,
+    _CONTROL_CHAR_RE,
     _check_user_folder,
     _decode,
+    _decode_header_bytes,
     _imap_quoted,
     _mailbox_key,
     _quote_mailbox,
@@ -39,6 +41,7 @@ from .imap_client import (
     _response_text,
     _serialized,
 )
+from .imap_threads import _MAX_ID_LENGTH, _MSG_ID_RE
 
 LABEL_PREFIX = "Labels/"
 # Systemmappar (och behållarna Folders/Labels) som inte är etiketter
@@ -100,6 +103,28 @@ async def _require_label(imap: IMAPClient, label: str) -> None:
     )
 
 
+def _usable_message_id(value: str | None) -> str | None:
+    """Message-ID att söka på, eller None.
+
+    Rubriken styrs av avsändaren och kan vara vikt mitt i eller ha en
+    kommentar ("<a@x>\\r\\n (kommentar)"); då tas msg-id:t ut som i
+    get_thread. Saknas vinkelparenteser används värdet om det är ett enda
+    ord utan kontrolltecken. Annars None, så att UID:t får ett eget fel i
+    stället för att hela massanropet avvisas.
+    """
+    text = (value or "").strip()
+    m = _MSG_ID_RE.search(text)
+    candidate = m.group() if m else text
+    if (
+        not candidate
+        or len(candidate) > _MAX_ID_LENGTH
+        or _CONTROL_CHAR_RE.search(candidate)
+        or (m is None and re.search(r"\s", candidate))
+    ):
+        return None
+    return candidate
+
+
 def _parse_identities(lines: list) -> dict[str, dict[str, Any]]:
     """UID → {"message_id", "date", "size"} ur ett FETCH-svar med _IDENTITY_ITEMS.
 
@@ -133,9 +158,11 @@ def _parse_identities(lines: list) -> dict[str, dict[str, Any]]:
             continue
         date_m = _INTERNALDATE_RE.search(meta)
         size_m = _SIZE_RE.search(meta)
-        message_id = BytesHeaderParser().parsebytes(raw).get("message-id") if raw else None
+        # Som get_thread: UTF-8, annars latin-1 — aldrig surrogattecken som
+        # skulle få aioimaplib att kasta mitt i SEARCH-kommandot
+        message_id = HeaderParser().parsestr(_decode_header_bytes(raw)).get("message-id") if raw else None
         out[uid_m.group(1)] = {
-            "message_id": str(message_id).strip() if message_id else None,
+            "message_id": _usable_message_id(str(message_id)) if message_id else None,
             "date": date_m.group(1) if date_m else None,
             "size": size_m.group(1) if size_m else None,
         }
@@ -279,7 +306,8 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
                 failed.append({"uid": uid, "error": missing_error(uid, mailbox)})
             elif not info["message_id"]:
                 failed.append({"uid": uid, "error": (
-                    f"Mejlet med UID {uid} i {mailbox} saknar Message-ID och kan inte hittas i "
+                    f"Mejlet med UID {uid} i {mailbox} saknar Message-ID (eller har ett som inte "
+                    f"går att söka på) och kan inte hittas i "
                     f"{target}. Lista {target} och ange UID:t där med mailbox=\"{target}\"."
                 )})
             else:
