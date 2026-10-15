@@ -9,6 +9,12 @@ Allt som tas emot sparas i ``commands`` som (anslutningsnummer, rad), så att
 testerna kan se t.ex. hur många IDLE som skickats på en anslutning och att
 inget hämtades utan BODY.PEEK. En FETCH av BODY[...] utan PEEK sätter \\Seen,
 som hos en riktig server.
+
+Som Bridge (gluon, internal/session/handle.go) får en anslutning som inte är
+i IDLE sina köade uppdateringar (``* n EXISTS``) i svaret på NÄSTA kommando i
+den valda mappen, före taggat OK — och aldrig igen. ``during`` låter ett test
+leverera ett mejl mitt i ett visst kommando (efter att svaret räknats fram),
+så att EXISTS hamnar i just det svaret.
 """
 from __future__ import annotations
 
@@ -47,6 +53,8 @@ class _Conn:
         self.writer = writer
         self.selected: str | None = None
         self.idle_tag: str | None = None
+        # Ett mejl har kommit sedan förra svaret (Bridge köar uppdateringen)
+        self.pending_exists = False
 
 
 _QUOTED_RE = re.compile(r'^"((?:[^"\\]|\\.)*)"')
@@ -71,6 +79,8 @@ class FakeIdleBridge:
         self._conns: dict[int, _Conn] = {}
         self._server: asyncio.AbstractServer | None = None
         self._handlers: set[asyncio.Task] = set()
+        # Engångskrokar (kommando, åtgärd) som körs mitt i nästa sådant kommando
+        self._during: list[tuple[str, object]] = []
 
     # --- Testernas styrning ------------------------------------------------
 
@@ -90,9 +100,31 @@ class FakeIdleBridge:
         box.messages.append(FakeMessage(uid=uid, subject=subject, sender=sender))
         box.uidnext = max(box.uidnext, uid + 1)
         for conn in list(self._conns.values()):
-            if conn.selected == mailbox and conn.idle_tag is not None:
+            if conn.selected != mailbox:
+                continue
+            if conn.idle_tag is not None:
                 self._write(conn, f"* {len(box.messages)} EXISTS\r\n* 1 RECENT\r\n")
+            else:
+                conn.pending_exists = True  # skickas i svaret på nästa kommando
         return uid
+
+    def during(self, command: str, action) -> None:
+        """Kör action() en gång mitt i nästa kommando command (t.ex. "UID FETCH",
+        "UID SEARCH" eller "DONE"), efter att svaret räknats fram men före taggat OK."""
+        self._during.append((command.upper(), action))
+
+    def _run_hooks(self, command: str) -> None:
+        for hook in list(self._during):
+            if hook[0] == command:
+                self._during.remove(hook)
+                hook[1]()
+
+    def _flush(self, conn: _Conn) -> str:
+        """Köade uppdateringar för den valda mappen (som gluons flush)."""
+        if not conn.pending_exists or conn.selected not in self.boxes:
+            return ""
+        conn.pending_exists = False
+        return f"* {len(self.boxes[conn.selected].messages)} EXISTS\r\n"
 
     def renumber(self, mailbox: str, uidvalidity: int, uids: list[int]) -> None:
         """Bridge byter UIDVALIDITY (t.ex. efter omsynkning) och numrerar om mejlen."""
@@ -167,6 +199,7 @@ class FakeIdleBridge:
     def _dispatch(self, conn: _Conn, text: str, caps: str) -> str | None:
         if conn.idle_tag is not None:
             if text.upper() == "DONE":
+                self._run_hooks("DONE")  # mejl som kommer mellan DONE och OK
                 self._write(conn, f"{conn.idle_tag} OK IDLE terminated\r\n")
                 conn.idle_tag = None
             return None
@@ -191,6 +224,7 @@ class FakeIdleBridge:
                 result = "NO"
             else:
                 conn.selected = name
+                conn.pending_exists = False
                 out += [
                     "* FLAGS (\\Seen \\Flagged \\Deleted \\Draft)\r\n",
                     f"* {len(box.messages)} EXISTS\r\n",
@@ -216,7 +250,7 @@ class FakeIdleBridge:
                 result = "BAD"
             else:
                 conn.idle_tag = tag
-                self._write(conn, "+ idling\r\n")
+                self._write(conn, "+ idling\r\n" + self._flush(conn))
                 return None
         elif cmd == "UID SEARCH":
             box = self.boxes[conn.selected]
@@ -248,6 +282,8 @@ class FakeIdleBridge:
                     out.append(f"* {seq} FETCH (UID {msg.uid} FLAGS ({flags}))\r\n")
         else:
             result = "BAD"
+        self._run_hooks(cmd)
+        out.append(self._flush(conn))
         out.append(f"{tag} {result} {cmd} completed\r\n")
         self._write(conn, b"".join(o if isinstance(o, bytes) else o.encode() for o in out))
         return "logout" if cmd == "LOGOUT" else None

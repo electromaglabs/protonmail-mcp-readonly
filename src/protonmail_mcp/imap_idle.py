@@ -11,10 +11,14 @@ Per mapp, i en bakgrundsuppgift:
    mejl som redan fanns räknas inte som nya.
 2. IDLE. Bridge (liksom RFC 2177) kopplar ner en IDLE efter 29 minuter, så
    den avslutas med DONE och startas om var DEFAULT_RENEW_SECONDS.
-3. Vid EXISTS eller RECENT: DONE, UID SEARCH efter UID:n över vattenmärket
-   och hämta deras metadata med BODY.PEEK (inget markeras som läst), med
-   samma parser som list_emails. Lägg dem i händelsekön och anropa
-   lyssnarna. Tillbaka till 2.
+3. Efter varje IDLE-omgång (EXISTS/RECENT eller förnyelse): DONE, UID SEARCH
+   efter UID:n över vattenmärket och hämta deras metadata med BODY.PEEK
+   (inget markeras som läst), med samma parser som list_emails. Lägg dem i
+   händelsekön och anropa lyssnarna. Tillbaka till 2.
+   Bridge skickar köade uppdateringar i svaret på nästa kommando och aldrig
+   igen: en EXISTS i svaret på UID SEARCH/FETCH (som aioimaplib annars
+   kastar) eller i IDLE-kön för den omgång som avslutas räknas därför som
+   "ett nytt mejl kan ha kommit", och sökningen görs om innan nästa IDLE.
 4. Bryts anslutningen (Bridge startas om) görs ett nytt försök efter
    BACKOFF_INITIAL sekunder, sedan dubbelt så länge upp till BACKOFF_MAX.
    Vid återanslutning hämtas det som kom under avbrottet. Har UIDVALIDITY
@@ -42,6 +46,7 @@ from .imap_client import (
     _FETCH_CHUNK_SIZE,
     _METADATA_ITEMS,
     IMAPClient,
+    _BridgeProtocol,
     _close_transport,
     _decode,
     _exists,
@@ -65,6 +70,9 @@ QUEUE_SIZE = 200
 # Högst så många nya mejl hämtas per omgång; fler (t.ex. efter ett långt
 # avbrott) ger bara de nyaste i kön, och verktygen frågar då Bridge själva
 FETCH_LIMIT = 200
+# Högst så många sökningar efter en IDLE-omgång när Bridge hela tiden
+# rapporterar nya mejl i svaren; resten fångas av nästa omgång
+CATCH_UP_ROUNDS = 5
 
 _UIDVALIDITY_RE = re.compile(r"\[UIDVALIDITY\s+(\d+)\]", re.IGNORECASE)
 _UIDNEXT_RE = re.compile(r"\[UIDNEXT\s+(\d+)\]", re.IGNORECASE)
@@ -105,6 +113,30 @@ def _parse_select(resp) -> MailboxInfo:
 
 def _is_new_mail_push(lines) -> bool:
     return any(_PUSH_RE.match(_decode(line).strip()) for line in lines if not isinstance(line, bytearray))
+
+
+class _WatchProtocol(_BridgeProtocol):
+    """_BridgeProtocol som märker EXISTS/RECENT utanför SELECT och IDLE.
+
+    Bridge skickar köade uppdateringar i svaret på nästa kommando (gluon,
+    internal/session/handle.go), även UID SEARCH och FETCH. aioimaplib har
+    ingen mottagare för dem där och kastar raden. saw_push sätts då, så att
+    bevakningen söker en gång till i stället för att tappa mejlet.
+    """
+
+    saw_push = False
+
+    def _untagged_response(self, line: bytes):
+        if self.pending_sync_command is None and _PUSH_RE.match(_decode(line).strip()):
+            self.saw_push = True
+        return super()._untagged_response(line)
+
+
+def _watch_pushes(client) -> None:
+    """Låter bevakningens anslutning använda _WatchProtocol (attrapper lämnas)."""
+    protocol = getattr(client, "protocol", None)
+    if type(protocol) is _BridgeProtocol:
+        protocol.__class__ = _WatchProtocol
 
 
 async def select_info(imap: IMAPClient, mailbox: str) -> MailboxInfo:
@@ -383,6 +415,7 @@ class MailWatcher:
             try:
                 await imap.connect()
                 client = imap._client
+                _watch_pushes(client)
                 if "IDLE" not in getattr(client.protocol, "capabilities", ()):
                     raise ConnectionError("ProtonMail Bridge stöder inte IDLE")
                 info = await select_info(imap, state.name)
@@ -391,8 +424,10 @@ class MailWatcher:
                 delay = self._backoff_initial
                 logger.info("Bevakar %s efter nya mejl (IDLE)", state.name)
                 while not self._stopping:
-                    if await self._idle(imap, client):
-                        await self._fetch_new(state, imap)
+                    await self._idle(imap, client)
+                    if self._stopping:
+                        break
+                    await self._catch_up(state, imap, client)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — bevakningen får aldrig krascha servern
@@ -425,6 +460,23 @@ class MailWatcher:
         else:
             await self._fetch_new(state, imap)
 
+    async def _catch_up(self, state: _MailboxState, imap: IMAPClient, client) -> None:
+        """Hämta nya mejl efter en IDLE-omgång, tills inget tyder på fler.
+
+        Görs efter varje omgång, även förnyelsen: en EXISTS mellan DONE och
+        OK ligger i IDLE-kön och kommer aldrig igen. Rapporterar Bridge ett
+        nytt mejl i svaret på sökningen eller hämtningen (saw_push), söks det
+        igen, högst CATCH_UP_ROUNDS gånger.
+        """
+        protocol = getattr(client, "protocol", None)
+        for _ in range(CATCH_UP_ROUNDS):
+            if protocol is not None:
+                protocol.saw_push = False
+            _drain(client)  # täcks av sökningen nedan
+            await self._fetch_new(state, imap)
+            if not (getattr(protocol, "saw_push", False) is True or _drain(client)):
+                return
+
     async def _fetch_new(self, state: _MailboxState, imap: IMAPClient) -> None:
         uids = await new_uids(imap, state.watermark)
         if not uids:
@@ -445,9 +497,8 @@ class MailWatcher:
         """
         if self._stopping:
             return False
-        queue = client.protocol.idle_queue
-        while not queue.empty():  # t.ex. en försenad förnyelsesignal
-            queue.get_nowait()
+        if _drain(client):
+            return True  # ett mejl som ingen har hämtat än: sök innan IDLE
         try:
             idle = await asyncio.wait_for(client.idle_start(timeout=self._renew), imap.timeout)
         except asyncio.TimeoutError:
@@ -481,6 +532,17 @@ class MailWatcher:
                     f"ProtonMail Bridge avslutade inte IDLE inom {imap.timeout:g} s"
                 ) from None
         return new_mail
+
+
+def _drain(client) -> bool:
+    """Töm IDLE-kön (t.ex. en försenad förnyelsesignal). True om den hade EXISTS/RECENT."""
+    queue = client.protocol.idle_queue
+    pushed = False
+    while not queue.empty():
+        lines = queue.get_nowait()
+        if lines != STOP_WAIT_SERVER_PUSH and _is_new_mail_push(lines):
+            pushed = True
+    return pushed
 
 
 def _shutdown(imap: IMAPClient, client) -> None:
