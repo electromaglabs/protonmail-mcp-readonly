@@ -61,6 +61,10 @@ class TestMailboxField:
     async def test_get_email_headers_includes_mailbox(self, mock_ctx):
         _imap(mock_ctx).get_message_headers.return_value = {"subject": "Hej"}
         result = await get_email_headers(mock_ctx, uid="9", mailbox="Archive")
+        # efterfix-rensning (F2): get_email_headers har samma märkning som get_email
+        assert result.pop("untrusted_content_notice")
+        assert result.pop("sanitized") == {}
+        assert result.pop("suspicious_content") == []
         assert result == {"subject": "Hej", "mailbox": "Archive"}
 
     async def test_does_not_mutate_imap_result(self, mock_ctx):

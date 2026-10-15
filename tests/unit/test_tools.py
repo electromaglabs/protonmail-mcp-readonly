@@ -241,6 +241,10 @@ class TestGetEmailHeaders:
         mock_ctx.request_context.lifespan_context.imap.get_message_headers.assert_called_once_with(
             "INBOX", "42"
         )
+        # efterfix-rensning (F2): get_email_headers har samma märkning som get_email
+        assert result.pop("untrusted_content_notice")
+        assert result.pop("sanitized") == {}
+        assert result.pop("suspicious_content") == []
         assert result == {
             "from": "alice@example.com",
             "subject": "Hello",

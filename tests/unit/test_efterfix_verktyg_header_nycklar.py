@@ -28,6 +28,10 @@ async def test_keys_use_underscore(mock_ctx):
         "reply-to": "r@ex.se",
     }
     result = await get_email_headers(mock_ctx, uid="5", mailbox="INBOX")
+    # efterfix-rensning (F2): get_email_headers har samma märkning som get_email
+    assert result.pop("untrusted_content_notice")
+    assert result.pop("sanitized") == {}
+    assert result.pop("suspicious_content") == []
     assert result == {
         "from": "a@ex.se",
         "to": "b@ex.se",

@@ -555,6 +555,39 @@ def _headers_dict(msg: Message, counts: dict[str, int] | None = None) -> dict[st
     return headers
 
 
+def _hidden_total(result: Sanitized) -> int:
+    return result.count + result.kept_in_address
+
+
+def clean_raw_headers(headers: dict[str, str]) -> "tuple[dict[str, str], FieldCleaner]":
+    """Rensa RÅA rubrikvärden (get_email_headers) utan att avkoda dem i onödan.
+
+    - Message-ID, In-Reply-To, References: bara ASCII-<msg-id> (clean_msg_ids).
+    - Adressrubriker: visningsnamn rensas, osynliga tecken i adressen visas
+      som [U+XXXX] (sanitize_address_text); övriga rubriker rensas som text.
+    - RFC 2047-ord lämnas okodade, UTOM när värdet avkodat skulle innehålla
+      osynliga tecken: då visas det avkodade och rensade värdet, så att inga
+      dolda tecken kan gömmas i ett kodat ord som klienten avkodar.
+
+    Returnerar (värden, FieldCleaner) där cleaner räknar per rubriknamn.
+    """
+    clean = FieldCleaner()
+    values: dict[str, str] = {}
+    for name, raw in headers.items():
+        lower = name.lower()
+        if lower in _IDENTIFIER_HEADERS:
+            values[name] = clean.add(name, clean_msg_ids(raw))
+            continue
+        cleaner = sanitize_address_text if lower in _ADDRESS_HEADERS else sanitize_text
+        as_raw = cleaner(raw)
+        if "=?" in raw:
+            decoded = cleaner(decode_header_value(raw))
+            if _hidden_total(decoded) > _hidden_total(as_raw):
+                as_raw = decoded
+        values[name] = clean.add(name, as_raw).strip()
+    return values, clean
+
+
 def _raw_header(msg: Message, name: str) -> str | None:
     """Första förekomsten av en rubrik, rå (före compat32:s Header-omvandling)."""
     wanted = name.lower()

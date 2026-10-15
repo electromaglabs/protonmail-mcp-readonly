@@ -195,7 +195,8 @@ def _parse_list_entry(line: str) -> tuple[list[str], str] | None:
 def _parse_headers(raw: bytes) -> dict[str, str]:
     """Parsar raw RFC822-headers till en dict med lowercase-nycklar."""
     # HeaderParser vecklar ut vikta rader (RFC 5322 §2.2.3); värdena
-    # lämnas annars råa, eftersom get_email_headers används för analys.
+    # lämnas annars råa, eftersom get_email_headers används för analys;
+    # osynliga tecken rensas i verktygslagret (email_parser.clean_raw_headers).
     # Radvis strip i stället för re.sub(r"\s*\r?\n\s*"), som tar kvadratisk
     # tid på en lång blankteckenföljd utan radbrytning (100 000 blanksteg: 50 s).
     # Rå 8-bitars text (RFC 6532) avkodas före parsningen — BytesHeaderParser
