@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-15
+
+A bug-fix release. v0.3.0 could not be installed without the lock file, and a final review against a real ProtonMail Bridge found ways that deletion, labels and replies could report or do the wrong thing.
+
+### Breaking changes / upgrade notes
+
+No tool parameters changed. Two answers can look different:
+
+- **`unflag_email` can answer with an object for a single UID**: when the star is removed but cleaning up the Starred view fails, the answer is `{"ok", "failed", "note"}` instead of `true`, with `note` explaining what was left.
+- **Permanent deletion can take about 50 seconds** when Bridge answers `Code=2501`, because the server checks that every email in the batch is really gone. Other tools are no longer blocked while it waits.
+
+### Fixed
+
+- **Installation**: `mcp` is now limited to `<2`. `uv tool install` and `pip` ignore `uv.lock`, so v0.3.0 installed that way pulled in mcp 2.x and did not start (`ModuleNotFoundError: mcp.server.fastmcp`).
+- **Permanent deletion after `Code=2501`** is only reported as done when the email is gone from All Mail. Bridge stops a batch at the first already deleted email and leaves the others in All Mail without a folder; they are now put back in Trash and deleted again, or reported in `failed` with an explanation, never in `ok`.
+- **The same Proton email is recognised by `X-Pm-Internal-Id`** instead of Message-ID, date and size, which are not unique. This affects the "already in target" check in `move_email` and `delete_email`, `remove_label`, and the Starred view. Without the id, several identical emails in the target are reported as `failed` instead of "already there".
+- **`unflag_email` no longer removes the star from another email** with the same Message-ID, date and size.
+- **The IMAP lock is released while waiting** after `Code=2501`, so other tools, resource reads and `wait_for_new_email` keep working during the wait.
+- **Best-effort steps survive timeouts and dropped connections**: a failure in the Starred clean-up or in the All Mail check no longer turns a successful `unflag_email` into an error or discards the result of a permanent deletion.
+
+### Security
+
+- **`reply_to_email` and `create_reply_draft` treat a forged "own" email as a received one.** An email with your own address in `From` (which the sender controls) and a lookalike address in `To` was treated as sent by you, so the reply went to the lookalike address. An email now counts as your own only when Bridge marked it `X-Pm-Origin: internal` or the same Proton email (`X-Pm-Internal-Id`) is in Sent.
+
 ## [0.3.0] - 2026-10-15
 
 A large release: 13 new tools (29 in total), MCP resources, subscriptions and prompts, new mail via IMAP IDLE, a send policy with audit log, protection against prompt injection, and more than a hundred bug fixes found in a systematic review against a real ProtonMail Bridge.
@@ -177,7 +201,8 @@ Initial release.
 - Configuration through `PROTONMAIL_*` environment variables or `.env`.
 - Unit, BDD and integration tests, GPL v3 licence and community files.
 
-[Unreleased]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mattias242/protonmail-mcp-server/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mattias242/protonmail-mcp-server/releases/tag/v0.1.0
