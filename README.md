@@ -16,6 +16,8 @@ What you get:
 
 Tool descriptions, server instructions, prompts and error messages are written in Swedish; models handle this fine, and the tool names and parameters are English.
 
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Upgrading from 0.2.0? Version 0.3.0 has breaking changes (Python 3.12+, `mailbox` required for UID-based tools, new `search_emails` and `list_mailboxes` response formats and more) — read its upgrade notes first.
+
 ## Requirements
 
 - [ProtonMail Bridge](https://proton.me/mail/bridge) v3, installed and signed in

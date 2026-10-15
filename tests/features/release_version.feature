@@ -12,3 +12,14 @@ Feature: Versionen anges på ett ställe och stämmer överallt
   Scenario: Paketet anger samma version som pyproject.toml
     Given versionen i pyproject.toml
     Then ska protonmail_mcp.__version__ vara versionen ur pyproject.toml
+
+  Scenario: Ändringsloggen beskriver den aktuella versionen
+    Given versionen i pyproject.toml
+    And CHANGELOG.md
+    Then ska det senaste versionsavsnittet i CHANGELOG.md vara versionen ur pyproject.toml
+    And ska varje versionsavsnitt ha ett datum och en länk
+    And ska versionsavsnitten stå med den nyaste först
+
+  Scenario: README hänvisar till ändringsloggen
+    Given README.md
+    Then ska README.md länka till CHANGELOG.md
