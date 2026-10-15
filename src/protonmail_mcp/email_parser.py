@@ -818,7 +818,16 @@ def parse_email(
     result["untrusted_content_notice"] = UNTRUSTED_CONTENT_NOTICE
     result["sanitized"] = dict(clean.counts)
     result["suspicious_content"] = (
-        suspicious_reasons([subject, full_plain], clean, html_report) + html_reasons
+        suspicious_reasons(
+            # Visningsnamn och bilagenamn styrs också av avsändaren
+            [subject, full_plain]
+            + [name for pairs in addresses.values() for name, _ in pairs if name]
+            + [from_]
+            + [a["filename"] for a in parts["attachments"] if a.get("filename")],
+            clean,
+            html_report,
+        )
+        + html_reasons
     )
     # Gömda HTML-element (finns kvar i body_html men inte i body_plain) och
     # vit text utan bakgrundsfärg, som antal

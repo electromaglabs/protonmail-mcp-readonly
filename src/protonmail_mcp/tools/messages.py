@@ -100,7 +100,7 @@ async def list_emails(
     till en sådan adress). En rad får suspicious_content (fasta
     varningstexter) bara när något misstänkt hittats: taggtecken eller
     bidi-styrtecken som rensats, osynliga tecken i en adress, eller ett
-    typiskt injektionsmönster i ämnet.
+    typiskt injektionsmönster i ämnet eller ett visningsnamn.
 
     Args:
         mailbox: Mappnamn (standard: INBOX)

@@ -1184,9 +1184,11 @@ def _parse_fetch_metadata(lines: list, extra_headers: tuple[str, ...] = ()) -> l
         for name in extra_headers:
             meta[name.replace("-", "_")] = _metadata_value(hdrs, name, clean)
         # Varning (fasta texter, som i get_email) bara när det finns något:
-        # taggtecken/bidi som rensats, osynliga tecken som lämnats i en
-        # adress eller ett injektionsmönster i ämnet
-        if reasons := suspicious_reasons([meta["subject"]], clean):
+        # taggtecken/bidi som rensats, osynliga tecken i en adress eller ett
+        # injektionsmönster i ämnet eller ett visningsnamn
+        # Ämne och adressrader (visningsnamnen) läses av injektionsheuristiken
+        texts = [meta["subject"], meta["from"], meta["to"], meta.get("cc") or ""]
+        if reasons := suspicious_reasons(texts, clean):
             meta["suspicious_content"] = reasons
         messages.append(meta)
     return messages

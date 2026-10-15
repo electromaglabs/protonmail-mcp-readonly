@@ -24,7 +24,7 @@ async def get_thread(
     till en sådan adress). En rad får suspicious_content (fasta
     varningstexter) bara när något misstänkt hittats: taggtecken eller
     bidi-styrtecken som rensats, osynliga tecken i en adress, eller ett
-    typiskt injektionsmönster i ämnet.
+    typiskt injektionsmönster i ämnet eller ett visningsnamn.
 
     Bridge har ingen trådfunktion, så konversationen byggs av mejlens
     Message-ID, In-Reply-To och References: alla mejl i All Mail som hör till

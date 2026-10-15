@@ -373,10 +373,18 @@ _PHRASES: list[tuple[str, re.Pattern[str]]] = [
     ("ignorera tidigare instruktioner", re.compile(
         r"\b(?:ignore|disregard|forget|override|bypass|skip)(?: (?:all|any|the|your|my|of|these|those))*"
         r" (?:previous|prior|above|earlier|preceding|former|original|existing|system)"
-        r" (?:instructions?|prompts?|rules|directions|guidelines|commands|context)\b"
+        r" (?:instructions?|prompts?|rules|directions|directives|guidelines|commands|context)\b"
+        # "ignore all instructions above", "ignore everything above"
+        r"|\b(?:ignore|disregard|forget)(?: (?:all|any|the|your|of|these|those))*"
+        r" (?:everything|instructions?|prompts?|rules|directives|guidelines|commands)"
+        r" (?:above|before|so far|until now|you (?:were|have been) given)\b"
         r"|\b(?:ignorera|strunta i|bortse fran|glom|overskrid)(?: (?:alla|dina|de|samtliga|era))*"
         r" (?:tidigare|foregaende|ovanstaende|forra|ursprungliga)"
         r" (?:instruktioner(?:na)?|instruktionen|instruktion|uppmaningar(?:na)?|regler(?:na)?|direktiv(?:en)?)\b"
+        # "ignorera instruktionerna ovan", "strunta i alla instruktioner du har fått"
+        r"|\b(?:ignorera|strunta i|bortse fran|glom)(?: (?:alla|dina|de|samtliga|era))*"
+        r" (?:allt|instruktioner(?:na)?|uppmaningar(?:na)?|regler(?:na)?|direktiv(?:en)?)"
+        r" (?:ovan|ovanfor|hittills|du (?:har )?fatt)\b"
     )),
     ("byta roll", re.compile(
         r"\byou are now (?:an? |in |the |my )?(?:ai|assistant|chatbot|dan|unrestricted|jailbroken|uncensored"
@@ -395,6 +403,9 @@ _PHRASES: list[tuple[str, re.Pattern[str]]] = [
         r"|\b(?:ai|llm|assistant|agent) (?:reading|processing|summari[sz]ing|parsing) this"
         r" (?:e ?mail|message|mail|text|document)\b"
         r"|\b(?:om|nar) du ar en (?:ai|sprakmodell|assistent|agent|chattbot|bot)\b"
+        r"|\bdear (?:ai|llm|language model|ai (?:assistant|agent|model))\b"
+        r"|\b(?:hello|hi|hey) (?:ai (?:assistant|agent)|llm|language model)\b"
+        r"|\bkara (?:ai(?: assistent(?:en)?| agent(?:en)?)?|sprakmodell(?:en)?)\b"
         r"|\b(?:meddelande|instruktion(?:er)?|uppmaning|till) (?:till|for) (?:en |den )?"
         r"(?:ai|ai assistent(?:en)?|assistent(?:en)?|agent(?:en)?|sprakmodell(?:en)?)\b"
     )),
@@ -409,8 +420,10 @@ _PHRASES: list[tuple[str, re.Pattern[str]]] = [
         r"|\b(?:visa|skriv ut|upprepa|avsloja|ignorera)(?: (?:din|den|er))? (?:systemprompt(?:en)?|system prompt)\b"
     )),
     ("vidarebefordra all post", re.compile(
-        r"\bforward (?:all|every|each) (?:of (?:the|my|your) )?(?:e ?mails?|messages?|mail|correspondence)\b"
-        r"|\bvidarebefordra (?:alla|samtliga|varje) (?:mejl|mail|e post|meddelanden|brev)\b"
+        r"\bforward (?:all|every|each)(?: single)? (?:of (?:the|my|your) )?"
+        r"(?:e ?mails?|messages?|mail|correspondence)\b"
+        r"|\bvidarebefordra (?:alla|samtliga|varje)(?: (?:mina|dina|era|vara))? (?:mejl|mail|e post|meddelanden|brev)\b"
+        r"|\bskicka (?:alla|samtliga|varje)(?: (?:mina|dina|era|vara))? (?:mejl|mail|e post|meddelanden|brev) till\b"
     )),
 ]
 # Styrtoken från chattmallar (OpenAI/ChatML, Llama, Mistral) och låtsade
@@ -422,6 +435,20 @@ _TOKENS_RE = re.compile(
 )
 _WORD_RE = re.compile(r"\w+")
 _SPACE_RE = re.compile(r"\s+")
+# Utspärrade bokstäver ("I g n o r e", "i-g-n-o-r-e"): minst tre ensamma
+# tecken med exakt ett skiljetecken emellan. Två blanksteg skiljer ord.
+_SPACED_RE = re.compile(r"(?<!\w)\w(?:[ .\-_]\w(?!\w)){2,}")
+_SPACED_SEP_RE = re.compile(r"[ .\-_]")
+# Hela fraser utan mellanrum, för en utspärrad följd utan ordgränser
+# ("i g n o r e a l l p r e v i o u s …")
+_SQUEEZED_RE = [
+    ("ignorera tidigare instruktioner", re.compile(
+        r"(?:ignore|disregard|forget)(?:all|any|the|your)*(?:previous|prior|above|earlier)"
+        r"(?:instructions?|prompts?|rules|directives)"
+        r"|(?:ignorera|glom)(?:alla)?(?:tidigare|ovanstaende)(?:instruktioner|regler)"
+    )),
+    ("vidarebefordra all post", re.compile(r"forward(?:all|every)(?:e?mails?|messages)|vidarebefordraalla(?:mejl|mail)")),
+]
 
 
 def _strip_marks(text: str) -> str:
@@ -441,8 +468,19 @@ def injection_signals(text: str | None) -> list[str]:
     if not text:
         return []
     folded = unicodedata.normalize("NFKC", sanitize_text(text).text).casefold()
-    words = " ".join(_WORD_RE.findall(_strip_marks(folded)))
+    stripped = _strip_marks(folded)
+    runs: list[str] = []
+
+    def collapse(m: re.Match[str]) -> str:
+        run = _SPACED_SEP_RE.sub("", m.group())
+        runs.append(run)
+        return run
+
+    words = " ".join(_WORD_RE.findall(_SPACED_RE.sub(collapse, stripped)))
     found = [label for label, pattern in _PHRASES if pattern.search(words)]
+    for label, pattern in _SQUEEZED_RE:
+        if label not in found and any(pattern.search(run) for run in runs):
+            found.append(label)
     if _TOKENS_RE.search(_SPACE_RE.sub("", folded)):
         found.append("styrtoken för chattmall")
     return found

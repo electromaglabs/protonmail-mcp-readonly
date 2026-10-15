@@ -39,7 +39,7 @@ async def search_emails(
     koder "[U+XXXX]" (svara inte till en sådan adress). En träff får
     suspicious_content (fasta varningstexter) bara när något misstänkt hittats:
     taggtecken eller bidi-styrtecken som rensats, osynliga tecken i en adress,
-    eller ett typiskt injektionsmönster i ämnet.
+    eller ett typiskt injektionsmönster i ämnet eller ett visningsnamn.
 
     Sökningen ändrar ingenting: inga flaggor sätts och inget flyttas.
 
