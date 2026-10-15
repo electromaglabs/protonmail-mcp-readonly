@@ -16,12 +16,14 @@ Alla vägringar är ValueError med en text som når klienten oförändrad.
 from __future__ import annotations
 
 import functools
+import inspect
 import math
 import time
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from . import audit
 from .config import normalize_domain, parse_allowed_recipients
 
 # Verktygen per kategori. Används av MCP-servern för att vägra tidigt; den
@@ -197,21 +199,86 @@ class SendRateLimiter:
         self._times.append(now)
 
 
-def write_operation(action: str, *, draft: bool = False):
+# Argument som får hamna i granskningsloggen, och fältet de skrivs till.
+# Allt annat (t.ex. meddelandet i ett utkast) utelämnas.
+_AUDIT_ARGS = {
+    "mailbox": "mailbox",
+    "name": "mailbox",
+    "old_name": "mailbox",
+    "target": "target",
+    "new_name": "target",
+    "label": "label",
+    "uid": "uids",
+    "old_uid": "uids",
+    "uids": "uids",
+    "permanent": "permanent",
+    "force": "force",
+    "flags": "flags",
+    "add": "add",
+    "starred": "starred",
+    "message_id": "message_id",
+}
+
+
+def _audit_fields(bound: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for arg, value in bound.items():
+        key = _AUDIT_ARGS.get(arg)
+        if key is None or value is None:
+            continue
+        if key == "uids":
+            value = [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value)]
+        elif not isinstance(value, (str, bool, int)):
+            value = str(value)
+        fields[key] = value
+    return fields
+
+
+def _result_fields(value: Any) -> tuple[str, dict[str, Any]]:
+    """("ok"/"error", extra fält) ur skrivfunktionens returvärde."""
+    if isinstance(value, dict) and "ok" in value and "failed" in value:
+        failed = [str(f.get("uid")) for f in value["failed"] if isinstance(f, dict)]
+        return ("error" if failed else "ok"), {"ok_uids": list(value["ok"]), "failed_uids": failed}
+    if isinstance(value, str):
+        return "ok", {"new_uid": value}
+    return "ok", {}
+
+
+def write_operation(action: str, *, draft: bool = False, mailbox: str | None = None):
     """Dekorator för IMAP-funktioner som skriver i kontot.
 
     Den dekorerade funktionens första argument är IMAPClient (``self`` eller
     ``imap``); policyn läses ur dess ``_settings``. Kontrollen görs innan
     funktionen körs, alltså innan något valideras eller skickas till Bridge.
+    Varje anrop, även ett vägrat, ger en rad i granskningsloggen (audit.py)
+    med åtgärd, mapp, UID:n och resultat — aldrig meddelandeinnehåll.
+    ``mailbox`` anger mappen för funktioner som inte tar den som argument.
     Lägg dekoratorn närmast funktionen (under ``_serialized``), så att även
     anrop via ``__wrapped__`` (utan lås) kontrolleras.
     """
     check = require_draft if draft else require_write
 
     def decorate(func):
+        signature = inspect.signature(func)
+
         @functools.wraps(func)
         async def wrapper(imap, *args, **kwargs):
-            check(getattr(imap, "_settings", None), action)
-            return await func(imap, *args, **kwargs)
+            settings = getattr(imap, "_settings", None)
+            try:
+                bound = signature.bind(imap, *args, **kwargs).arguments
+            except TypeError:
+                bound = {}
+            fields = _audit_fields(bound)
+            if mailbox is not None:
+                fields.setdefault("mailbox", mailbox)
+            try:
+                check(settings, action)
+                value = await func(imap, *args, **kwargs)
+            except BaseException as exc:
+                audit.record(settings, action, result="error", error=exc, **fields)
+                raise
+            result, extra = _result_fields(value)
+            audit.record(settings, action, result=result, **fields, **extra)
+            return value
         return wrapper
     return decorate

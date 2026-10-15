@@ -137,3 +137,33 @@ __all__ = [
     "spy_imap",
     "spy_smtp_patch",
 ]
+
+
+def working_imap(settings: Settings, existing: set[str], spy: BridgeSpy | None = None) -> IMAPClient:
+    """IMAPClient mot en låtsas-Bridge där UID:na i ``existing`` finns i varje mapp.
+
+    UID FETCH (UID) svarar med de UID:n som finns; övriga kommandon svarar OK.
+    """
+    imap = IMAPClient(settings)
+
+    async def ensure_connected() -> None:
+        if spy is not None:
+            spy.imap_calls.append("_ensure_connected")
+
+    async def uid(command: str, *args: str):
+        if spy is not None:
+            spy.imap_calls.append(command)
+        if command == "fetch":
+            wanted = args[0].split(",")
+            lines = [f"{i} FETCH (UID {u})".encode() for i, u in enumerate(wanted, 1) if u in existing]
+            return SimpleNamespace(result="OK", lines=[*lines, b"FETCH completed"])
+        return SimpleNamespace(result="OK", lines=[b"OK"])
+
+    client = AsyncMock()
+    client.select.return_value = SimpleNamespace(result="OK", lines=[])
+    client.uid.side_effect = uid
+    client.protocol = MagicMock()
+    client.protocol.state = "SELECTED"
+    imap._client = client
+    imap._ensure_connected = ensure_connected  # type: ignore[method-assign]
+    return imap

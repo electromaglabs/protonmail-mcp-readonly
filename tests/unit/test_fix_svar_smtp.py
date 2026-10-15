@@ -228,8 +228,11 @@ async def test_partial_refusal_does_not_log_addresses(caplog):
                 await make_client().send_email(
                     to=["ok@x.se", "bad@x.se"], subject="s", body="b"
                 )
-    assert "bad@x.se" not in caplog.text
-    assert "ok@x.se" not in caplog.text
+    # Granskningsloggen (protonmail_mcp.audit) har adresserna avsiktligt;
+    # SMTP-klientens vanliga logg får inte ha dem
+    smtp_log = "\n".join(r.getMessage() for r in caplog.records if r.name == "protonmail_mcp.smtp_client")
+    assert "bad@x.se" not in smtp_log
+    assert "ok@x.se" not in smtp_log
 
 
 async def test_full_acceptance_returns_true():

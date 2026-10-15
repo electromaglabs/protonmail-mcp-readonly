@@ -310,7 +310,9 @@ async def test_recipient_addresses_not_logged(settings: Settings, mock_smtp, cap
             bcc="secret@example.com",
         )
 
-    log_text = caplog.text
+    # Granskningsloggen (protonmail_mcp.audit) har adresserna avsiktligt;
+    # SMTP-klientens vanliga logg får inte ha dem
+    log_text = "\n".join(r.getMessage() for r in caplog.records if r.name == "protonmail_mcp.smtp_client")
     assert "alice@example.com" not in log_text
     assert "charlie@example.com" not in log_text
     assert "secret@example.com" not in log_text

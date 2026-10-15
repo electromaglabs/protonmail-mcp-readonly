@@ -12,7 +12,7 @@ from typing import Sequence
 
 import aiosmtplib
 
-from . import policy
+from . import audit, policy
 from .config import Settings
 from .email_parser import parse_addresses
 
@@ -368,11 +368,22 @@ class SMTPClient:
         Skickpolicyn (policy.py: PROTONMAIL_READ_ONLY m.fl.) kontrolleras här,
         innan Bridge kontaktas, så att ingen väg kan skicka förbi den.
         """
-        policy.require_send(self._settings, "skicket")
-        policy.check_recipient_count(self._settings, all_recipients)
-        policy.check_recipients(self._settings, all_recipients)
-        # Sist: bara skick som klarat alla andra kontroller räknas
-        self._rate.acquire(self._settings)
+        fields = {"recipients": list(all_recipients), "message_id": msg.get("Message-ID")}
+        try:
+            policy.require_send(self._settings, "skicket")
+            policy.check_recipient_count(self._settings, all_recipients)
+            policy.check_recipients(self._settings, all_recipients)
+            # Sist: bara skick som klarat alla andra kontroller räknas
+            self._rate.acquire(self._settings)
+            await self._smtp_send(msg, all_recipients)
+        except BaseException as exc:
+            audit.record(self._settings, "send", result="error", error=exc, **fields)
+            raise
+        audit.record(self._settings, "send", result="ok", **fields)
+        return True
+
+    async def _smtp_send(self, msg: Message, all_recipients: list[str]) -> None:
+        """Själva SMTP-skicket; anropas bara från _deliver, efter policyn."""
         logger.info(
             "Skickar e-post (%d mottagare) via SMTP %s:%d",
             len(all_recipients),
@@ -389,7 +400,7 @@ class SMTPClient:
             errors, _ = await client.send_message(msg, recipients=all_recipients)
 
         if errors:
-            # Logga bara antal — adresserna får inte hamna i loggen (Bcc)
+            # Bara antal här; adresserna (även Bcc) står i granskningsloggen (audit.py)
             logger.warning(
                 "E-post skickad men %d av %d mottagare vägrades",
                 len(errors),
@@ -403,4 +414,3 @@ class SMTPClient:
             )
 
         logger.info("E-post skickad")
-        return True

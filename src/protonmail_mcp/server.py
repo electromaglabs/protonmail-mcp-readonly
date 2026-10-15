@@ -76,10 +76,19 @@ class _GuardedFastMCP(FastMCP):
     """
 
     async def call_tool(self, name, arguments):
-        from . import config, policy
+        from . import audit, config, policy
 
-        policy.check_tool(config.get_settings(), name)
-        return await super().call_tool(name, arguments)
+        settings = config.get_settings()
+        token = audit.current_tool.set(name)  # verktygsnamnet i granskningsloggen
+        try:
+            try:
+                policy.check_tool(settings, name)
+            except ValueError as exc:
+                audit.record(settings, "tool_call", result="error", error=exc)
+                raise
+            return await super().call_tool(name, arguments)
+        finally:
+            audit.current_tool.reset(token)
 
 
 mcp = _GuardedFastMCP("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)

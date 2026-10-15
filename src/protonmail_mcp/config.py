@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     # när nästa skick går. Vägrade skick räknas inte; ett skick som nådde
     # Bridge räknas även om det misslyckades. 0 = ingen gräns. Standard: 30.
     max_sends_per_hour: int = Field(default=30, ge=0)
+    # PROTONMAIL_AUDIT_LOG: fil som granskningsloggen (audit.py) också skrivs
+    # till, en JSON-rad per skick och per skrivande IMAP-operation (tid,
+    # verktyg, åtgärd, mapp, UID:n, mottagaradresser, Message-ID, resultat —
+    # aldrig ämne, brödtext, bilagor eller lösenord). Raderna loggas alltid
+    # på INFO till stderr; med den här satt även till filen, som skapas med
+    # rättigheterna 0600 och aldrig skrivs genom en symlänk. Absolut sökväg
+    # (eller ~). Standard: ingen fil.
+    audit_log: Path | None = None
 
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
@@ -123,6 +131,16 @@ class Settings(BaseSettings):
     @classmethod
     def _check_allowed_recipients(cls, value: str) -> str:
         parse_allowed_recipients(value)  # ValueError för en felskriven post
+        return value
+
+    @field_validator("audit_log", mode="after")
+    @classmethod
+    def _check_audit_log(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        value = value.expanduser()
+        if not value.is_absolute():
+            raise ValueError("PROTONMAIL_AUDIT_LOG måste vara en absolut sökväg (eller börja med ~)")
         return value
 
     @field_validator("attachment_dir", mode="after")
