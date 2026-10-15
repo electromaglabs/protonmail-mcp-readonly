@@ -13,6 +13,7 @@ import re
 from email.parser import HeaderParser
 from typing import Any
 
+from . import policy
 from .imap_bulk import (
     BulkResult,
     _split_after_failure,
@@ -266,6 +267,7 @@ async def _expunge_in_label(
 
 
 @_serialized
+@policy.write_operation("add_label")
 async def add_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str) -> BulkResult:
     """Lägger till etiketten på mejlen med UID COPY; mejlen ligger kvar i mailbox."""
     uids = validate_uids(uids)
@@ -293,6 +295,7 @@ async def add_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str)
 
 
 @_serialized
+@policy.write_operation("remove_label")
 async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: str) -> BulkResult:
     """Tar bort etiketten från mejlen utan att flytta eller radera dem.
 
@@ -344,6 +347,7 @@ async def remove_label(imap: IMAPClient, mailbox: str, uids: list[str], label: s
 
 
 @_serialized
+@policy.write_operation("set_starred")
 async def set_starred(imap: IMAPClient, mailbox: str, uids: list[str], starred: bool) -> BulkResult:
     """Stjärnmärker (\\Flagged) eller avmarkerar mejlen; gäller i alla vyer hos Proton."""
     what = "Stjärnmärkningen" if starred else "Borttagningen av stjärnmärkningen"

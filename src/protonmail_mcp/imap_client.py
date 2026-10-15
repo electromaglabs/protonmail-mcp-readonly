@@ -10,6 +10,7 @@ from typing import Any
 
 import aioimaplib
 
+from . import policy
 from .config import Settings
 from .email_parser import decode_header_value
 from .mailbox_names import decode_modified_utf7, describe_mailbox, encode_modified_utf7
@@ -755,6 +756,7 @@ class IMAPClient:
         return found
 
     @_serialized
+    @policy.write_operation("set_flags")
     async def set_flags(self, mailbox: str, uid: str, flags: str, add: bool) -> bool:
         safe_uid = _validate_uid(uid)
         _quote_mailbox(mailbox)
@@ -767,6 +769,7 @@ class IMAPClient:
         return True
 
     @_serialized
+    @policy.write_operation("move_message")
     async def move_message(self, mailbox: str, uid: str, target: str) -> bool:
         """Flyttar ett mejl med UID MOVE. Kastar ValueError om flytten avvisas eller misslyckas.
 
@@ -789,6 +792,7 @@ class IMAPClient:
         return True
 
     @_serialized
+    @policy.write_operation("delete_message")
     async def delete_message(self, mailbox: str, uid: str, permanent: bool = False) -> bool:
         """Flyttar ett mejl till Trash, eller raderar det permanent ur Trash/Drafts.
 
@@ -855,6 +859,7 @@ class IMAPClient:
         return None
 
     @_serialized
+    @policy.write_operation("create_folder")
     async def create_folder(self, name: str) -> bool:
         kind = _check_user_folder(name)
         quoted = _quote_mailbox(name)
@@ -864,6 +869,7 @@ class IMAPClient:
         return True
 
     @_serialized
+    @policy.write_operation("delete_folder")
     async def delete_folder(self, name: str, force: bool = False) -> bool:
         """Tar bort en mapp eller etikett; vägrar om den inte är tom, utom med force.
 
@@ -911,6 +917,7 @@ class IMAPClient:
             )
 
     @_serialized
+    @policy.write_operation("rename_folder")
     async def rename_folder(self, old_name: str, new_name: str) -> bool:
         old_kind = _check_user_folder(old_name)
         new_kind = _check_user_folder(new_name)

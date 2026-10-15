@@ -7,6 +7,8 @@ enskilt mejl (finns inte, Bridge nekar) hamnar i "failed".
 """
 from typing import Any
 
+from . import policy
+
 from .imap_client import (
     _READD_DELETES,
     _UID_RE,
@@ -142,6 +144,7 @@ async def store_flags(
 
 
 @_serialized
+@policy.write_operation("set_flags")
 async def set_flags(imap: IMAPClient, mailbox: str, uids: list[str], flags: str, add: bool) -> BulkResult:
     """Sätter eller tar bort flaggor (t.ex. \\Seen) på flera mejl i samma mapp."""
     return await store_flags(imap, mailbox, uids, flags, add, "Ändringen av flaggorna")
@@ -166,6 +169,7 @@ async def _move_found(imap: IMAPClient, mailbox: str, uids: list[str], target: s
 
 
 @_serialized
+@policy.write_operation("move")
 async def move(imap: IMAPClient, mailbox: str, uids: list[str], target: str) -> BulkResult:
     """Flyttar flera mejl med ett UID MOVE. Samma vakter som move_message, för alla UID:n."""
     uids = validate_uids(uids)
@@ -176,6 +180,7 @@ async def move(imap: IMAPClient, mailbox: str, uids: list[str], target: str) -> 
 
 
 @_serialized
+@policy.write_operation("delete")
 async def delete(imap: IMAPClient, mailbox: str, uids: list[str], permanent: bool = False) -> BulkResult:
     """Flyttar flera mejl till Trash, eller raderar dem permanent ur Trash/Drafts.
 

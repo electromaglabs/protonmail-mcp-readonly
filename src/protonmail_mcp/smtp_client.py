@@ -11,6 +11,7 @@ from typing import Sequence
 
 import aiosmtplib
 
+from . import policy
 from .config import Settings
 from .email_parser import parse_addresses
 
@@ -328,40 +329,7 @@ class SMTPClient:
         all_recipients = [
             _to_address(a).addr_spec for a in to_list + cc_list + bcc_list
         ]
-
-        logger.info(
-            "Skickar e-post (%d mottagare) via SMTP %s:%d",
-            len(all_recipients),
-            self._settings.smtp_host,
-            self._settings.smtp_port,
-        )
-
-        # Bridge v3 port 1026: direkt SSL med self-signed cert
-        async with aiosmtplib.SMTP(
-            hostname=self._settings.smtp_host,
-            port=self._settings.smtp_port,
-            use_tls=True,
-            tls_context=self._ssl_ctx,
-        ) as client:
-            await client.login(self._settings.username, self._settings.password)
-            errors, _ = await client.send_message(msg, recipients=all_recipients)
-
-        if errors:
-            # Logga bara antal — adresserna får inte hamna i loggen (Bcc)
-            logger.warning(
-                "E-post skickad men %d av %d mottagare vägrades",
-                len(errors),
-                len(all_recipients),
-            )
-            raise SMTPPartialDeliveryError(
-                refused={
-                    addr: (resp.code, resp.message) for addr, resp in errors.items()
-                },
-                delivered=[a for a in all_recipients if a not in errors],
-            )
-
-        logger.info("E-post skickad")
-        return True
+        return await self._deliver(msg, all_recipients)
 
     async def send_prepared_message(self, msg: Message) -> bool:
         """Skicka ett färdigt meddelande, t.ex. ett utkast ur Drafts.
@@ -391,7 +359,12 @@ class SMTPClient:
         return await self._deliver(outgoing, recipients)
 
     async def _deliver(self, msg: Message, all_recipients: list[str]) -> bool:
-        """Skicka över SMTP med Bridge-inloggning; som slutet av send_email."""
+        """Skicka över SMTP med Bridge-inloggning. Alla skick går hit.
+
+        Skickpolicyn (policy.py: PROTONMAIL_READ_ONLY m.fl.) kontrolleras här,
+        innan Bridge kontaktas, så att ingen väg kan skicka förbi den.
+        """
+        policy.require_send(self._settings, "skicket")
         logger.info(
             "Skickar e-post (%d mottagare) via SMTP %s:%d",
             len(all_recipients),

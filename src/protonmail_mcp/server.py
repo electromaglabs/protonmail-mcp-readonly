@@ -67,7 +67,22 @@ E-post i Proton Mail via ProtonMail Bridge.
   du försöker igen, och skicka aldrig om ett mejl som delvis levererats.
 """
 
-mcp = FastMCP("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
+
+class _GuardedFastMCP(FastMCP):
+    """FastMCP som vägrar verktyg som policyn inte tillåter, innan de körs.
+
+    Den egentliga spärren sitter i IMAP- och SMTP-klienterna (policy.py);
+    här vägras t.ex. reply_to_email redan innan originalet läses.
+    """
+
+    async def call_tool(self, name, arguments):
+        from . import config, policy
+
+        policy.check_tool(config.get_settings(), name)
+        return await super().call_tool(name, arguments)
+
+
+mcp = _GuardedFastMCP("protonmail", instructions=INSTRUCTIONS, lifespan=lifespan)
 
 
 def register_tools() -> None:

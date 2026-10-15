@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # Största bilaga som get_attachment returnerar direkt (save=False), i byte
     attachment_max_inline_bytes: int = Field(default=1024 * 1024, gt=0)
 
+    # --- Begränsningar av vad servern (och därmed en LLM) får göra ---
+    # Kontrolleras centralt (policy.py): i IMAP-klientens skrivfunktioner,
+    # i SMTP-klientens leverans och i MCP-servern före varje verktyg.
+    # Alla vägringar är fel som når klienten; inget skickas till Bridge.
+    #
+    # PROTONMAIL_READ_ONLY=true: allt som ändrar kontot vägras — flytt,
+    # radering, läst/oläst, stjärna, etiketter, mappar, utkast och skick.
+    # Läsande verktyg fungerar som vanligt. Standard: false.
+    read_only: bool = False
+
     model_config = SettingsConfigDict(
         env_prefix="PROTONMAIL_",
         # Senare filer vinner: en .env i arbetskatalogen går före projektrotens

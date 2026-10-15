@@ -12,6 +12,8 @@ import re
 
 import aioimaplib
 
+from . import policy
+
 from .imap_client import (
     IMAPClient,
     _UID_RE,
@@ -84,6 +86,7 @@ async def _store_draft(imap: IMAPClient, message: bytes, message_id: str | None)
 
 
 @_serialized
+@policy.write_operation("append_draft", draft=True)
 async def append_draft(imap: IMAPClient, message: bytes, message_id: str | None) -> str | None:
     """Lägg ett färdigt meddelande i Drafts som utkast (flaggorna \\Draft \\Seen).
 
@@ -115,6 +118,7 @@ _RETRY_WARNING = "Kör inte update_draft igen — då blir det ett utkast till."
 
 
 @_serialized
+@policy.write_operation("replace_draft", draft=True)
 async def replace_draft(
     imap: IMAPClient, old_uid: str, message: bytes, message_id: str | None
 ) -> str | None:
@@ -167,6 +171,7 @@ async def _has_uid(imap: IMAPClient, uid: str) -> bool:
 
 
 @_serialized
+@policy.write_operation("remove_sent_draft")
 async def remove_sent_draft(imap: IMAPClient, uid: str) -> bool:
     """Ta bort ett utkast ur Drafts efter att det skickats.
 
