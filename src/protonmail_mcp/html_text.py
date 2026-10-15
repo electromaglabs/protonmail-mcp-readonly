@@ -5,6 +5,7 @@ MSO-villkorskommentarer och '>' i attributvärden, inte avkodade entiteter och
 gjorde HTML på en rad till ett enda textblock. Bygger på stdlib html.parser.
 """
 import html
+import math
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -220,9 +221,10 @@ def _compact(value: str) -> str:
 
 def _number(value: str) -> float | None:
     try:
-        return float(value.rstrip("%"))
+        number = float(value.rstrip("%"))
     except ValueError:
         return None
+    return number if math.isfinite(number) else None
 
 
 def _length_px(value: str) -> float | None:
@@ -268,6 +270,8 @@ def _color(value: str | None):
                 )
             except ValueError:
                 return None
+            if not all(math.isfinite(c) for c in (*channels, alpha)):
+                return None  # nan/inf: ingen känd färg
             if alpha == 0:
                 return _TRANSPARENT
             return tuple(max(0, min(255, round(c))) for c in channels)
@@ -431,6 +435,7 @@ class HtmlText:
     hidden_elements: int = 0
     hidden_reasons: dict[str, int] = field(default_factory=dict)
     white_text: str = ""
+    unsafe: bool = False
 
 # Fler citatnivåer än så visas som tio — annars kan djupt nästlade
 # <blockquote> blåsa upp utdata kvadratiskt mot indata
@@ -456,6 +461,8 @@ class _TextExtractor(HTMLParser):
         # Enkla regler ur <style> (se _Rules) och texten i pågående <style>
         self.rules = _Rules()
         self.css_parts: list[str] | None = None
+        # Något gick inte att tolka säkert (se html_to_text_report)
+        self.unsafe = False
         self.hidden_parts: list[str] = []
         self.white_parts: list[str] = []
         self.hidden_elements = 0
@@ -537,15 +544,20 @@ class _TextExtractor(HTMLParser):
             return
         hard, font_zero, vis_hidden, color, bg, hidden, _ = self.state
         if not hard:
-            style = _style(attrs, self.rules, tag)
-            if reason := _hard_hidden(attrs, style):
-                hard = True
-            elif props := _soft_style(attrs, style):
-                font_zero = props.get("font_zero", font_zero)
-                vis_hidden = props.get("vis_hidden", vis_hidden)
-                color = props.get("color", color)
-                bg = props.get("bg", bg)
-                reason = _soft_reason(font_zero, vis_hidden, color, bg)
+            try:
+                style = _style(attrs, self.rules, tag)
+                if reason := _hard_hidden(attrs, style):
+                    hard = True
+                elif props := _soft_style(attrs, style):
+                    font_zero = props.get("font_zero", font_zero)
+                    vis_hidden = props.get("vis_hidden", vis_hidden)
+                    color = props.get("color", color)
+                    bg = props.get("bg", bg)
+                    reason = _soft_reason(font_zero, vis_hidden, color, bg)
+            except Exception:
+                # Fail-closed: en stil som inte går att tolka gömmer elementet
+                reason, hard = "otolkbar stil", True
+                self.unsafe = True
             if reason and not hidden:  # räkna bara det yttersta gömda elementet
                 self._hide(reason)
         now_hidden = hard or _soft_reason(font_zero, vis_hidden, color, bg) is not None
@@ -601,7 +613,10 @@ class _TextExtractor(HTMLParser):
         if tag in _SKIP:
             self.skip = max(0, self.skip - 1)
             if tag == "style" and self.css_parts is not None:
-                self.rules.add_stylesheet("".join(self.css_parts))
+                try:
+                    self.rules.add_stylesheet("".join(self.css_parts))
+                except Exception:
+                    self.unsafe = True  # reglerna kan vara ofullständiga: flagga
                 self.css_parts = None
             return
         if self.skip or self.in_head:
@@ -691,13 +706,25 @@ def html_to_text_report(markup: str) -> HtmlText:
         parser.feed(markup)
         parser.close()
     except Exception:
-        return HtmlText(html.unescape(re.sub(r"<[^>]+>", "", markup)).strip())
+        # Fail-closed: bara den synliga text som redan tolkats; resten av
+        # HTML:en (som kan vara gömd) tas inte med, och resultatet flaggas
+        try:
+            text = parser.text()
+        except Exception:
+            text = ""
+        return HtmlText(
+            text=text,
+            hidden_elements=parser.hidden_elements,
+            hidden_reasons=dict(parser.hidden_reasons),
+            unsafe=True,
+        )
     return HtmlText(
         text=parser.text(),
         hidden_text=_joined(parser.hidden_parts),
         hidden_elements=parser.hidden_elements,
         hidden_reasons=dict(parser.hidden_reasons),
         white_text=_joined(parser.white_parts),
+        unsafe=parser.unsafe,
     )
 
 

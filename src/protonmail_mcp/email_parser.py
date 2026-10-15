@@ -644,6 +644,10 @@ def suspicious_reasons(
         f"misstänkt instruktion till modellen i gömd HTML-text: {label}"
         for label in hidden if label not in visible
     ]
+    if html_report.unsafe:
+        reasons.append(
+            "HTML:en kunde inte tolkas säkert: det som inte gick att tolka är utelämnat ur texten"
+        )
     # Gömd och vit HTML-text i sig flaggas inte: i en mätning på 300 riktiga
     # mejl hade 228 gömda element (förhandstext, mobilversioner) och 30 vit
     # text, utan något injektionsmönster. Den räknas i hidden_html i stället.
