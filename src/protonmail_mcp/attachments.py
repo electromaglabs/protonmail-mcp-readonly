@@ -395,14 +395,39 @@ class AttachmentStore:
         return _CheckedFile(resolved, st, resolved.relative_to(root))
 
 
+# Keynote-presentationer slutar också på .key men är zip-arkiv
+_ZIP_MAGIC = b"PK\x03\x04"
+
+
+def _only_key_extension(part: str) -> bool:
+    """Namnet är känsligt bara för ändelsen .key (inte t.ex. id_rsa.key)."""
+    return part.lower().endswith(".key") and not _is_sensitive_part(part[:-4])
+
+
 def _sensitive_reason(name: str, checked: _CheckedFile) -> str | None:
     """Varför filen ser ut att vara hemlig, utifrån namnet som angavs och
-    den upplösta sökvägen inom bilagekatalogen; None om inget träffar."""
+    den upplösta sökvägen inom bilagekatalogen; None om inget träffar.
+
+    Filnamnet (sista ledet) får sluta på .key om filen börjar som ett
+    zip-arkiv (PK\\x03\\x04), som en Keynote-presentation. Innehållet
+    kontrolleras ändå mot privata nycklar när filen läses.
+    """
     given = Path(name)
-    parts = [*checked.relative.parts, *([given.name] if given.is_absolute() else given.parts)]
-    for part in parts:
-        if _is_sensitive_part(part):
-            return f"namnet {part!r}"
+    given_parts = [given.name] if given.is_absolute() else list(given.parts)
+    candidates = [
+        *((part, i == len(checked.relative.parts) - 1) for i, part in enumerate(checked.relative.parts)),
+        *((part, i == len(given_parts) - 1) for i, part in enumerate(given_parts)),
+    ]
+    is_zip: bool | None = None
+    for part, is_file_name in candidates:
+        if not _is_sensitive_part(part):
+            continue
+        if is_file_name and _only_key_extension(part):
+            if is_zip is None:
+                is_zip = _read_checked(name, checked, len(_ZIP_MAGIC)) == _ZIP_MAGIC
+            if is_zip:
+                continue
+        return f"namnet {part!r}"
     return None
 
 
