@@ -93,13 +93,15 @@ class TestSave:
         assert path.name == "x (1).txt"
         assert not target.exists()
 
-    def test_root_symlink_is_resolved(self, tmp_path):
+    def test_root_symlink_is_rejected(self, tmp_path):
+        # Granskning 2, S1: en rot som är en symlänk följs inte längre
         real = tmp_path / "real"
         real.mkdir()
         link = tmp_path / "link"
         link.symlink_to(real)
-        path = AttachmentStore(link).save("x.txt", b"1")
-        assert path == (real / "x.txt")
+        with pytest.raises(ValueError, match="symlänk"):
+            AttachmentStore(link).save("x.txt", b"1")
+        assert not (real / "x.txt").exists()
 
     def test_dangling_symlink_root_gives_clear_error(self, tmp_path):
         root = tmp_path / "root"

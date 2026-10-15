@@ -33,6 +33,9 @@ async def lifespan(server: FastMCP):
         )
         raise
 
+    from .attachments import prepare_attachment_dir
+
+    prepare_attachment_dir(s)  # kastar aldrig, varnar bara
     imap = IMAPClient(s)
     try:
         yield AppContext(imap=imap, smtp=SMTPClient(s))

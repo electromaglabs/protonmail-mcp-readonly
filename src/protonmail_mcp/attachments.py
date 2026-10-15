@@ -9,23 +9,37 @@ kommer från klienten (en AI-modell). Båda behandlas som opålitliga:
 - En sökväg att skicka löses upp (symlänkar följs) och måste hamna inuti
   bilagekatalogen; path traversal, absoluta sökvägar utanför och symlänkar
   som pekar ut avvisas, liksom namn med kontrolltecken.
+- Själva katalogen måste vara en riktig katalog som du äger och som andra
+  inte kan skriva i, och sökvägen dit får inte gå via någon symlänk (utom
+  systemets egna, som /var och /tmp på macOS, som ägs av root). Annars
+  räcker det att en uppackad zip lägger symlänken "protonmail-mcp -> .." i
+  ~/Downloads för att hela hemkatalogen ska räknas som "inuti". Katalogen
+  skapas därför redan när servern startar.
+- En fil som ska skickas öppnas med O_NOFOLLOW och jämförs (fstat) med den
+  fil som kontrollerades, så att den inte kan bytas ut däremellan. Hårda
+  länkar, andra filtyper än vanliga filer och filer som ser ut att innehålla
+  hemligheter (nycklar, .env, .netrc, nyckelringar) skickas aldrig.
 """
 from __future__ import annotations
 
 import email.policy
+import logging
 import mimetypes
 import os
 import re
+import stat
 import unicodedata
 from collections.abc import Sequence
 from email.message import EmailMessage
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, NamedTuple, Optional
 
 from pydantic import Field
 
 if TYPE_CHECKING:
     from .config import Settings
+
+logger = logging.getLogger(__name__)
 
 # Gränser för bilagor som skickas (send_email, reply_to_email, forward_email).
 # Proton tar emot högst 25 MB bilagor per mejl.
@@ -116,6 +130,52 @@ def _numbered(name: str, n: int) -> str:
     return f"{stem} ({n}).{ext}"
 
 
+# Skydd på djupet: filer som ser ut att innehålla hemligheter skickas inte
+# ens om de ligger i bilagekatalogen (t.ex. om PROTONMAIL_ATTACHMENT_DIR
+# pekar på hemkatalogen). Jämförs utan hänsyn till skiftläge, per sökvägsled.
+_SENSITIVE_NAMES = frozenset({".ssh", ".gnupg", ".aws", ".netrc", ".env"})
+_SENSITIVE_EXTENSIONS = frozenset({".pem", ".key"})
+_PRIVATE_KEY_RE = re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----")
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _current_uid() -> int | None:
+    getuid = getattr(os, "getuid", None)
+    return getuid() if getuid else None
+
+
+def _is_sensitive_part(part: str) -> bool:
+    """Ett sökvägsled som ser ut att vara eller rymma hemligheter.
+
+    id_* räknas bara utan filändelse eller med .pub (id_rsa, id_ed25519,
+    id_ecdsa_sk.pub) — id_kort.pdf är en vanlig fil.
+    """
+    low = part.lower()
+    if low in _SENSITIVE_NAMES or low.startswith(".env.") or "keychain" in low:
+        return True
+    suffix = Path(low).suffix
+    if low.startswith("id_") and suffix in ("", ".pub"):
+        return True
+    return suffix in _SENSITIVE_EXTENSIONS
+
+
+def _refuse_secret(name: str, why: str) -> ValueError:
+    return ValueError(
+        f"{name!r} ser ut att innehålla hemligheter ({why}) och skickas inte som "
+        "bilaga. Vill du verkligen skicka den: gör det själv från Proton."
+    )
+
+
+class _CheckedFile(NamedTuple):
+    path: Path  # upplöst, utan symlänkar
+    stat: os.stat_result  # lstat vid kontrollen
+    relative: Path  # relativt bilagekatalogen
+
+
 class AttachmentStore:
     """Läser och skriver bilagor, bara inuti ``root``."""
 
@@ -127,32 +187,97 @@ class AttachmentStore:
     def from_settings(cls, settings: Settings) -> AttachmentStore:
         return cls(settings.attachment_dir, max_inline_bytes=settings.attachment_max_inline_bytes)
 
-    def _ensure_root(self) -> Path:
-        """Skapa katalogen vid behov (0700) och returnera den upplöst."""
-        if not self.root.exists():
-            try:
-                self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-                self.root.chmod(0o700)  # mkdir påverkas av umask
-            except OSError as exc:  # t.ex. en trasig symlänk eller saknad behörighet
-                raise ValueError(
-                    f"Bilagekatalogen {self.root} kan inte skapas: {exc.strerror or exc}"
-                ) from None
-        resolved = self.root.resolve()
-        if not resolved.is_dir():
-            raise ValueError(f"Bilagekatalogen {self.root} är ingen katalog")
-        return resolved
-
-    def _resolved_root(self) -> Path:
-        try:
-            resolved = self.root.resolve(strict=True)
-        except (FileNotFoundError, RuntimeError):
+    def _check_root_stat(self, st: os.stat_result) -> None:
+        """Roten måste vara en riktig katalog som du äger och som bara du kan
+        skriva i. Används både på lstat (före) och fstat (efter öppning)."""
+        if stat.S_ISLNK(st.st_mode):
             raise ValueError(
-                f"Bilagekatalogen {self.root} finns inte. Lägg filerna som ska "
-                "skickas där (PROTONMAIL_ATTACHMENT_DIR)."
-            ) from None
-        if not resolved.is_dir():
+                f"Bilagekatalogen {self.root} är en symlänk och används inte (en "
+                "uppackad zip i Downloads kan lägga dit en sådan). Ta bort länken, "
+                "eller sätt PROTONMAIL_ATTACHMENT_DIR till en riktig katalog."
+            )
+        if not stat.S_ISDIR(st.st_mode):
             raise ValueError(f"Bilagekatalogen {self.root} är ingen katalog")
-        return resolved
+        uid = _current_uid()
+        if uid is not None and st.st_uid != uid:
+            raise ValueError(f"Bilagekatalogen {self.root} ägs inte av dig och används inte")
+        if st.st_mode & 0o022:
+            raise ValueError(
+                f"Bilagekatalogen {self.root} är skrivbar för andra "
+                f"(rättigheter {stat.S_IMODE(st.st_mode):o}) och används inte. "
+                f"Kör: chmod 700 {self.root}"
+            )
+
+    def _checked_root(self, create: bool = False) -> Path:
+        """Kontrollera bilagekatalogen (skapa den med 0700 om ``create``) och
+        returnera den upplöst.
+
+        Vägrar en relativ sökväg, en sökväg via en symlänk som inte ägs av
+        root (systemets /var och /tmp på macOS är tillåtna), en rot som själv
+        är en symlänk, som någon annan äger eller som andra kan skriva i.
+        """
+        root = self.root
+        if not root.is_absolute():
+            raise ValueError(
+                f"Bilagekatalogen {root} är en relativ sökväg — ange en absolut "
+                "sökväg i PROTONMAIL_ATTACHMENT_DIR"
+            )
+        for parent in reversed(root.parents):  # "/" först
+            try:
+                st = os.lstat(parent)
+            except FileNotFoundError:
+                break  # resten saknas och skapas nedan (eller ger "finns inte")
+            except OSError as exc:
+                raise ValueError(
+                    f"Bilagekatalogen {root} kan inte kontrolleras: {exc.strerror or exc}"
+                ) from None
+            if stat.S_ISLNK(st.st_mode) and st.st_uid != 0:
+                raise ValueError(
+                    f"Bilagekatalogen {root} ligger under symlänken {parent} och "
+                    "används inte. Sätt PROTONMAIL_ATTACHMENT_DIR till den riktiga "
+                    "sökvägen."
+                )
+        try:
+            st = os.lstat(root)
+        except FileNotFoundError:
+            if not create:
+                raise ValueError(
+                    f"Bilagekatalogen {root} finns inte. Lägg filerna som ska "
+                    "skickas där (PROTONMAIL_ATTACHMENT_DIR)."
+                ) from None
+            try:
+                root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.mkdir(root, 0o700)
+                os.chmod(root, 0o700)  # mkdir påverkas av umask
+                st = os.lstat(root)
+            except OSError as exc:  # t.ex. saknad behörighet eller en fil i vägen
+                raise ValueError(
+                    f"Bilagekatalogen {root} kan inte skapas: {exc.strerror or exc}"
+                ) from None
+        except OSError as exc:
+            raise ValueError(
+                f"Bilagekatalogen {root} kan inte kontrolleras: {exc.strerror or exc}"
+            ) from None
+        self._check_root_stat(st)
+        return root.resolve()
+
+    def _open_root(self, resolved: Path) -> int:
+        """Öppna den kontrollerade roten som katalog utan att följa en symlänk
+        och kontrollera det öppnade objektet igen (fstat), så att roten inte
+        kan bytas ut mellan kontroll och skrivning."""
+        try:
+            fd = os.open(resolved, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC)
+        except OSError as exc:
+            raise ValueError(
+                f"Bilagekatalogen {self.root} ändrades medan den kontrollerades "
+                f"({exc.strerror or exc}) — försök igen"
+            ) from None
+        try:
+            self._check_root_stat(os.fstat(fd))
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
 
     def save(self, filename: str | None, data: bytes, content_type: str | None = None) -> Path:
         """Spara data under ett sanerat filnamn och returnera den nya filens sökväg.
@@ -161,20 +286,25 @@ class AttachmentStore:
         "namn (1).ext", "namn (2).ext" och så vidare. Filen skapas med O_EXCL
         och O_NOFOLLOW och rättigheterna 0600.
         """
-        root = self._ensure_root()
+        root = self._checked_root(create=True)
         base = sanitize_filename(filename, content_type)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        for n in range(_MAX_COLLISIONS):
-            path = root / (base if n == 0 else _numbered(base, n))
-            if path.parent != root:  # kan inte hända efter saneringen, men ändå
-                raise ValueError("Ogiltigt filnamn för bilagan")
-            try:
-                fd = os.open(path, flags, 0o600)
-            except FileExistsError:
-                continue
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(data)
-            return path
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC
+        dir_fd = self._open_root(root)
+        try:
+            for n in range(_MAX_COLLISIONS):
+                name = base if n == 0 else _numbered(base, n)
+                path = root / name
+                if path.parent != root:  # kan inte hända efter saneringen, men ändå
+                    raise ValueError("Ogiltigt filnamn för bilagan")
+                try:
+                    fd = os.open(name, flags, 0o600, dir_fd=dir_fd)
+                except FileExistsError:
+                    continue
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                return path
+        finally:
+            os.close(dir_fd)
         raise ValueError(
             f"För många filer som heter {base!r} i bilagekatalogen — städa bland dem"
         )
@@ -185,16 +315,20 @@ class AttachmentStore:
         ``name`` är ett filnamn eller en sökväg relativt katalogen, eller en
         absolut sökväg som pekar in i den. ~ expanderas inte.
         """
+        return self._checked_file(name).path
+
+    def _checked_file(self, name: str) -> _CheckedFile:
         if not name or not name.strip():
             raise ValueError("Tomt filnamn för bilaga")
         if any(_is_unsafe_char(ch) for ch in name):
             raise ValueError(f"Filnamnet {name!r} innehåller kontrolltecken")
-        root = self._resolved_root()
+        root = self._checked_root()
         candidate = Path(name)
         if not candidate.is_absolute():
             candidate = root / candidate
         try:
             resolved = candidate.resolve(strict=True)
+            st = os.lstat(resolved)
         except (FileNotFoundError, NotADirectoryError):
             raise ValueError(f"Filen {name!r} finns inte i bilagekatalogen {root}") from None
         except (RuntimeError, OSError) as exc:  # symlänkloop m.m.
@@ -204,9 +338,48 @@ class AttachmentStore:
                 f"{name!r} ligger utanför bilagekatalogen {root}. Bara filer i "
                 "bilagekatalogen (PROTONMAIL_ATTACHMENT_DIR) kan skickas."
             )
-        if not resolved.is_file():
+        if not stat.S_ISREG(st.st_mode):
             raise ValueError(f"{name!r} är inte en vanlig fil")
-        return resolved
+        if st.st_nlink > 1:
+            raise ValueError(
+                f"{name!r} har flera hårda länkar och kan vara en fil utanför "
+                "bilagekatalogen — kopiera filen dit i stället"
+            )
+        return _CheckedFile(resolved, st, resolved.relative_to(root))
+
+
+def _sensitive_reason(name: str, checked: _CheckedFile) -> str | None:
+    """Varför filen ser ut att vara hemlig, utifrån namnet som angavs och
+    den upplösta sökvägen inom bilagekatalogen; None om inget träffar."""
+    given = Path(name)
+    parts = [*checked.relative.parts, *([given.name] if given.is_absolute() else given.parts)]
+    for part in parts:
+        if _is_sensitive_part(part):
+            return f"namnet {part!r}"
+    return None
+
+
+def _read_checked(name: str, checked: _CheckedFile, limit: int) -> bytes:
+    """Läs högst ``limit`` byte ur filen som kontrollerades — och bara den.
+
+    O_NOFOLLOW gör att en fil som bytts mot en symlänk inte öppnas, och
+    st_dev/st_ino jämförs så att en annan fil (eller en katalog på vägen som
+    bytts mot en symlänk) upptäcks. O_NONBLOCK gör att en FIFO inte hänger.
+    """
+    changed = ValueError(f"{name!r} ändrades medan den kontrollerades och skickas inte")
+    try:
+        fd = os.open(checked.path, os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC)
+    except OSError:
+        raise changed from None
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if (
+            not stat.S_ISREG(st.st_mode)
+            or st.st_nlink != 1
+            or (st.st_dev, st.st_ino) != (checked.stat.st_dev, checked.stat.st_ino)
+        ):
+            raise changed
+        return fh.read(limit)
 
 
 def _guess_type(name: str) -> tuple[str, str]:
@@ -233,8 +406,12 @@ def load_for_sending(
     if len(names) > MAX_SEND_FILES:
         raise ValueError(f"För många bilagor ({len(names)}) — högst {MAX_SEND_FILES} per mejl")
     store = store or get_store()
-    paths = [store.resolve_existing(name) for name in names]
-    total = sum(path.stat().st_size for path in paths)
+    checked = [store._checked_file(name) for name in names]
+    for name, item in zip(names, checked):
+        reason = _sensitive_reason(name, item)
+        if reason:
+            raise _refuse_secret(name, reason)
+    total = sum(item.stat.st_size for item in checked)
     if total > MAX_SEND_BYTES:
         raise ValueError(
             f"Bilagorna är tillsammans {total} byte — högst {MAX_SEND_BYTES} byte "
@@ -242,20 +419,38 @@ def load_for_sending(
         )
     parts: list[EmailMessage] = []
     remaining = MAX_SEND_BYTES
-    for path in paths:
-        with open(path, "rb") as fh:
-            data = fh.read(remaining + 1)  # filen kan ha vuxit sedan stat()
+    for name, item in zip(names, checked):
+        data = _read_checked(name, item, remaining + 1)  # filen kan ha vuxit
         remaining -= len(data)
         if remaining < 0:
             raise ValueError(f"Bilagorna är tillsammans över {MAX_SEND_BYTES} byte (25 MB)")
-        maintype, subtype = _guess_type(path.name)
+        if _PRIVATE_KEY_RE.search(data):
+            raise _refuse_secret(name, "innehållet är en privat nyckel")
+        maintype, subtype = _guess_type(item.path.name)
         part = EmailMessage(policy=email.policy.SMTP)
         part.set_content(
             data, maintype=maintype, subtype=subtype,
-            disposition="attachment", filename=path.name,
+            disposition="attachment", filename=item.path.name,
         )
         parts.append(part)
     return parts
+
+
+def prepare_attachment_dir(settings: Settings) -> None:
+    """Skapa och kontrollera bilagekatalogen när servern startar.
+
+    Skapas katalogen först vid första sparningen hinner en uppackad zip
+    lägga en symlänk med samma namn i ~/Downloads. Kastar aldrig: ett fel
+    loggas som varning, servern startar ändå och bilageverktygen ger samma
+    fel när de används.
+    """
+    store = AttachmentStore.from_settings(settings)
+    try:
+        path = store._checked_root(create=True)
+    except ValueError as exc:
+        logger.warning("%s", exc)
+        return
+    logger.info("Bilagekatalog: %s", path)
 
 
 def get_store() -> AttachmentStore:

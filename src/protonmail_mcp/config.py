@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     smtp_ca_cert: str | None = None
     # All filåtkomst för bilagor (get_attachment, attachments-parametern)
     # begränsas till den här katalogen. Den skapas med rättigheterna 0700
-    # första gången något sparas.
+    # när servern startar. Måste vara absolut (eller börja med ~): Claude
+    # Desktop startar ofta servern med arbetskatalogen /.
     attachment_dir: Path = Field(default=Path("~/Downloads/protonmail-mcp"), validate_default=True)
     # Största bilaga som get_attachment returnerar direkt (save=False), i byte
     attachment_max_inline_bytes: int = Field(default=1024 * 1024, gt=0)
@@ -40,7 +41,12 @@ class Settings(BaseSettings):
     @field_validator("attachment_dir", mode="after")
     @classmethod
     def _expand_home(cls, value: Path) -> Path:
-        return value.expanduser()
+        value = value.expanduser()
+        if not value.is_absolute():
+            raise ValueError(
+                "PROTONMAIL_ATTACHMENT_DIR måste vara en absolut sökväg (eller börja med ~)"
+            )
+        return value
 
 
 @lru_cache(maxsize=1)

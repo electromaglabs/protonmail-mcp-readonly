@@ -27,7 +27,9 @@ async def get_attachment(
 
     save=True (standard): bilagan sparas i bilagekatalogen
     (PROTONMAIL_ATTACHMENT_DIR, standard ~/Downloads/protonmail-mcp, skapas
-    med rättigheterna 0700). Filnamnet kommer från avsändaren och saneras
+    med rättigheterna 0700 när servern startar). Katalogen används inte om
+    den är en symlänk, ligger under en symlänk, ägs av någon annan eller är
+    skrivbar för andra. Filnamnet kommer från avsändaren och saneras
     (ingen sökväg, inga kontrolltecken). En befintlig fil skrivs aldrig
     över: vid namnkrock blir det "namn (1).ext". Svaret anger sökväg,
     storlek, content_type och sha256 — inte innehållet.
@@ -51,7 +53,8 @@ async def get_attachment(
         (save=True) eller encoding ("text"/"base64") och content (save=False).
 
     Fel (ValueError): okänt UID i mappen, index utanför listan, bilagan är
-    större än gränsen för save=False, eller bilagekatalogen går inte att skapa.
+    större än gränsen för save=False, eller bilagekatalogen går inte att skapa
+    eller underkänns (symlänk, fel ägare, skrivbar för andra).
     """
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)
