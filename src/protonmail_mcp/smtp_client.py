@@ -13,7 +13,7 @@ from typing import Sequence
 import aiosmtplib
 
 from . import audit, policy
-from .config import Settings
+from .config import Settings, idna_domain
 from .email_parser import parse_addresses
 
 logger = logging.getLogger(__name__)
@@ -68,13 +68,14 @@ def _to_address(addr: str) -> Address:
 
     Display-namnet behålls som text så att policyn kan RFC 2047-koda just
     namnet; själva adressen får aldrig kodas. En IDN-domän skrivs om till
-    punycode så att både header och RCPT TO blir ren ASCII.
+    punycode (IDNA2008, samma som tillåtelselistan) så att både header och
+    RCPT TO blir ren ASCII.
     """
     name, spec = parseaddr(addr)
     local, _, domain = spec.rpartition("@")
     if not domain.isascii():
         try:
-            domain = domain.encode("idna").decode("ascii")
+            domain = idna_domain(domain)
         except UnicodeError as exc:
             raise ValueError(f"Ogiltig e-postadress (domän): {addr!r}") from exc
     return Address(display_name=name, addr_spec=f"{local}@{domain}")

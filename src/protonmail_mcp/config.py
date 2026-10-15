@@ -3,6 +3,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+import idna
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,12 +17,25 @@ _DOMAIN_RE = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?
 _LOCAL_RE = re.compile(r'^[^@\s<>,"]+$')
 
 
+def idna_domain(domain: str) -> str:
+    """En domän med icke-ASCII-tecken som punycode, enligt IDNA2008 (UTS #46).
+
+    Pythons codec "idna" följer IDNA2003 och skriver om ß till ss och ς till
+    σ, men straße.de och strasse.de är olika registrerade domäner. Här används
+    UTS #46 utan övergångsmappning (transitional=False), som webbläsare och
+    registren (DENIC, .gr) gör. Samma funktion används för tillåtelselistan
+    och för RCPT TO, så att de alltid ger samma domän. UnicodeError
+    (idna.IDNAError) för en ogiltig domän.
+    """
+    return idna.encode(domain, uts46=True, transitional=False).decode("ascii")
+
+
 def normalize_domain(domain: str) -> str | None:
     """Domänen i gemener och som punycode, eller None om den är ogiltig."""
     value = domain.strip().lower()
     if not value.isascii():
         try:
-            value = value.encode("idna").decode("ascii")
+            value = idna_domain(value)
         except UnicodeError:
             return None
     return value if _DOMAIN_RE.match(value) else None
