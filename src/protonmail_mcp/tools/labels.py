@@ -160,9 +160,12 @@ async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bu
             mailbox från svaret av list_emails, search_emails eller get_email.
 
     Returns:
-        True när stjärnmärkningen är borttagen.
+        True när stjärnmärkningen är borttagen. Gick det inte att ta bort
+        mejlet ur Starred-vyn (stjärnan är ändå borta) blir svaret {"ok":
+        [UID], "failed": [], "note": förklaring} i stället.
         Med en lista med UID:n blir svaret {"ok": [UID, ...], "failed":
-        [{"uid": ..., "error": ...}]}: ett resultat per UID. UID:n som inte
+        [{"uid": ..., "error": ...}]}: ett resultat per UID, med "note" på
+        samma sätt. UID:n som inte
         finns i mailbox eller som Bridge nekar hamnar i failed medan de
         andra genomförs. Ett ogiltigt UID (inte heltal) eller fler än 100
         avvisar hela anropet innan något ändras.
@@ -170,4 +173,6 @@ async def unflag_email(ctx: Context, uid: UidArg, mailbox: Mailbox) -> bool | Bu
     app = _get_app(ctx)
     if isinstance(uid, list):
         return await imap_labels.set_starred(app.imap, mailbox, uid, False)
-    return single(await imap_labels.set_starred(app.imap, mailbox, [uid], False))
+    res = await imap_labels.set_starred(app.imap, mailbox, [uid], False)
+    single(res)
+    return res if "note" in res else True

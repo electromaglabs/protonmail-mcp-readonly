@@ -11,6 +11,8 @@ import re
 import time
 from typing import Any
 
+import aioimaplib
+
 from . import policy
 
 from .imap_client import (
@@ -30,6 +32,18 @@ from .imap_client import (
 logger = logging.getLogger(__name__)
 
 MAX_UIDS = 100
+
+# Fel som ett "bästa försök"-steg fångar: Bridge nekar (ValueError), timeout
+# (TimeoutError är ett OSError), bruten anslutning och aioimaplib:s egna fel.
+# Allt utom ValueError lämnar protokollet i okänt läge: kasta anslutningen.
+BEST_EFFORT_ERRORS = (ValueError, OSError, aioimaplib.AioImapException)
+
+
+def drop_connection_after(imap: IMAPClient, exc: BaseException) -> str:
+    """Kastar anslutningen efter ett fel som inte är ValueError; returnerar felet som text."""
+    if not isinstance(exc, ValueError):
+        imap._discard_connection()
+    return str(exc) or type(exc).__name__
 
 BulkResult = dict[str, Any]
 
@@ -374,8 +388,10 @@ async def _wait_until_gone(
             await imap._ensure_connected()
             await imap._select(mailbox)
             left, _ = await existing_uids(imap, mailbox, left)
-        except ValueError as exc:
-            return [], fail_all(uids, f"{error} ({_UNCHECKED}: {exc})")
+        except BEST_EFFORT_ERRORS as exc:
+            detail = drop_connection_after(imap, exc)
+            left_set = set(left)
+            return [u for u in uids if u not in left_set], fail_all(left, f"{error} ({_UNCHECKED}: {detail})")
         if not left or time.monotonic() >= deadline:
             break
     left_set = set(left)
@@ -434,11 +450,14 @@ async def _settle_vanished(
     if not sources:
         return [], failed
     try:
+        # Väntan kan ha kastat anslutningen (timeout) eller släppt låset
+        await imap._ensure_connected()
         await imap._select(ALL_MAIL)
         orphans, errors = await _find_in_label(imap, ALL_MAIL, sources)
-    except ValueError as exc:
-        logger.warning("Kunde inte kontrollera i All Mail efter Code=2501: %s", exc)
-        why = f"kontrollen i All Mail misslyckades ({exc})"
+    except BEST_EFFORT_ERRORS as exc:
+        detail = drop_connection_after(imap, exc)
+        logger.warning("Kunde inte kontrollera i All Mail efter Code=2501: %s", detail)
+        why = f"kontrollen i All Mail misslyckades ({detail})"
         return [], failed + [{"uid": uid, "error": _maybe_in_all_mail(uid, mailbox, why)} for uid in sources]
     ok = [uid for uid, error in errors.items() if AMBIGUOUS not in error]
     failed += [
@@ -448,8 +467,23 @@ async def _settle_vanished(
         )}
         for uid, error in errors.items() if AMBIGUOUS in error
     ]
-    for src_uid, all_mail_uid in orphans.items():
-        problem = await _delete_orphan(imap, src_uid, all_mail_uid, sources[src_uid])
+    pending = list(orphans.items())
+    for i, (src_uid, all_mail_uid) in enumerate(pending):
+        try:
+            problem = await _delete_orphan(imap, src_uid, all_mail_uid, sources[src_uid])
+        except BEST_EFFORT_ERRORS as exc:
+            # Anslutningen kan vara borta (_select kastar den vid fel): sluta här
+            # och redovisa resten, men behåll det som redan är avgjort
+            detail = drop_connection_after(imap, exc)
+            logger.warning("Återställningen via Trash avbröts: %s", detail)
+            why = (
+                f"det låg kvar i All Mail utan mapp och raderingen via Trash avbröts ({detail}); "
+                "det kan ligga kvar i Trash eller bara i All Mail"
+            )
+            failed += [
+                {"uid": uid, "error": _maybe_in_all_mail(uid, mailbox, why)} for uid, _ in pending[i:]
+            ]
+            break
         if problem:
             failed.append({"uid": src_uid, "error": (
                 f"Mejlet med UID {src_uid} försvann ur {mailbox} men Proton raderade det inte: det låg "

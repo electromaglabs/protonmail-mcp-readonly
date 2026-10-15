@@ -17,8 +17,10 @@ from typing import Any
 from . import policy
 from .imap_bulk import (
     _FLAGS_RE,
+    BEST_EFFORT_ERRORS,
     BulkResult,
     _split_after_failure,
+    drop_connection_after,
     existing_uids,
     fail_all,
     missing_error,
@@ -417,7 +419,14 @@ async def _without_flag(imap: IMAPClient, uids: list[str]) -> list[str]:
     return [uid for uid in uids if uid in unflagged]
 
 
-async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -> None:
+def _starred_note(detail: str) -> str:
+    return (
+        f"Stjärnan är borttagen, men mejlet kunde inte tas bort ur Starred-vyn ({detail}). "
+        "Det kan synas där, utan stjärna, tills Bridge hämtat ändringen från Proton (inom ~40 s)."
+    )
+
+
+async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -> str | None:
     """Tar bort avmarkerade mejl ur Starred-vyn (UID EXPUNGE på just deras UID:n där).
 
     -FLAGS \\Flagged tar bort stjärnan i Proton direkt (Bridge anropar
@@ -428,8 +437,10 @@ async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -
     som för en etikett — men det tar bort stjärnan i Proton. Därför tas bara
     UID:n i Starred bort som är samma Proton-mejl (_find_in_label,
     X-Pm-Internal-Id) och som saknar \\Flagged: en tvilling med samma
-    Message-ID, tid och storlek som har kvar stjärnan rörs inte. Bästa försök: stjärnan är redan borta, så ett fel här
-    loggas men ändrar inte svaret.
+    Message-ID, tid och storlek som har kvar stjärnan rörs inte. Bästa försök: stjärnan är redan borta, så ett fel här — även en timeout
+    eller en bruten anslutning — loggas och returneras som en förklaring till
+    svaret ("note"), aldrig som ett fel för hela anropet. Efter timeout eller
+    avbrott kastas anslutningen. None när allt gick.
     """
     try:
         if _mailbox_key(mailbox) == "starred":
@@ -438,19 +449,24 @@ async def _leave_starred_view(imap: IMAPClient, mailbox: str, uids: list[str]) -
             identities = await _fetch_identities_by_uid(imap, mailbox, uids)
             sources = {uid: info for uid, info in identities.items() if uid in uids and searchable(info)}
             if not sources:
-                return
+                return None
             await imap._select(STARRED)
             mapping, _ = await _find_in_label(imap, STARRED, sources)
         if mapping:
             await imap._select(STARRED)
             starred_uids = await _without_flag(imap, list(mapping.values()))
             if not starred_uids:
-                return
+                return None
             _, errors = await _expunge_in_label(imap, STARRED, starred_uids)
             if errors:
-                logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", next(iter(errors.values())))
-    except ValueError as exc:
-        logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", exc)
+                detail = next(iter(errors.values()))
+                logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", detail)
+                return _starred_note(detail)
+    except BEST_EFFORT_ERRORS as exc:
+        detail = drop_connection_after(imap, exc)
+        logger.warning("Kunde inte ta bort mejl ur Starred-vyn: %s", detail)
+        return _starred_note(detail)
+    return None
 
 
 @_serialized
@@ -464,5 +480,7 @@ async def set_starred(imap: IMAPClient, mailbox: str, uids: list[str], starred: 
     what = "Stjärnmärkningen" if starred else "Borttagningen av stjärnmärkningen"
     res = await store_flags(imap, mailbox, uids, r"(\Flagged)", starred, what)
     if not starred and res["ok"]:
-        await _leave_starred_view(imap, mailbox, res["ok"])
+        note = await _leave_starred_view(imap, mailbox, res["ok"])
+        if note:
+            res["note"] = note
     return res

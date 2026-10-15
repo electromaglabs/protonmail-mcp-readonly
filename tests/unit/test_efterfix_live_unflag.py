@@ -61,7 +61,9 @@ class TestUnflagRemovesFromStarredView:
         _starred(bridge, "<a@x>")
         bridge.refuse["EXPUNGE"] = "backend error"
         res = await imap_labels.set_starred(imap, "INBOX", ["1"], False)
-        assert res == {"ok": ["1"], "failed": []}
+        assert res["ok"] == ["1"] and res["failed"] == []
+        # G5K-5: att vyn inte gick att städa nämns i svaret, men är inget fel
+        assert "Starred" in res["note"]
         assert bridge.messages["<a@x>"]["flags"] == set()
         # \Deleted lämnas inte kvar i Starred
         assert ("Starred", "7") not in bridge.deleted
