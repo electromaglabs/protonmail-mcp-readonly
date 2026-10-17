@@ -5,10 +5,9 @@ from unittest.mock import MagicMock, AsyncMock
 
 @pytest.fixture
 def mock_ctx():
-    """Skapa en mock MCP Context med AppContext (imap + smtp)."""
+    """Mock MCP Context with an AppContext (imap only: this fork has no SMTP)."""
     ctx = MagicMock()
     ctx.request_context.lifespan_context.imap = AsyncMock()
-    ctx.request_context.lifespan_context.smtp = AsyncMock()
     return ctx
 
 

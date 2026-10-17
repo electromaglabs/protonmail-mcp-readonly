@@ -1,22 +1,22 @@
 from mcp.server.fastmcp import Context
 
 from ..server import mcp
-from . import _get_app
+from . import READ_ONLY, _get_app
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_mailboxes(ctx: Context) -> list[dict]:
-    """Lista alla mappar/etiketter i brevlådan."""
+    """List the folders and labels this server is allowed to read."""
     app = _get_app(ctx)
     return await app.imap.list_mailboxes()
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_mailbox_status(ctx: Context, mailbox: str = "INBOX") -> dict:
-    """Hämta antal meddelanden och olästa i en mapp.
+    """Get the number of messages and unread messages in a folder.
 
     Args:
-        mailbox: Mappnamn (standard: INBOX)
+        mailbox: Folder name (default: INBOX)
     """
     app = _get_app(ctx)
     return await app.imap.get_mailbox_status(mailbox)

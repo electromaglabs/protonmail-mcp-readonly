@@ -2,50 +2,50 @@ from mcp.server.fastmcp import Context
 
 from ..server import mcp
 from ..email_parser import parse_email
-from . import _get_app
+from . import READ_ONLY, _get_app
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_email_headers(
     ctx: Context,
     uid: str,
     mailbox: str = "INBOX",
 ) -> dict | None:
-    """Hämta headers för ett e-post utan att ladda body (snabb operation).
+    """Get the headers of an email without loading the body. Does not mark it as read.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
+        uid: The email's UID
+        mailbox: Folder name (default: INBOX)
 
     Returns:
-        Dict med from, to, cc, subject, date, message_id, reply_to — eller None om ej hittat
+        Dict with from, to, cc, subject, date, message-id, reply-to, or None if not found
     """
     app = _get_app(ctx)
     return await app.imap.get_message_headers(mailbox, uid)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_emails(
     ctx: Context,
     mailbox: str = "INBOX",
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
-    """Lista e-post i en mapp med metadata (sidbaserad paginering).
+    """List emails in a folder with metadata, newest first (page-based).
 
     Args:
-        mailbox: Mappnamn (standard: INBOX)
-        page: Sidnummer, 1-baserat (standard: 1)
-        page_size: Antal e-post per sida (standard: 20)
+        mailbox: Folder name (default: INBOX)
+        page: Page number, starting at 1 (default: 1)
+        page_size: Emails per page, 1-100 (default: 20)
 
     Returns:
-        dict med nycklar: messages, total, page, pages, has_more
+        dict with keys: messages, total, page, pages, has_more
     """
     app = _get_app(ctx)
     return await app.imap.list_messages(mailbox, page=page, page_size=page_size)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_email(
     ctx: Context,
     uid: str,
@@ -53,15 +53,18 @@ async def get_email(
     body_format: str = "text",
     max_length: int | None = 500,
 ) -> dict | None:
-    """Hämta fullständigt innehåll för ett e-post via UID.
+    """Get the content of an email by UID. Does not mark it as read.
+
+    Attachments are listed by name, type and size only; their content is never returned.
 
     Args:
-        uid: E-postets UID
-        mailbox: Mappnamn (standard: INBOX)
-        body_format: Format för body — "text" (plain text, default), "full" (rå body utan
-            trunkering), eller "stripped" (text utan citat och signaturblock)
-        max_length: Max antal tecken i body (standard: 500). None = ingen trunkering.
-            Ignoreras för body_format="full".
+        uid: The email's UID
+        mailbox: Folder name (default: INBOX)
+        body_format: "text" (plain text, default), "stripped" (plain text without
+            quoted replies and signature), or "full" (plain text, raw HTML and all
+            headers, with no length limit)
+        max_length: Maximum characters of body text for "text" and "stripped"
+            (default: 500). null = no limit. Ignored for "full".
     """
     app = _get_app(ctx)
     raw = await app.imap.get_message(mailbox, uid)

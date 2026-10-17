@@ -1,10 +1,10 @@
 from mcp.server.fastmcp import Context
 
 from ..server import mcp
-from . import _get_app
+from . import READ_ONLY, _get_app
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def search_emails(
     ctx: Context,
     mailbox: str = "INBOX",
@@ -14,18 +14,18 @@ async def search_emails(
     before: str | None = None,
     unseen: bool | None = None,
 ) -> list[dict]:
-    """Sök e-post med filter.
+    """Search emails in one folder with filters.
 
     Args:
-        mailbox: Mappnamn att söka i (standard: INBOX)
-        from_addr: Filtrera på avsändaradress
-        subject: Filtrera på ämnesrad
-        since: Filtrera e-post efter datum (format: YYYY-MM-DD eller DD-Mon-YYYY)
-        before: Filtrera e-post före datum (format: YYYY-MM-DD eller DD-Mon-YYYY)
-        unseen: True=bara olästa, False=bara lästa, None=alla
+        mailbox: Folder to search (default: INBOX)
+        from_addr: Filter on sender address (single line, max 200 characters)
+        subject: Filter on subject (single line, max 200 characters)
+        since: Only emails on or after this date (YYYY-MM-DD)
+        before: Only emails before this date (YYYY-MM-DD)
+        unseen: true = unread only, false = read only, null = all
 
     Returns:
-        Lista med metadata-dicts (uid, subject, from, date, flags) för matchande e-post
+        List of metadata dicts (uid, subject, from, date, flags) for matching emails
     """
     app = _get_app(ctx)
     return await app.imap.search_messages(

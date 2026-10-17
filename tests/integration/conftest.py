@@ -6,7 +6,6 @@ import pytest
 
 from protonmail_mcp.config import get_settings
 from protonmail_mcp.imap_client import IMAPClient
-from protonmail_mcp.smtp_client import SMTPClient
 
 
 def _env_available() -> bool:
@@ -26,18 +25,13 @@ pytestmark = [pytest.mark.integration, skip_without_env]
 @pytest.fixture
 async def imap_client():
     """Ansluter en IMAPClient, yield:ar den, och kopplar ner."""
-    # Rensa lru_cache så att .env läses på nytt
+    # pytestmark in a conftest does not reach the test modules, so skip here
+    if not _env_available():
+        pytest.skip("Needs a .env with Bridge settings")
+    # Clear lru_cache so .env is read again
     get_settings.cache_clear()
     settings = get_settings()
     client = IMAPClient(settings)
     await client.connect()
     yield client
     await client.disconnect()
-
-
-@pytest.fixture
-def smtp_client():
-    """Skapar en SMTPClient (anslutning sker per send_email-anrop)."""
-    get_settings.cache_clear()
-    settings = get_settings()
-    return SMTPClient(settings)
