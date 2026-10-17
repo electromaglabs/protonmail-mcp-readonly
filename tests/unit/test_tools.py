@@ -182,3 +182,22 @@ class TestReadOnlyToolSet:
         for name in ("smtp_client", "tools.send", "tools.reply", "tools.manage", "tools.folders"):
             with pytest.raises(ModuleNotFoundError):
                 importlib.import_module(f"protonmail_mcp.{name}")
+
+    def test_imap_client_has_no_write_methods(self):
+        from protonmail_mcp.imap_client import IMAPClient
+
+        for name in ("set_flags", "move_message", "delete_message",
+                     "create_folder", "delete_folder", "rename_folder"):
+            assert not hasattr(IMAPClient, name), name
+
+
+class TestGetEmailValidation:
+    async def test_rejects_unknown_body_format(self, mock_ctx, sample_raw_email):
+        mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
+        with pytest.raises(ValueError):
+            await get_email(mock_ctx, uid="1", body_format="everything")
+
+    async def test_rejects_non_positive_max_length(self, mock_ctx, sample_raw_email):
+        mock_ctx.request_context.lifespan_context.imap.get_message.return_value = sample_raw_email
+        with pytest.raises(ValueError):
+            await get_email(mock_ctx, uid="1", max_length=0)

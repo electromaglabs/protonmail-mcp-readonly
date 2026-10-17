@@ -21,6 +21,27 @@ class AppContext:
     imap: object  # IMAPClient (typed loosely to avoid importing config early)
 
 
+def _describe_config_error(exc: Exception) -> str:
+    """Summarise a settings error without echoing any setting's value.
+
+    str() of a pydantic ValidationError includes the input values, which for a
+    missing username means part of the Bridge password. Only field names and
+    messages are used here.
+    """
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return type(exc).__name__
+    try:
+        items = errors(include_url=False, include_context=False, include_input=False)
+    except Exception:
+        return type(exc).__name__
+    parts = []
+    for item in items:
+        field = ".".join(str(p) for p in item.get("loc", ())) or "settings"
+        parts.append(f"{field}: {item.get('msg', 'invalid')}")
+    return "; ".join(parts) or type(exc).__name__
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     from .config import get_settings
@@ -29,13 +50,16 @@ async def lifespan(server: FastMCP):
     try:
         s = get_settings()
     except Exception as exc:
+        summary = _describe_config_error(exc)
         logger.error(
-            "Kunde inte läsa konfiguration: %s\n"
-            "Kontrollera att PROTONMAIL_USERNAME och PROTONMAIL_PASSWORD är satta "
-            "(miljövariabler eller .env-fil).",
-            exc,
+            "Could not read configuration (%s). Check the PROTONMAIL_* settings "
+            "(environment variables or .env file); PROTONMAIL_USERNAME and "
+            "PROTONMAIL_PASSWORD are required.",
+            summary,
         )
-        raise
+        # "from None" keeps the original exception, and the values in it, out
+        # of the traceback that ends up in the client's log file.
+        raise RuntimeError(f"Invalid configuration: {summary}") from None
 
     imap = IMAPClient(s)
     try:

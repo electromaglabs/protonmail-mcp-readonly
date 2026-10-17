@@ -43,7 +43,7 @@ class TestParseEmailHtml:
         assert "<p>" not in result["body_plain"]
 
     def test_body_html_contains_html(self, sample_html_email):
-        result = parse_email(sample_html_email)
+        result = parse_email(sample_html_email, body_format="full")
         assert "<html>" in result["body_html"]
         assert "<p>Hello!</p>" in result["body_html"]
 
@@ -56,7 +56,7 @@ class TestParseEmailMultipart:
         assert "Plain text" in result["body_plain"]
 
     def test_body_html_populated(self, sample_multipart_email):
-        result = parse_email(sample_multipart_email)
+        result = parse_email(sample_multipart_email, body_format="full")
         assert "<p>HTML</p>" in result["body_html"]
 
     def test_multiple_to(self, sample_multipart_email):
@@ -183,7 +183,8 @@ class TestParseEmailEdgeCases:
         result = parse_email(raw)
         assert "Only HTML here" in result["body_plain"]
         assert "<p>" not in result["body_plain"]
-        assert "<p>Only HTML here</p>" in result["body_html"]
+        assert result["body_html"] == ""
+        assert "<p>Only HTML here</p>" in parse_email(raw, body_format="full")["body_html"]
 
 
 class TestBodyFormatAndMaxLength:
@@ -255,3 +256,61 @@ class TestBodyFormatAndMaxLength:
         assert "Hello!" in result["body_plain"]
         assert "<p>" not in result["body_plain"]
         assert "<html>" not in result["body_plain"]
+
+
+class TestReturnedContentIsBounded:
+    """In "text" and "stripped" mode max_length must limit what leaves the machine."""
+
+    RAW = (
+        "From: sender@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Received: from relay.example.com by mx.example.com\r\n"
+        "X-Internal-Note: not for the model\r\n"
+        "Subject: Big HTML mail\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "\r\n"
+        "<html><head><style>p { color: red }</style></head>"
+        "<body><script>var hidden = 1;</script><!-- a comment -->"
+        "<p>Tom &amp; Jerry</p>" + "x" * 5000 + "</body></html>\r\n"
+    ).encode("utf-8")
+
+    @pytest.mark.parametrize("body_format", ["text", "stripped"])
+    def test_no_raw_html_or_header_dump(self, body_format):
+        result = parse_email(self.RAW, body_format=body_format, max_length=100)
+        assert result["body_html"] == ""
+        assert result["headers"] == {}
+        assert len(result["body_plain"]) < 200
+
+    def test_full_returns_html_and_headers(self):
+        result = parse_email(self.RAW, body_format="full")
+        assert "<script>" in result["body_html"]
+        assert "X-Internal-Note" in result["headers"]
+
+    def test_html_fallback_drops_script_style_and_comments(self):
+        result = parse_email(self.RAW, max_length=None)
+        text = result["body_plain"]
+        assert text.startswith("Tom & Jerry")
+        assert "color: red" not in text
+        assert "var hidden" not in text
+        assert "a comment" not in text
+
+    def test_rejects_unknown_body_format(self):
+        with pytest.raises(ValueError):
+            parse_email(self.RAW, body_format="raw")
+
+    @pytest.mark.parametrize("max_length", [0, -1])
+    def test_rejects_non_positive_max_length(self, max_length):
+        with pytest.raises(ValueError):
+            parse_email(self.RAW, max_length=max_length)
+
+
+class TestHostileHeaders:
+    def test_unknown_charset_in_header_does_not_crash(self):
+        raw = (
+            b"From: sender@example.com\r\n"
+            b"Subject: =?x-no-such-charset?B?SGVsbG8=?=\r\n"
+            b"\r\n"
+            b"body\r\n"
+        )
+        result = parse_email(raw)
+        assert result["subject"] == "Hello"

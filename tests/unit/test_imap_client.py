@@ -25,19 +25,19 @@ class TestValidateUid:
         assert _validate_uid("123") == "123"
 
     def test_rejects_sequence_set(self):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
+        with pytest.raises(ValueError, match="Invalid UID"):
             _validate_uid("1:*")
 
     def test_rejects_injection_attempt(self):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
+        with pytest.raises(ValueError, match="Invalid UID"):
             _validate_uid("123 STORE")
 
     def test_rejects_empty_string(self):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
+        with pytest.raises(ValueError, match="Invalid UID"):
             _validate_uid("")
 
     def test_rejects_negative(self):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
+        with pytest.raises(ValueError, match="Invalid UID"):
             _validate_uid("-1")
 
 
@@ -51,17 +51,17 @@ class TestValidateMailbox:
         assert _validate_mailbox("Labels/Arbete") == "Labels/Arbete"
 
     def test_validate_mailbox_rejects_wildcard(self):
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
+        with pytest.raises(ValueError, match="Invalid mailbox name"):
             _validate_mailbox("INBOX*")
 
     def test_validate_mailbox_rejects_dotdot(self):
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
+        with pytest.raises(ValueError, match="Invalid mailbox name"):
             _validate_mailbox("../etc/passwd")
 
     def test_validate_mailbox_rejects_control_chars(self):
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
+        with pytest.raises(ValueError, match="Invalid mailbox name"):
             _validate_mailbox("INBOX\x00")
-        with pytest.raises(ValueError, match="Ogiltigt mailbox-namn"):
+        with pytest.raises(ValueError, match="Invalid mailbox name"):
             _validate_mailbox("IN\nBOX")
 
 
@@ -224,6 +224,7 @@ class TestListMailboxes:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -316,6 +317,7 @@ class TestGetMessage:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -344,7 +346,7 @@ class TestGetMessage:
 
     @pytest.mark.asyncio
     async def test_validates_uid(self, client):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
+        with pytest.raises(ValueError, match="Invalid UID"):
             await client.get_message("INBOX", "1:*")
 
     @pytest.mark.asyncio
@@ -373,6 +375,7 @@ class TestSearchMessages:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -391,33 +394,6 @@ class TestSearchMessages:
         call_args = client._client.search.call_args[0][0]
         assert '\\"' in call_args
         assert 'user\\"name@example.com' in call_args
-
-
-# ---------------------------------------------------------------------------
-# IMAPClient.delete_message — UID-validering
-# ---------------------------------------------------------------------------
-class TestDeleteMessage:
-    @pytest.fixture
-    def client(self, monkeypatch):
-        monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
-        monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
-        from protonmail_mcp.config import Settings
-        settings = Settings()
-        imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        return imap
-
-    @pytest.mark.asyncio
-    async def test_rejects_invalid_uid(self, client):
-        with pytest.raises(ValueError, match="Ogiltigt UID"):
-            await client.delete_message("INBOX", "1:*")
-
-    @pytest.mark.asyncio
-    async def test_successful_delete(self, client):
-        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        client._client.expunge = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.delete_message("INBOX", "42")
-        assert result is True
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +453,7 @@ class TestEnsureConnectedReconnect:
 
         mock_new_client = AsyncMock()
         mock_new_client.wait_hello_from_server = AsyncMock()
-        mock_new_client.login = AsyncMock()
+        mock_new_client.login = AsyncMock(return_value=SimpleNamespace(result="OK"))
 
         with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=mock_new_client):
             await client._ensure_connected()
@@ -499,6 +475,7 @@ class TestListMailboxesBadResult:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -524,6 +501,7 @@ class TestSearchMessagesMetadata:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -577,6 +555,7 @@ class TestSearchMessagesEmpty:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -612,6 +591,7 @@ class TestGetMessageHeaders:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     @pytest.mark.asyncio
@@ -642,42 +622,6 @@ class TestGetMessageHeaders:
 
 
 # ---------------------------------------------------------------------------
-# IMAPClient.create_folder / delete_folder / rename_folder
-# ---------------------------------------------------------------------------
-class TestFolderManagement:
-    @pytest.fixture
-    def client(self, monkeypatch):
-        monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
-        monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
-        from protonmail_mcp.config import Settings
-        settings = Settings()
-        imap = IMAPClient(settings)
-        imap._client = AsyncMock()
-        return imap
-
-    @pytest.mark.asyncio
-    async def test_create_folder_ok(self, client):
-        client._client.create = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.create_folder("NewFolder")
-        assert result is True
-        client._client.create.assert_awaited_once_with("NewFolder")
-
-    @pytest.mark.asyncio
-    async def test_delete_folder_ok(self, client):
-        client._client.delete = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.delete_folder("OldFolder")
-        assert result is True
-        client._client.delete.assert_awaited_once_with("OldFolder")
-
-    @pytest.mark.asyncio
-    async def test_rename_folder_ok(self, client):
-        client._client.rename = AsyncMock(return_value=SimpleNamespace(result="OK"))
-        result = await client.rename_folder("OldName", "NewName")
-        assert result is True
-        client._client.rename.assert_awaited_once_with("OldName", "NewName")
-
-
-# ---------------------------------------------------------------------------
 # IMAPClient.list_messages — page-baserad pagination
 # ---------------------------------------------------------------------------
 class TestListMessagesPagination:
@@ -689,6 +633,7 @@ class TestListMessagesPagination:
         settings = Settings()
         imap = IMAPClient(settings)
         imap._client = AsyncMock()
+        imap._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
         return imap
 
     def _make_select_resp(self, exists: int):
@@ -708,7 +653,7 @@ class TestListMessagesPagination:
     @pytest.mark.asyncio
     async def test_list_messages_returns_pagination_envelope(self, client):
         """Returvärdet ska ha nycklar: messages, total, page, pages, has_more."""
-        client._client.select = AsyncMock(return_value=self._make_select_resp(5))
+        client._client.examine = AsyncMock(return_value=self._make_select_resp(5))
         client._client.fetch = AsyncMock(return_value=self._make_fetch_resp([1, 2, 3, 4, 5]))
 
         result = await client.list_messages("INBOX", page=1, page_size=20)
@@ -719,7 +664,7 @@ class TestListMessagesPagination:
     @pytest.mark.asyncio
     async def test_list_messages_page1(self, client):
         """page=1, page_size=5, total=12 → has_more=True, pages=3."""
-        client._client.select = AsyncMock(return_value=self._make_select_resp(12))
+        client._client.examine = AsyncMock(return_value=self._make_select_resp(12))
         client._client.fetch = AsyncMock(return_value=self._make_fetch_resp([8, 9, 10, 11, 12]))
 
         result = await client.list_messages("INBOX", page=1, page_size=5)
@@ -732,7 +677,7 @@ class TestListMessagesPagination:
     @pytest.mark.asyncio
     async def test_list_messages_last_page(self, client):
         """Sista sidan → has_more=False, rätt antal meddelanden."""
-        client._client.select = AsyncMock(return_value=self._make_select_resp(12))
+        client._client.examine = AsyncMock(return_value=self._make_select_resp(12))
         client._client.fetch = AsyncMock(return_value=self._make_fetch_resp([1, 2]))
 
         result = await client.list_messages("INBOX", page=3, page_size=5)
@@ -744,7 +689,7 @@ class TestListMessagesPagination:
     @pytest.mark.asyncio
     async def test_list_messages_empty_mailbox(self, client):
         """Tom mailbox → total=0, pages=0, tom messages-lista."""
-        client._client.select = AsyncMock(return_value=self._make_select_resp(0))
+        client._client.examine = AsyncMock(return_value=self._make_select_resp(0))
 
         result = await client.list_messages("INBOX", page=1, page_size=20)
         assert isinstance(result, dict)
@@ -752,3 +697,326 @@ class TestListMessagesPagination:
         assert result["pages"] == 0
         assert result["has_more"] is False
         assert result["messages"] == []
+
+
+# ===========================================================================
+# Read-only fork: tests for the security fixes
+# ===========================================================================
+from protonmail_mcp.imap_client import (  # noqa: E402
+    _ALLOWED_COMMANDS,
+    _check_outgoing_line,
+    _install_readonly_guard,
+    _search_string,
+)
+
+OK = SimpleNamespace(result="OK", lines=[])
+
+
+def _make_client(monkeypatch, allowed=None):
+    monkeypatch.setenv("PROTONMAIL_USERNAME", "user")
+    monkeypatch.setenv("PROTONMAIL_PASSWORD", "pass")
+    if allowed is None:
+        monkeypatch.delenv("PROTONMAIL_ALLOWED_MAILBOXES", raising=False)
+    else:
+        monkeypatch.setenv("PROTONMAIL_ALLOWED_MAILBOXES", allowed)
+    from protonmail_mcp.config import Settings
+    imap = IMAPClient(Settings(_env_file=None))
+    imap._client = AsyncMock()
+    imap._client.examine = AsyncMock(return_value=OK)
+    imap._client.search = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b""]))
+    return imap
+
+
+class TestValidationRejectsTrailingNewline:
+    """re "$" also matches before a final newline; validation must not."""
+
+    @pytest.mark.parametrize("uid", ["5\n", "5\r\n", "5 ", " 5", "5\n6", "", "12345678901"])
+    def test_uid(self, uid):
+        with pytest.raises(ValueError):
+            _validate_uid(uid)
+
+    @pytest.mark.parametrize("name", ["INBOX\n", "INBOX\r\n", "INBOX\r", "a\nb", 'a"b', "a\\b", ""])
+    def test_mailbox(self, name):
+        with pytest.raises(ValueError):
+            _validate_mailbox(name)
+
+    def test_mailbox_with_spaces_is_valid(self):
+        assert _validate_mailbox("Folders/My Stuff") == "Folders/My Stuff"
+
+
+class TestDatesAreStrict:
+    @pytest.mark.parametrize("value,expected", [
+        ("2026-01-01", "01-Jan-2026"),
+        ("2024-02-29", "29-Feb-2024"),
+        ("1-jan-2026", "01-Jan-2026"),
+        ("31-DEC-2025", "31-Dec-2025"),
+    ])
+    def test_accepts_and_normalises(self, value, expected):
+        assert _to_imap_date(value) == expected
+
+    @pytest.mark.parametrize("value", [
+        '01-Jan-2026\r\nZZ99 DELETE "Folders/Important"',
+        "01-Jan-2026\nA1 DELETE x",
+        "01-Jan-2026 OR SEEN UNSEEN",
+        "2026-01-01 ",
+        "2026-01-01\n",
+        "2026-13-01",
+        "2026-02-30",
+        "32-Jan-2026",
+        "01-Foo-2026",
+        "yesterday",
+        "",
+        "ALL",
+    ])
+    def test_rejects_everything_else(self, value):
+        with pytest.raises(ValueError):
+            _to_imap_date(value)
+
+
+class TestSearchStringsAreStrict:
+    def test_quotes_and_escapes(self):
+        assert _search_string('a"b\\c', "subject") == '"a\\"b\\\\c"'
+
+    @pytest.mark.parametrize("value", [
+        'x"\r\nZZ98 DELETE foo', "line1\nline2", "tab\there", "nul\x00", "del\x7f", "x" * 201,
+    ])
+    def test_rejects_control_characters_and_long_values(self, value):
+        with pytest.raises(ValueError):
+            _search_string(value, "subject")
+
+
+class TestSearchInjectionIsBlocked:
+    """The original bug: a line break in a search filter became a second IMAP command."""
+
+    @pytest.mark.parametrize("kwargs", [
+        {"since": '01-Jan-2026\r\nZZ99 DELETE "Folders/Important"'},
+        {"before": "01-Jan-2026\r\nZZ99 DELETE x"},
+        {"subject": 'x"\r\nZZ98 DELETE foo'},
+        {"from_addr": "a@b.co\r\nZZ97 DELETE foo"},
+        {"since": "01-Jan-2026 OR SEEN UNSEEN"},
+    ])
+    async def test_rejected_before_anything_is_sent(self, monkeypatch, kwargs):
+        client = _make_client(monkeypatch)
+        with pytest.raises(ValueError):
+            await client.search_messages("INBOX", **kwargs)
+        client._client.examine.assert_not_called()
+        client._client.search.assert_not_called()
+
+    async def test_valid_search_is_single_line(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        await client.search_messages("INBOX", subject="hello", since="2026-01-01", unseen=True)
+        criteria = client._client.search.call_args[0][0]
+        assert criteria == 'SUBJECT "hello" SINCE 01-Jan-2026 UNSEEN'
+
+
+class TestReadsDoNotChangeTheMailbox:
+    async def test_mailbox_is_opened_with_examine_and_quoted(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        await client.get_message("Folders/My Stuff", "42")
+        client._client.examine.assert_awaited_once_with('"Folders/My Stuff"')
+        client._client.select.assert_not_called()
+
+    async def test_get_message_uses_peek(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        await client.get_message("INBOX", "42")
+        client._client.uid.assert_awaited_once_with("fetch", "42", "BODY.PEEK[]")
+
+    async def test_list_messages_uses_peek(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b"3 EXISTS"]))
+        client._client.fetch = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[]))
+        await client.list_messages("INBOX")
+        parts = client._client.fetch.call_args[0][1]
+        assert "BODY.PEEK[" in parts
+        assert "BODY[" not in parts
+
+    async def test_failed_examine_does_not_read_previous_mailbox(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.examine = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        with pytest.raises(LookupError):
+            await client.get_message("Folders/Missing", "42")
+        client._client.uid.assert_not_called()
+        client._client.fetch.assert_not_called()
+
+    async def test_status_quotes_mailbox(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.status = AsyncMock(return_value=SimpleNamespace(
+            result="OK", lines=[b'"Folders/My Stuff" (MESSAGES 7 UNSEEN 2)', b"STATUS completed"]))
+        result = await client.get_mailbox_status("Folders/My Stuff")
+        client._client.status.assert_awaited_once_with('"Folders/My Stuff"', "(MESSAGES UNSEEN)")
+        assert result == {"messages": 7, "unseen": 2}
+
+
+class TestListMessagesPaging:
+    @pytest.mark.parametrize("page,page_size", [(0, 20), (-1, 20), (1, 0), (1, -5), (1, 101)])
+    async def test_rejects_bad_paging(self, monkeypatch, page, page_size):
+        client = _make_client(monkeypatch)
+        with pytest.raises(ValueError):
+            await client.list_messages("INBOX", page=page, page_size=page_size)
+
+    async def test_page_past_the_end_is_empty(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.examine = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[b"3 EXISTS"]))
+        result = await client.list_messages("INBOX", page=5, page_size=20)
+        assert result["messages"] == []
+        assert result["total"] == 3
+        client._client.fetch.assert_not_called()
+
+
+class TestOutgoingCommandGuard:
+    """Last line of defence: only single-line, read-only commands may be sent."""
+
+    @pytest.mark.parametrize("line", [
+        "A1 CAPABILITY",
+        'A2 LOGIN user@proton.me "pw"',
+        "A3 NOOP",
+        'A4 LIST "" *',
+        'A5 STATUS "INBOX" (MESSAGES UNSEEN)',
+        'A6 EXAMINE "Folders/My Stuff"',
+        "A7 SEARCH CHARSET utf-8 UNSEEN",
+        "A8 FETCH 1:3 (UID FLAGS BODY.PEEK[HEADER.FIELDS (DATE FROM)])",
+        "A9 UID FETCH 5 BODY.PEEK[]",
+        "A10 LOGOUT",
+    ])
+    def test_allows_read_commands(self, line):
+        _check_outgoing_line(line)
+
+    @pytest.mark.parametrize("line", [
+        "A1 SELECT INBOX",
+        "A1 UID STORE 5 +FLAGS (\\Deleted)",
+        "A1 STORE 5 +FLAGS (\\Seen)",
+        "A1 EXPUNGE",
+        "A1 UID EXPUNGE 5",
+        "A1 UID COPY 5 Trash",
+        "A1 UID MOVE 5 Trash",
+        "A1 APPEND INBOX {10}",
+        "A1 CREATE x",
+        "A1 DELETE x",
+        "A1 RENAME a b",
+        "A1 SUBSCRIBE x",
+        "A1 CLOSE",
+        "A1 IDLE",
+        "DONE",
+        "A1 UID",
+        "A1",
+        "",
+    ])
+    def test_blocks_everything_else(self, line):
+        with pytest.raises(ValueError):
+            _check_outgoing_line(line)
+
+    @pytest.mark.parametrize("line", [
+        "A1 SEARCH SINCE 01-Jan-2026\r\nZZ99 DELETE x",
+        "A1 NOOP\nA2 DELETE x",
+        "A1 NOOP\r",
+    ])
+    def test_blocks_multi_line(self, line):
+        with pytest.raises(ValueError):
+            _check_outgoing_line(line)
+
+    def test_error_never_echoes_the_line(self):
+        with pytest.raises(ValueError) as excinfo:
+            _check_outgoing_line('A1 DELETE "s3cret-value"')
+        assert "s3cret-value" not in str(excinfo.value)
+
+    def test_no_write_command_is_allowed(self):
+        writes = {"SELECT", "STORE", "EXPUNGE", "COPY", "MOVE", "APPEND", "CREATE",
+                  "DELETE", "RENAME", "SUBSCRIBE", "UNSUBSCRIBE", "CLOSE", "IDLE", "AUTHENTICATE"}
+        assert not (writes & _ALLOWED_COMMANDS)
+
+    def test_guard_wraps_protocol_send(self):
+        sent = []
+        protocol = SimpleNamespace(send=lambda line, scrub=None: sent.append((line, scrub)))
+        client = SimpleNamespace(protocol=protocol)
+        _install_readonly_guard(client)
+
+        client.protocol.send("A1 NOOP")
+        client.protocol.send('A2 LOGIN u "p"', scrub="p")
+        with pytest.raises(ValueError):
+            client.protocol.send("A3 EXPUNGE")
+        with pytest.raises(ValueError):
+            client.protocol.send("A4 NOOP\r\nA5 EXPUNGE")
+
+        assert sent == [("A1 NOOP", None), ('A2 LOGIN u "p"', "p")]
+
+    def test_guard_fails_closed_without_send_hook(self):
+        with pytest.raises(RuntimeError):
+            _install_readonly_guard(SimpleNamespace(protocol=SimpleNamespace()))
+        with pytest.raises(RuntimeError):
+            _install_readonly_guard(SimpleNamespace())
+
+    async def test_connect_installs_guard_on_real_client(self, monkeypatch):
+        """connect() must guard the aioimaplib client before anything is sent."""
+        client = _make_client(monkeypatch)
+        client._client = None
+        sent = []
+        fake = MagicMock()
+        fake.protocol.send = lambda line, scrub=None: sent.append(line)
+        fake.wait_hello_from_server = AsyncMock()
+        fake.login = AsyncMock(return_value=OK)
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=fake):
+            await client.connect()
+        with pytest.raises(ValueError):
+            fake.protocol.send("A1 EXPUNGE")
+        fake.protocol.send("A2 NOOP")
+        assert sent == ["A2 NOOP"]
+
+    async def test_rejected_login_raises(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client = None
+        fake = MagicMock()
+        fake.wait_hello_from_server = AsyncMock()
+        fake.login = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        with patch("protonmail_mcp.imap_client.aioimaplib.IMAP4", return_value=fake):
+            with pytest.raises(ConnectionError):
+                await client.connect()
+        assert client._client is None
+
+
+class TestAllowedMailboxes:
+    """Optional PROTONMAIL_ALLOWED_MAILBOXES restricts which folders can be read."""
+
+    async def test_unrestricted_by_default(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        await client.get_message("Sent", "1")
+        client._client.examine.assert_awaited_once_with('"Sent"')
+
+    @pytest.mark.parametrize("call", [
+        lambda c: c.get_message("INBOX", "1"),
+        lambda c: c.get_message_headers("Sent", "1"),
+        lambda c: c.list_messages("All Mail"),
+        lambda c: c.search_messages("Folders/Private", unseen=True),
+        lambda c: c.get_mailbox_status("Labels/Other"),
+        lambda c: c.get_message("labels/claude", "1"),
+    ])
+    async def test_other_mailboxes_are_refused_before_any_command(self, monkeypatch, call):
+        client = _make_client(monkeypatch, allowed="Labels/Claude")
+        with pytest.raises(PermissionError):
+            await call(client)
+        assert client._client.mock_calls == []
+
+    async def test_allowed_mailbox_works(self, monkeypatch):
+        client = _make_client(monkeypatch, allowed="Labels/Claude, Folders/My Stuff")
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        await client.get_message("Folders/My Stuff", "1")
+        client._client.examine.assert_awaited_once_with('"Folders/My Stuff"')
+
+    async def test_inbox_is_case_insensitive(self, monkeypatch):
+        client = _make_client(monkeypatch, allowed="INBOX")
+        client._client.uid = AsyncMock(return_value=SimpleNamespace(result="NO", lines=[]))
+        await client.get_message("inbox", "1")
+        client._client.examine.assert_awaited_once()
+
+    async def test_list_mailboxes_only_shows_allowed(self, monkeypatch):
+        client = _make_client(monkeypatch, allowed="Labels/Claude")
+        client._client.list = AsyncMock(return_value=SimpleNamespace(result="OK", lines=[
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasNoChildren) "/" "Sent"',
+            b'(\\HasNoChildren) "/" "Labels/Claude"',
+            b'(\\HasNoChildren) "/" "Labels/Other"',
+            b"LIST completed",
+        ]))
+        assert await client.list_mailboxes() == [{"name": "Labels/Claude", "type": "label"}]
